@@ -1,0 +1,25 @@
+# qiftop conntrack-enable shim.
+#
+# The kernel's nf_conntrack subsystem is "lazy" per address family: it
+# only starts tracking flows for a given family once *some* nftables /
+# iptables rule references connection-tracking state on that family.
+# On hosts that have IPv4 NAT/masquerade rules but no IPv6 conntrack
+# references (very common on desktops), the kernel's IPv6 conntrack
+# table stays empty — and qiftop has nothing to show in its
+# Connections tab for IPv6 flows, even when traffic is actively
+# flowing.
+#
+# This snippet installs a single inert rule into its own dedicated
+# `inet qiftop` table. The rule itself does nothing observable
+# (`ct state new counter` is read-only and the chain has policy
+# accept), but its mere presence makes the kernel wire up conntrack
+# for both v4 and v6. The agent's systemd unit loads this file via
+# `ExecStartPre` and deletes the table again via `ExecStopPost`, so
+# the rule is only present while the agent is running.
+
+table inet qiftop {
+    chain track {
+        type filter hook prerouting priority -200; policy accept;
+        ct state new counter
+    }
+}

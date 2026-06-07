@@ -1,0 +1,11 @@
+#!/bin/sh
+# postinst for qiftop-agent
+set -e
+
+if [ -x /usr/bin/systemctl ]; then
+    systemctl daemon-reload || true
+    systemctl reload dbus.service 2>/dev/null || true
+fi
+
+#DEBHELPER#
+exit 0

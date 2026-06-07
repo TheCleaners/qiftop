@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.qiftop.NetworkAgent1
+Exec=/usr/bin/qiftop-agent
+User=root
+SystemdService=qiftop-agent.service

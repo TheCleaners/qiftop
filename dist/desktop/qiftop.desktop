@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=qiftop
+GenericName=Network Monitor
+Comment=Real-time per-interface and per-connection network traffic monitor
+Exec=qiftop %U
+TryExec=qiftop
+Icon=qiftop
+Terminal=false
+Categories=Network;Monitor;
+Keywords=network;traffic;iftop;monitor;bandwidth;interface;connection;
+StartupNotify=true
+StartupWMClass=qiftop

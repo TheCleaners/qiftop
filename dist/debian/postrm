@@ -1,0 +1,15 @@
+#!/bin/sh
+# postrm for qiftop-agent
+set -e
+
+case "$1" in
+    remove|purge|upgrade|deconfigure)
+        if [ -x /usr/bin/systemctl ]; then
+            systemctl stop qiftop-agent.service 2>/dev/null || true
+            systemctl daemon-reload || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

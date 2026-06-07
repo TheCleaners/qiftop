@@ -1,0 +1,39 @@
+[Unit]
+Description=qiftop privileged network statistics agent
+Documentation=https://github.com/ines/qiftop
+
+[Service]
+Type=dbus
+BusName=org.qiftop.NetworkAgent1
+ExecStart=/usr/bin/qiftop-agent
+# Force the kernel to enable conntrack for both v4 and v6 by installing a
+# tiny inert nftables table that references `ct`. The kernel only enables
+# conntrack per-family on demand, so on a host with v4 NAT rules but no
+# v6 `ct` references the IPv6 conntrack table stays empty (and qiftop
+# can't show v6 flows). The `-` prefix makes this best-effort: if `nft`
+# isn't installed we still start. ExecStopPost removes the table again.
+ExecStartPre=-/usr/sbin/nft -f /usr/share/qiftop/qiftop-conntrack.nft
+ExecStopPost=-/usr/sbin/nft delete table inet qiftop
+User=root
+# Drop everything we don't need; we only require CAP_NET_ADMIN so we can
+# enable nf_conntrack_acct and read conntrack via netlink.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=no
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+Restart=on-failure
+RestartSec=2
+
+[Install]
+# Activated on demand via DBus; no WantedBy needed by default. Admins who
+# want it always on can `systemctl enable qiftop-agent.service`.
