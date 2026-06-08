@@ -230,6 +230,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_dns_cache`           | `QtDnsResolver` LRU bound, batch eviction, key dedup              |
 | `test_handoff_auth`        | `HandoffServer` nonce auth (HELLO + 256-bit), pre-auth size cap   |
 | `test_proxies`             | `ConnectionFilterProxy` + `InterfaceFilterProxy` visibility rules |
+| `test_agent_config`        | `qiftop::agent::loadIdleConfig` (defaults, schedule, clamp, tolerance) |
 | `test_agent_integration`   | Spawns real `qiftop-agent --session`, drives Version/Capabilities/GetInterfaces/SetDesiredIntervalMs end-to-end |
 
 ### 6.3 Gaps worth filling
@@ -244,14 +245,16 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 
 ### 6.4 Refactors that would unblock more testing
 
-1. **Extract `loadIdleConfig` from `src/agent/main.cpp` into
-   `agent/Config.{h,cpp}`** so the INI parser can be unit-tested
-   without spawning the agent. Currently file-static.
-2. **`main.cpp` glue → `qiftop::agent::Application` class.** Move bus
-   setup, service registration, and IdleManager wiring out of `main()`
-   into a small RAII class that takes a `QDBusConnection` + the two
-   monitor pointers (via the abstract interfaces). Then integration
-   tests can construct the application against a private bus.
+1. ~~**Extract `loadIdleConfig` from `src/agent/main.cpp` into
+   `agent/Config.{h,cpp}`**~~ **DONE** — see `src/agent/Config.{h,cpp}`,
+   covered by `tests/test_agent_config.cpp`.
+2. ~~**`main.cpp` glue → `qiftop::agent::Application` class.**~~ **DONE** —
+   see `src/agent/Application.{h,cpp}`. RAII: ctor takes
+   `QDBusConnection` + the two monitor pointers + `IdleManager::Config`;
+   `start()` registers objects, requests the bus name, wires the
+   IdleManager, starts monitors. Dtor unregisters + releases the name so
+   the same bus can be re-used by another `Application` instance (useful
+   for in-process integration tests). `main.cpp` is now a ~85-line shim.
 3. **Extract `ConntrackMonitor::Worker`'s per-flow diff math** into a
    free function `computeDeltas(prev, current) -> QList<Connection>` so
    the diff/accounting tests don't need a live conntrack handle.

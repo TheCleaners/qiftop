@@ -37,6 +37,12 @@ qiftop_add_test(test_idle
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
 target_link_libraries(test_idle PRIVATE Qt6::DBus)
 
+qiftop_add_test(test_agent_config
+    test_agent_config.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/Config.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
+target_link_libraries(test_agent_config PRIVATE Qt6::DBus)
+
 qiftop_add_test(test_dns_cache
     test_dns_cache.cpp
     ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp

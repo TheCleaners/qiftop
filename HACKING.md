@@ -247,7 +247,7 @@ will return `AccessDenied`; this is the correct production behaviour. Run
 
 1. Add the field to `IdleManager::Config` (or wherever appropriate) with a
    sane default.
-2. Read it in `loadIdleConfig()` (`src/agent/main.cpp`) — and **always
+2. Read it in `loadIdleConfig()` (`src/agent/Config.cpp`) — and **always
    route the parsed value through `clampCfg()`** so a typo in
    `/etc/qiftop/agent.conf` produces a `qWarning()` instead of a degenerate
    cadence. Pick bounds that make sense (millisecond intervals: `[10,

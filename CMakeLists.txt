@@ -63,6 +63,8 @@ target_link_libraries(qiftop PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::DB
 # --- Privileged agent (qiftop-agent) ----------------------------------------
 add_executable(qiftop-agent
     src/agent/main.cpp
+    src/agent/Application.cpp
+    src/agent/Config.cpp
     src/agent/InterfacesService.cpp
     src/agent/ConnectionsService.cpp
     src/agent/IdleManager.cpp
