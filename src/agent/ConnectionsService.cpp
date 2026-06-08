@@ -3,6 +3,8 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 
+#include <algorithm>
+
 #include "IdleManager.h"
 #include "backend/ConnectionMonitor.h"
 
@@ -36,7 +38,30 @@ void ConnectionsService::SetDesiredIntervalMs(uint intervalMs)
 
 void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
 {
-    m_last = dbus::toDtos(conns);
+    // Cap the per-tick snapshot size. On a busy router the conntrack
+    // table can hold 100 k+ flows; serialising that into a multi-MB DBus
+    // message every tick costs both sides real CPU and memory (and m_last
+    // pins the high-water mark for the life of the process). Keep the
+    // top N by total bytes — those are what the user actually wants to
+    // see in a "top talkers" tool — and log when we truncate.
+    static constexpr int kMaxConnections = 4096;
+    if (conns.size() <= kMaxConnections) {
+        m_last = dbus::toDtos(conns);
+    } else {
+        QList<Connection> sorted = conns;
+        std::partial_sort(sorted.begin(),
+                          sorted.begin() + kMaxConnections,
+                          sorted.end(),
+                          [](const Connection &a, const Connection &b) {
+                              return (a.rxBytes + a.txBytes) > (b.rxBytes + b.txBytes);
+                          });
+        sorted.resize(kMaxConnections);
+        m_last = dbus::toDtos(sorted);
+        // qWarning, not qCInfo, because it means the user is losing data.
+        qWarning().noquote()
+            << "ConnectionsService: capping snapshot at" << kMaxConnections
+            << "of" << conns.size() << "flows (kept top talkers by bytes)";
+    }
     emit ConnectionsChanged(m_last);
 }
 

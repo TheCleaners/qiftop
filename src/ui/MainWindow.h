@@ -47,6 +47,15 @@ public:
     // forwarding the tray's user actions through the IPC channel instead.
     void prepareProxyMode(util::HandoffServer *server);
 
+    // Called by main.cpp once the data source is chosen so the status bar
+    // can show whether we're consuming the privileged DBus agent (and which
+    // version of its contract) or running the in-process fallback. `version`
+    // and `caps` are empty for the in-process path and for pre-property
+    // agents; the label degrades gracefully.
+    void setBackendInfo(bool usingAgent,
+                        const QString     &version,
+                        const QStringList &caps);
+
 private slots:
     void onStatsUpdated(const QList<InterfaceStats> &stats);
     void onConnectionsUpdated(const QList<Connection> &conns);
@@ -162,6 +171,7 @@ protected:
     QLabel *m_statusInterfaces = nullptr;
     QLabel *m_statusConnections = nullptr;
     QLabel *m_statusThroughput  = nullptr;
+    QLabel *m_statusBackend     = nullptr;
 
     bool m_paused = false;
 };

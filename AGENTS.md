@@ -96,14 +96,46 @@ component name verbatim, hyphens kept literal** —
 Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 `--session` for development).
 
-| Object path                                  | Interface                                  | Methods                                                   | Signals                                                |
-|----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|
-| `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged`                                         |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged`, `PermissionDenied`, `accountingChanged` |
+| Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
+|----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
+| `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged`, `CadenceChanged(u)`                    | `Version: s`, `Capabilities: as` |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged`, `PermissionDenied`, `accountingChanged` |                             |
 
 DTOs live in `src/dbus/Types.h`. The connection signature is
 `a(yysqysqtttts)` (family, l3proto, src, sport, dst, dport, l4proto, state,
 bytes_out, pkts_out, bytes_in, pkts_in, iface).
+
+### Contract version & capabilities
+
+`Version` is a free-form string (currently `"0.1"`) bumped only for
+*additive* changes to the agent surface that clients may care about.
+**Breaking** changes (DTO signature, method removal/rename) still require
+a fresh `org.qiftop.NetworkAgent2` interface per §8.
+
+`Capabilities` is a `QStringList` of dash-separated lowercase tokens.
+Clients gate optional behaviour on token presence — never on a Version
+comparison — and treat absence as "off" so they keep working against
+older agents. Tokens currently emitted:
+
+| Token                 | Meaning                                                     |
+|-----------------------|-------------------------------------------------------------|
+| `cadence-hints`       | `SetDesiredIntervalMs` is honoured (vs. ignored).           |
+| `cadence-signal`      | `CadenceChanged` fires on effective-cadence changes.        |
+| `name-owner-cleanup`  | Hints dropped on `NameOwnerChanged` (peer disconnect).      |
+| `monotonic-clock`     | Hint TTL uses `CLOCK_MONOTONIC` (immune to wall-clock jumps). |
+| `snapshot-cap`        | `ConnectionsChanged` payload is capped at top-N by bytes.   |
+
+Add a token here when shipping a new optional behaviour; **never remove
+or rename a token** — pre-existing clients use them as feature flags.
+
+### Bounded payloads
+
+`ConnectionsService` caps each emitted `ConnectionsChanged` snapshot at
+**4096 flows**, sorted by `bytes_in + bytes_out` (top talkers). When the
+kernel table is larger, the agent logs a `qWarning` and truncates; the
+GUI never has to deal with a million-row table. The cap is a compile-time
+constant in `src/agent/ConnectionsService.cpp` — bump it (and the §4
+contract note) if a real use case appears.
 
 ### Access control
 
@@ -123,9 +155,11 @@ open:
 
 `dist/debian/postinst` ensures the `netdev` group exists; users must be
 added to it explicitly (`sudo usermod -a -G netdev <user>`). The GUI's
-`agentReachable()` probe does a real `GetInterfaces` call with a 1 s
-timeout, so users without group access fall back cleanly to the
-in-process (self-elevated) backend rather than seeing an empty UI.
+`probeAgent()` does a real `GetInterfaces` call with a 1 s timeout (and
+opportunistically reads `Version` / `Capabilities`), so users without
+group access fall back cleanly to the in-process (self-elevated) backend
+rather than seeing an empty UI. The active mode is shown in the GUI
+status bar (`agent <version>` vs. `in-process`).
 
 When adding a new method, no XML edit is required — the group gate
 applies at the interface level. If a specific method needs a stricter

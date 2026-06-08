@@ -3,6 +3,7 @@
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QDBusVariant>
 #include <QIcon>
 #include <QTimer>
 
@@ -24,36 +25,78 @@
 namespace {
 
 constexpr auto kAgentBusName = "org.qiftop.NetworkAgent1";
+constexpr auto kAgentIfacesPath = "/org/qiftop/NetworkAgent1/Interfaces";
+constexpr auto kAgentIfacesIface = "org.qiftop.NetworkAgent1.Interfaces";
 
-// Returns true if the privileged agent is reachable on the system bus AND
-// our DBus policy permits us to call its methods. We do BOTH a name lookup
-// (to trigger DBus activation if needed) and a low-cost probe call against
-// the Interfaces service, because the bus policy is now group-gated
-// (`netdev`) and a non-netdev user would see name registration succeed but
-// every subsequent method call return AccessDenied — better to fall back
-// to the in-process backend cleanly than to leave the UI showing an empty
-// table forever.
-bool agentReachable()
+struct AgentProbe {
+    bool        reachable = false;
+    QString     version;       // e.g. "0.1"; empty if pre-Version agents
+    QStringList capabilities;  // token list; empty if unsupported
+};
+
+// Try to fetch a property via the standard freedesktop Properties interface.
+// Returns a default-constructed QVariant when the call fails — older agents
+// don't expose Version/Capabilities, and we'd rather use a sane default
+// ("legacy agent") than refuse to use them.
+QVariant propGet(QDBusConnection &bus,
+                 const QString   &path,
+                 const QString   &iface,
+                 const QString   &name)
 {
+    auto call = QDBusMessage::createMethodCall(QString::fromLatin1(kAgentBusName),
+                                               path,
+                                               QStringLiteral("org.freedesktop.DBus.Properties"),
+                                               QStringLiteral("Get"));
+    call << iface << name;
+    auto reply = bus.call(call, QDBus::Block, 1000);
+    if (reply.type() == QDBusMessage::ErrorMessage) return {};
+    const auto args = reply.arguments();
+    if (args.isEmpty()) return {};
+    return args.first().value<QDBusVariant>().variant();
+}
+
+// Probes the privileged agent on the system bus AND verifies our DBus policy
+// permits us to call its methods. We do BOTH a name lookup (to trigger DBus
+// activation if needed) and a low-cost probe call against the Interfaces
+// service, because the bus policy is now group-gated (`netdev`) and a
+// non-netdev user would see name registration succeed but every subsequent
+// method call return AccessDenied — better to fall back to the in-process
+// backend cleanly than to leave the UI showing an empty table forever.
+//
+// Also opportunistically reads the Version and Capabilities properties so
+// the UI can show "qiftop-agent vX.Y" in the status bar and gate optional
+// feature use on token presence. Both are empty for pre-property agents.
+AgentProbe probeAgent()
+{
+    AgentProbe info;
     auto bus = QDBusConnection::systemBus();
-    if (!bus.isConnected()) return false;
+    if (!bus.isConnected()) return info;
     auto *iface = bus.interface();
-    if (!iface) return false;
+    if (!iface) return info;
     if (!iface->isServiceRegistered(QString::fromLatin1(kAgentBusName))) {
-        // Try activation: if the .service file is installed but the agent is
-        // not currently running, the bus will spawn it.
         auto reply = iface->startService(QString::fromLatin1(kAgentBusName));
-        if (!reply.isValid()) return false;
+        if (!reply.isValid()) return info;
     }
-    // Probe a real method. Times out fast (1 s) — we'd rather fall back than
-    // hang the GUI startup waiting for a misconfigured bus.
     QDBusMessage probe = QDBusMessage::createMethodCall(
         QString::fromLatin1(kAgentBusName),
-        QStringLiteral("/org/qiftop/NetworkAgent1/Interfaces"),
-        QStringLiteral("org.qiftop.NetworkAgent1.Interfaces"),
+        QString::fromLatin1(kAgentIfacesPath),
+        QString::fromLatin1(kAgentIfacesIface),
         QStringLiteral("GetInterfaces"));
     QDBusMessage reply = bus.call(probe, QDBus::Block, 1000);
-    return reply.type() != QDBusMessage::ErrorMessage;
+    if (reply.type() == QDBusMessage::ErrorMessage) return info;
+    info.reachable = true;
+
+    const QVariant v = propGet(bus,
+                               QString::fromLatin1(kAgentIfacesPath),
+                               QString::fromLatin1(kAgentIfacesIface),
+                               QStringLiteral("Version"));
+    if (v.isValid()) info.version = v.toString();
+    const QVariant c = propGet(bus,
+                               QString::fromLatin1(kAgentIfacesPath),
+                               QString::fromLatin1(kAgentIfacesIface),
+                               QStringLiteral("Capabilities"));
+    if (c.isValid()) info.capabilities = c.toStringList();
+    return info;
 }
 
 } // namespace
@@ -110,9 +153,12 @@ int main(int argc, char *argv[])
     std::unique_ptr<NetworkMonitor>    netMonitor;
     std::unique_ptr<ConnectionMonitor> connMonitor;
 
-    const bool useAgent = !parser.isSet(noAgentOpt) && agentReachable();
+    const auto probe = parser.isSet(noAgentOpt) ? AgentProbe{} : probeAgent();
+    const bool useAgent = probe.reachable;
     if (useAgent) {
-        qCInfo(lcVerbose) << "main: using DBus agent" << kAgentBusName;
+        qCInfo(lcVerbose) << "main: using DBus agent" << kAgentBusName
+                          << "version=" << probe.version
+                          << "caps=" << probe.capabilities;
         netMonitor  = std::make_unique<qiftop::backend::dbus_client::DBusNetworkMonitor>();
         connMonitor = std::make_unique<qiftop::backend::dbus_client::DBusConnectionMonitor>();
     } else {
@@ -126,6 +172,7 @@ int main(int argc, char *argv[])
     }
 
     MainWindow window(&settings, netMonitor.get(), connMonitor.get(), &dns);
+    window.setBackendInfo(useAgent, probe.version, probe.capabilities);
     // --tray suppresses the initial window show; the tray icon (set up
     // by MainWindow's ctor) remains the only visible surface, and the
     // user can click it to summon the window. If the tray turns out

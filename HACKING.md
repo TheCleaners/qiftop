@@ -201,6 +201,15 @@ busctl --user call org.qiftop.NetworkAgent1 \
 
 # Subscribe to live signals:
 dbus-monitor --session "interface=org.qiftop.NetworkAgent1.Interfaces"
+
+# Probe contract version + capability tokens (clients use these to gate
+# optional behaviour). Empty/missing == pre-property agent; treat as legacy.
+busctl --user get-property org.qiftop.NetworkAgent1 \
+    /org/qiftop/NetworkAgent1/Interfaces \
+    org.qiftop.NetworkAgent1.Interfaces Version
+busctl --user get-property org.qiftop.NetworkAgent1 \
+    /org/qiftop/NetworkAgent1/Interfaces \
+    org.qiftop.NetworkAgent1.Interfaces Capabilities
 ```
 
 `qdbus6 org.qiftop.NetworkAgent1` works too if you prefer that tool.

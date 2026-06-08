@@ -2,6 +2,7 @@
 
 #include <QDBusContext>
 #include <QObject>
+#include <QStringList>
 #include "dbus/Types.h"
 
 class NetworkMonitor;
@@ -13,14 +14,27 @@ class IdleManager;
 // Implements the org.qiftop.NetworkAgent1.Interfaces DBus interface on the
 // system bus. Wraps the platform NetworkMonitor (currently NetlinkMonitor on
 // Linux) and rebroadcasts its periodic snapshots as a `StatsChanged` signal.
+//
+// Also serves as the contract-version surface for the agent as a whole:
+// the `Version` and `Capabilities` properties let clients tell which
+// agent they're talking to without parsing introspection XML or
+// guessing from method-call AccessDenied errors. Adding a new optional
+// feature: bump capability tokens here, leave Version alone for non-
+// breaking additions; breaking changes still require a NetworkAgent2
+// interface per AGENTS.md §8.
 class InterfacesService : public QObject, protected QDBusContext {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.qiftop.NetworkAgent1.Interfaces")
+    Q_PROPERTY(QString     Version      READ version      CONSTANT)
+    Q_PROPERTY(QStringList Capabilities READ capabilities CONSTANT)
 
 public:
     explicit InterfacesService(NetworkMonitor *monitor, QObject *parent = nullptr);
 
-    void setIdleManager(IdleManager *idle) { m_idle = idle; }
+    void setIdleManager(IdleManager *idle);
+
+    [[nodiscard]] QString     version()      const;
+    [[nodiscard]] QStringList capabilities() const;
 
 public slots:
     // DBus method: returns the most recent per-interface snapshot. Useful
@@ -37,8 +51,16 @@ signals:
     // DBus signal — fires on each polling tick of the backend.
     Q_SCRIPTABLE void StatsChanged(qiftop::dbus::InterfaceStatsDtoList stats);
 
+    // DBus signal — mirrors IdleManager::cadenceChanged. Fires whenever
+    // the effective polling interval changes (sped up, slowed down, or
+    // paused). `ms == 0` means paused. Clients use this to notice their
+    // own SetDesiredIntervalMs heartbeat slipping past hintTtlMs (e.g.
+    // after a UI hang) before inferring from missing StatsChanged.
+    Q_SCRIPTABLE void CadenceChanged(uint intervalMs);
+
 private slots:
     void onStatsUpdated(const QList<InterfaceStats> &stats);
+    void onCadenceChanged(int ms);
 
 private:
     NetworkMonitor              *m_monitor = nullptr;

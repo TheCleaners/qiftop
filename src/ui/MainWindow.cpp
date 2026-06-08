@@ -248,6 +248,10 @@ void MainWindow::setupUi()
     m_statusInterfaces  = new QLabel(tr("0 interfaces"));
     m_statusConnections = new QLabel(tr("0 connections"));
     m_statusThroughput  = new QLabel(QStringLiteral("↓ 0 B   ↑ 0 B"));
+    m_statusBackend     = new QLabel(tr("backend: unknown"));
+    m_statusBackend->setToolTip(tr("Active data source. Hover the value once "
+                                   "set for the agent version and capabilities."));
+    statusBar()->addPermanentWidget(m_statusBackend);
     statusBar()->addPermanentWidget(m_statusInterfaces);
     statusBar()->addPermanentWidget(m_statusConnections);
     statusBar()->addPermanentWidget(m_statusThroughput);
@@ -1028,6 +1032,27 @@ void MainWindow::prepareProxyMode(util::HandoffServer *server)
             qApp->quit();
         }
     });
+}
+
+void MainWindow::setBackendInfo(bool usingAgent,
+                                const QString     &version,
+                                const QStringList &caps)
+{
+    if (!m_statusBackend) return;
+    if (usingAgent) {
+        const QString shown = version.isEmpty() ? tr("(legacy)") : version;
+        m_statusBackend->setText(tr("agent %1").arg(shown));
+        const QString tip = caps.isEmpty()
+            ? tr("Connected to qiftop-agent over DBus. No capability tokens reported.")
+            : tr("Connected to qiftop-agent over DBus.\nCapabilities: %1")
+                  .arg(caps.join(QStringLiteral(", ")));
+        m_statusBackend->setToolTip(tip);
+    } else {
+        m_statusBackend->setText(tr("in-process"));
+        m_statusBackend->setToolTip(tr("qiftop-agent unavailable; using the "
+                                       "in-process Netlink/conntrack backend. "
+                                       "Some flows may be hidden without CAP_NET_ADMIN."));
+    }
 }
 
 void MainWindow::attachHandoffClient(util::HandoffClient *client)
