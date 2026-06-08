@@ -9,22 +9,12 @@
 
 namespace util {
 
-namespace {
-
-// Returns env vars to forward to the privileged child.
-//
-// SECURITY: This is an **allowlist**, not a denylist. The privileged child
-// runs as root with the same (non-zero) ruid loader behaviour as any normal
-// process — `AT_SECURE` is NOT set — so ld.so honours `LD_PRELOAD`,
-// `LD_LIBRARY_PATH`, `LD_AUDIT`, `QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`,
-// `GTK_MODULES`, `GIO_MODULE_DIR`, etc., from whatever environment we hand it.
-// A denylist will *always* lose this race against new ld.so / toolkit knobs;
-// only an allowlist is safe.
-//
-// Anything not in this list is dropped. If a user-visible glitch turns out
-// to be caused by a missing env var, add it here (and audit it for whether
-// an attacker could weaponise it).
-QStringList sessionEnv()
+// SECURITY: this is the allowlist for env vars forwarded to a privileged
+// child. See PrivilegeEscalator.h::envAllowlist() docstring for the full
+// rationale. If a user-visible glitch turns out to be caused by a missing
+// env var, add it here AND audit it for whether an attacker could
+// weaponise it.
+QSet<QByteArray> PrivilegeEscalator::envAllowlist()
 {
     static const QSet<QByteArray> kAllow = {
         // Display server / windowing
@@ -47,16 +37,35 @@ QStringList sessionEnv()
         "QT_STYLE_OVERRIDE", "QT_QPA_PLATFORMTHEME", "QT_SCALE_FACTOR",
         "QT_AUTO_SCREEN_SCALE_FACTOR",
     };
+    return kAllow;
+}
 
-    QStringList out;
-    const auto env = QProcessEnvironment::systemEnvironment();
-    const auto keys = env.keys();
+QProcessEnvironment PrivilegeEscalator::filterEnv(const QProcessEnvironment &in)
+{
+    QProcessEnvironment out;
+    const auto allow = envAllowlist();
+    const auto keys = in.keys();
     for (const QString &k : keys) {
-        if (!kAllow.contains(k.toLocal8Bit())) continue;
-        const QString v = env.value(k);
+        if (!allow.contains(k.toLocal8Bit())) continue;
+        const QString v = in.value(k);
         if (v.isEmpty()) continue;
-        out << QStringLiteral("%1=%2").arg(k, v);
+        out.insert(k, v);
     }
+    return out;
+}
+
+namespace {
+
+// Returns env vars to forward to the privileged child, formatted as
+// "KEY=VALUE" lines for `env`-style argv injection (see runPkexec).
+QStringList sessionEnv()
+{
+    const QProcessEnvironment filtered =
+        PrivilegeEscalator::filterEnv(QProcessEnvironment::systemEnvironment());
+    QStringList out;
+    const auto keys = filtered.keys();
+    for (const QString &k : keys)
+        out << QStringLiteral("%1=%2").arg(k, filtered.value(k));
     // The handoff socket path and nonce are added explicitly. They're
     // host-local to the user (abstract or under $XDG_RUNTIME_DIR); the
     // protocol authenticates the connection via the nonce (see HandoffServer).
@@ -77,16 +86,7 @@ QStringList sessionEnv()
 // site-locally.
 QProcessEnvironment scrubbedHelperEnv()
 {
-    QProcessEnvironment out;
-    const auto src = QProcessEnvironment::systemEnvironment();
-    const QStringList lines = sessionEnv();
-    for (const QString &line : lines) {
-        const int eq = line.indexOf(QLatin1Char('='));
-        if (eq <= 0) continue;
-        out.insert(line.left(eq), line.mid(eq + 1));
-    }
-    Q_UNUSED(src);
-    return out;
+    return PrivilegeEscalator::filterEnv(QProcessEnvironment::systemEnvironment());
 }
 
 QString findHelper(const QString &name)

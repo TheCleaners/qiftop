@@ -391,6 +391,8 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_proxies`             | `ConnectionFilterProxy` + `InterfaceFilterProxy` visibility rules |
 | `test_agent_config`        | `qiftop::agent::loadIdleConfig` (defaults, schedule, clamp, tolerance) |
 | `test_agent_integration`   | Spawns real `qiftop-agent --session`, drives Version/Capabilities/GetInterfaces/SetDesiredIntervalMs end-to-end |
+| `test_units`               | `util::formatBytes` / `formatByteRate` IEC unit boundaries + precision |
+| `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp |
 
 ### 6.3 Gaps worth filling

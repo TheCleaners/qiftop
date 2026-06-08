@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QObject>
+#include <QSet>
 #include <QStringList>
+#include <QProcessEnvironment>
 
 #include <functional>
 
@@ -39,6 +41,22 @@ public:
     // in order for the current environment, after filtering out helpers not
     // installed on the system. Useful for introspection / tests.
     [[nodiscard]] QStringList plannedStrategies() const;
+
+    // Returns the allowlist of environment variable names forwarded to a
+    // privileged child. Exposed for tests / auditing.
+    //
+    // SECURITY: this is an **allowlist**, not a denylist. The privileged
+    // child runs as root with `AT_SECURE` unset, so ld.so honours
+    // `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `QT_PLUGIN_PATH`,
+    // `GTK_MODULES`, etc., from whatever environment we hand it. A
+    // denylist will *always* lose this race against new loader / toolkit
+    // knobs; only an allowlist is safe.
+    [[nodiscard]] static QSet<QByteArray> envAllowlist();
+
+    // Filters `in` through `envAllowlist()`, returning a new
+    // QProcessEnvironment containing only allowlisted keys with their
+    // original values. Empty values are skipped.
+    [[nodiscard]] static QProcessEnvironment filterEnv(const QProcessEnvironment &in);
 
     // Tries each strategy in order until one starts a privileged copy of
     // (program, args). Returns true and writes the chosen strategy id into

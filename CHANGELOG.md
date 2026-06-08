@@ -10,6 +10,24 @@ human-readable summary for *shipping* releases.
 
 ## [Unreleased]
 
+### Added
+- `SECURITY.md` documenting the vulnerability-reporting process. The
+  agent runs as root with `CAP_NET_ADMIN`; a private channel for
+  security reports is now linked from the README.
+- `tests/test_units.cpp` — pins down IEC unit boundaries and decimal
+  precision in `util::formatBytes` / `formatByteRate`. Catches future
+  edits that accidentally switch to SI (1000-based) units.
+- `tests/test_priv_escalator.cpp` — pins the env-var allowlist that
+  gates which variables `PrivilegeEscalator` forwards into the root
+  child. Adding `LD_PRELOAD` (or similar loader knobs) to the
+  allowlist would now fail CI deliberately. Exposes new public statics
+  `PrivilegeEscalator::envAllowlist()` and `filterEnv()`.
+
+### Fixed
+- README: corrected the test-count badge (was stale) and the
+  filter-expression regex example (the `~` regex value needs quotes
+  when the regex contains `.`).
+
 ## [0.1] — first public release
 
 The first qiftop release. A Qt 6 iftop-style Linux network monitor

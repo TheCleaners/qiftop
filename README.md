@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/TheCleaners/qiftop/actions/workflows/ci.yml/badge.svg)](https://github.com/TheCleaners/qiftop/actions/workflows/ci.yml)
 [![Release](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml/badge.svg)](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml)
-![Tests](https://img.shields.io/badge/tests-13%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-16%20passing-brightgreen)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
 ![Qt](https://img.shields.io/badge/Qt-6-41cd52)
 
@@ -29,7 +29,7 @@ and the filter expression bar](screenshot1.png)
   smoothed display rates (EMA + easeOutCubic tween between polls).
 - **Filter expression mini-language** for the Connections view:
   `proto:tcp and dport=443`, `iface=wlp228s0 and rate>1Mi`,
-  `host~\.google\.com`, etc. Booleans, numeric comparisons, byte
+  `host~"\.google\.com"`, etc. Booleans, numeric comparisons, byte
   suffixes (`K/Ki/M/Mi/...`), regex.
 - **Async DNS** with in-process cache; addresses are rendered as
   hostnames where possible without blocking the UI.
@@ -87,8 +87,12 @@ administrator" fallback) on machines without the agent installed.
 
 - [`HACKING.md`](HACKING.md) — developer cookbook: build/run/debug
   recipes, common dev tasks, debugging gotchas.
-- [`AGENTS.md`](AGENTS.md) — architecture reference + changelog:
-  layering rules, DBus contract, config keys, testability notes.
+- [`AGENTS.md`](AGENTS.md) — architecture reference: layering rules,
+  DBus contract, config keys, testability notes.
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes (Keep a Changelog
+  format).
+- [`SECURITY.md`](SECURITY.md) — how to report vulnerabilities
+  privately (the agent runs as root; this matters).
 
 ## License
 
