@@ -1,6 +1,10 @@
 # qiftop
 
-[![CI](https://github.com/ebenali/qiftop/actions/workflows/ci.yml/badge.svg)](https://github.com/ebenali/qiftop/actions/workflows/ci.yml)
+[![CI](https://github.com/TheCleaners/qiftop/actions/workflows/ci.yml/badge.svg)](https://github.com/TheCleaners/qiftop/actions/workflows/ci.yml)
+[![Release](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml/badge.svg)](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml)
+![Tests](https://img.shields.io/badge/tests-11%20passing-brightgreen)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
+![Qt](https://img.shields.io/badge/Qt-6-41cd52)
 
 Qt6 iftop-style network monitor for Linux.
 

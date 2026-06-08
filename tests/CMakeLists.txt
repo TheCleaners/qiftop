@@ -2,7 +2,7 @@
 # Each TU is built as its own executable so CTest can report them
 # individually and a single test's crash doesn't take the rest down.
 
-find_package(Qt6 REQUIRED COMPONENTS Test Core Network DBus)
+find_package(Qt6 REQUIRED COMPONENTS Test Core Network DBus Widgets)
 
 function(qiftop_add_test name)
     add_executable(${name} ${ARGN})
@@ -46,3 +46,10 @@ qiftop_add_test(test_handoff_auth
     test_handoff_auth.cpp
     ${CMAKE_SOURCE_DIR}/src/util/HandoffServer.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
+
+qiftop_add_test(test_proxies
+    test_proxies.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/ConnectionFilterProxy.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/InterfaceFilterProxy.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/ConnectionFilter.cpp)
+target_link_libraries(test_proxies PRIVATE Qt6::Widgets)

@@ -173,6 +173,15 @@ int main(int argc, char *argv[])
 
     MainWindow window(&settings, netMonitor.get(), connMonitor.get(), &dns);
     window.setBackendInfo(useAgent, probe.version, probe.capabilities);
+    // If we're on the DBus path, forward the agent's CadenceChanged signal
+    // into the UI so the status bar can tint when the agent slows/pauses.
+    if (useAgent) {
+        if (auto *dbusNet = qobject_cast<qiftop::backend::dbus_client::DBusNetworkMonitor*>(
+                netMonitor.get())) {
+            QObject::connect(dbusNet, &qiftop::backend::dbus_client::DBusNetworkMonitor::agentCadenceChanged,
+                             &window, &MainWindow::notifyAgentCadence);
+        }
+    }
     // --tray suppresses the initial window show; the tray icon (set up
     // by MainWindow's ctor) remains the only visible surface, and the
     // user can click it to summon the window. If the tray turns out

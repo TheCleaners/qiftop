@@ -20,8 +20,17 @@ public:
     void stop()  override;
     void setDesiredIntervalMs(int ms) override;
 
+signals:
+    // Mirrors the agent's CadenceChanged DBus signal: emitted whenever the
+    // agent's effective poll interval changes (sped up, slowed down, or
+    // paused with ms==0). Lets the UI surface a "agent went quiet" cue
+    // without inferring from missing statsUpdated ticks. Always emitted
+    // from the main thread.
+    void agentCadenceChanged(int intervalMs);
+
 private slots:
     void onStatsChanged(const QDBusMessage &msg);
+    void onAgentCadenceChanged(const QDBusMessage &msg);
 
 private:
     void requestInitialSnapshot();

@@ -1053,6 +1053,37 @@ void MainWindow::setBackendInfo(bool usingAgent,
                                        "in-process Netlink/conntrack backend. "
                                        "Some flows may be hidden without CAP_NET_ADMIN."));
     }
+    // Reset any cadence-degradation tint left over from a previous state.
+    m_statusBackend->setStyleSheet(QString());
+}
+
+void MainWindow::notifyAgentCadence(int intervalMs)
+{
+    if (!m_statusBackend) return;
+    // Tint the backend label so the user immediately notices when the agent
+    // has slowed itself down (idle-manager wind-down) or paused entirely.
+    // We treat anything significantly above 1 s as "slowed", and ms==0 as
+    // "paused". The exact thresholds match the agent's defaults but the UI
+    // doesn't depend on them — we just colour-code three buckets.
+    QString css;
+    QString suffix;
+    if (intervalMs <= 0) {
+        css    = QStringLiteral("color: palette(highlightedText); background: #b00020;");
+        suffix = tr(" — paused");
+    } else if (intervalMs > 1500) {
+        css    = QStringLiteral("color: palette(windowText); background: #c69026;");
+        suffix = tr(" — slowed (%1 ms)").arg(intervalMs);
+    } else {
+        css    = QString(); // back to default appearance
+        suffix.clear();
+    }
+    m_statusBackend->setStyleSheet(css);
+    // Preserve the agent-version text we set in setBackendInfo by reading
+    // it back and stripping any previous suffix, then re-appending.
+    QString text = m_statusBackend->text();
+    const int dash = text.indexOf(QStringLiteral(" — "));
+    if (dash > 0) text.truncate(dash);
+    m_statusBackend->setText(text + suffix);
 }
 
 void MainWindow::attachHandoffClient(util::HandoffClient *client)

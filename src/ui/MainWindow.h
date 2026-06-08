@@ -56,6 +56,13 @@ public:
                         const QString     &version,
                         const QStringList &caps);
 
+    // Called by main.cpp when the data source is the DBus agent and has
+    // notified us of a change in its effective polling cadence (sped up,
+    // slowed down, or paused with ms==0). We tint the backend status-bar
+    // label so the user can see at a glance that the agent has gone idle
+    // without scrolling the journal.
+    void notifyAgentCadence(int intervalMs);
+
 private slots:
     void onStatsUpdated(const QList<InterfaceStats> &stats);
     void onConnectionsUpdated(const QList<Connection> &conns);

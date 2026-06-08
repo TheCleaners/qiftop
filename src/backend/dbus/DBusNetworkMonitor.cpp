@@ -45,6 +45,17 @@ void DBusNetworkMonitor::start()
     if (!ok) {
         qCWarning(lcVerbose) << "DBusNetworkMonitor: failed to subscribe to StatsChanged";
     }
+    // Best-effort: pre-Capabilities agents don't emit CadenceChanged, but
+    // subscribing is harmless — we just never get any signals.
+    const bool okCad = conn.connect(QString::fromLatin1(kService),
+                                    QString::fromLatin1(kPath),
+                                    QString::fromLatin1(kIface),
+                                    QStringLiteral("CadenceChanged"),
+                                    this,
+                                    SLOT(onAgentCadenceChanged(QDBusMessage)));
+    if (!okCad) {
+        qCWarning(lcVerbose) << "DBusNetworkMonitor: failed to subscribe to CadenceChanged";
+    }
     requestInitialSnapshot();
     if (m_desiredMs > 0)
         sendDesiredIntervalAsync(m_desiredMs);
@@ -60,6 +71,11 @@ void DBusNetworkMonitor::stop()
                     QString::fromLatin1(kIface),
                     QStringLiteral("StatsChanged"),
                     this, SLOT(onStatsChanged(QDBusMessage)));
+    conn.disconnect(QString::fromLatin1(kService),
+                    QString::fromLatin1(kPath),
+                    QString::fromLatin1(kIface),
+                    QStringLiteral("CadenceChanged"),
+                    this, SLOT(onAgentCadenceChanged(QDBusMessage)));
 }
 
 void DBusNetworkMonitor::requestInitialSnapshot()
@@ -93,6 +109,17 @@ void DBusNetworkMonitor::onStatsChanged(const QDBusMessage &msg)
     qiftop::dbus::InterfaceStatsDtoList list;
     arg >> list;
     emit statsUpdated(qiftop::dbus::fromDtos(list));
+}
+
+void DBusNetworkMonitor::onAgentCadenceChanged(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.isEmpty()) return;
+    // The DBus signature is 'u'; Qt unmarshals to quint32 in a QVariant.
+    bool ok = false;
+    const int ms = static_cast<int>(args.first().toUInt(&ok));
+    if (!ok) return;
+    emit agentCadenceChanged(ms);
 }
 
 void DBusNetworkMonitor::setDesiredIntervalMs(int ms)
