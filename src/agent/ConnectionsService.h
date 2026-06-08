@@ -17,7 +17,7 @@ class IdleManager;
 class ConnectionsService : public QObject, protected QDBusContext {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.qiftop.NetworkAgent1.Connections")
-    Q_PROPERTY(bool AccountingEnabled READ accountingEnabled NOTIFY accountingChanged)
+    Q_PROPERTY(bool AccountingEnabled READ accountingEnabled NOTIFY AccountingChanged)
 
 public:
     explicit ConnectionsService(ConnectionMonitor *monitor, QObject *parent = nullptr);
@@ -35,7 +35,7 @@ public slots:
 signals:
     Q_SCRIPTABLE void ConnectionsChanged(qiftop::dbus::ConnectionDtoList conns);
     Q_SCRIPTABLE void PermissionDenied(QString detail);
-    Q_SCRIPTABLE void accountingChanged(bool enabled);
+    Q_SCRIPTABLE void AccountingChanged(bool enabled);
 
 private slots:
     void onConnectionsUpdated(const QList<Connection> &conns);

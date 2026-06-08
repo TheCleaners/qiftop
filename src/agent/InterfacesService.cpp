@@ -14,7 +14,7 @@ namespace {
 // and gate optional feature use. Breaking wire changes still require a
 // NetworkAgent2 interface (AGENTS.md §8); this is the *additive* contract
 // version.
-constexpr auto kAgentVersion = "0.1";
+constexpr auto kAgentVersion = "0.2";
 } // namespace
 
 InterfacesService::InterfacesService(NetworkMonitor *monitor, QObject *parent)
@@ -51,6 +51,8 @@ QStringList InterfacesService::capabilities() const
         QStringLiteral("name-owner-cleanup"),// hints dropped on peer disconnect
         QStringLiteral("monotonic-clock"),   // hint expiry uses CLOCK_MONOTONIC
         QStringLiteral("snapshot-cap"),      // ConnectionsChanged capped (top-N)
+        QStringLiteral("iana-proto"),        // ConnectionDto.proto is IANA RFC 5237, not L4Proto enum
+        QStringLiteral("direction-on-wire"), // ConnectionDto carries server-computed direction
     };
 }
 

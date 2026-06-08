@@ -4,6 +4,9 @@
 // be unit-tested without instantiating a Qt model / proxy / DNS stack.
 // Anything here MUST stay free of QObject / signal-slot / event-loop
 // dependencies — Qt value types (QHostAddress, QSet) are fine.
+//
+// Lives in util/ (not ui/) so the agent and any future libqiftop
+// consumer can use it without violating layering rule §2 #2.
 
 #include <QHostAddress>
 #include <QSet>

@@ -69,7 +69,7 @@ dist/
 5. **`util/`, `dbus/`, and `backend/` (excluding `backend/dbus/` which is
    client-side) must not include from `ui/` or depend on Qt Widgets.**
    These directories — plus the pure-logic headers under `ui/` like
-   `ui/ConnectionHeuristics.h` — are the future `libqiftop` material
+   `util/ConnectionHeuristics.h` — are the future `libqiftop` material
    (see §10). Anything pulling in `QWidget`, `QAbstract*Model`,
    `QSortFilterProxyModel`, or similar belongs in `ui/`.
 
@@ -124,18 +124,38 @@ Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 | Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
 |----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
 | `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged`, `CadenceChanged(u)`                    | `Version: s`, `Capabilities: as` |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged`, `PermissionDenied`, `accountingChanged` |                             |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged`, `PermissionDenied`, `AccountingChanged` |                             |
 
 DTOs live in `src/dbus/Types.h`. The connection signature is
-`a(yysqysqtttts)` (family, l3proto, src, sport, dst, dport, l4proto, state,
-bytes_out, pkts_out, bytes_in, pkts_in, iface).
+`a(yysqysqttttsy)` — 13 fields per flow:
+`(proto, localFamily, localAddress, localPort, remoteFamily, remoteAddress,
+remotePort, rxBytes, txBytes, rxPackets, txPackets, iface, direction)`.
+
+* `proto` is the **IANA L4 protocol number** (RFC 5237): TCP=6, UDP=17,
+  ICMP=1, ICMPv6=58, Unknown=0. Earlier (pre-0.2) the wire shipped the
+  internal `L4Proto` enum index — that was a silent landmine for any
+  non-Qt client, hence the migration. See `toIanaProto` /
+  `fromIanaProto` in `src/backend/Connection.h`.
+* `direction` is `0=Unknown / 1=Outbound / 2=Inbound`, computed
+  server-side via the `qiftop::heuristics::inferDirection` heuristic
+  (ephemeral-port range + local-address fallback). Clients SHOULD trust
+  the wire value when non-zero and only run the heuristic locally as a
+  fallback when it's `Unknown` (true today for in-process / handoff
+  backends that don't fill it in).
 
 ### Contract version & capabilities
 
-`Version` is a free-form string (currently `"0.1"`) bumped only for
+`Version` is a free-form string (currently `"0.2"`) bumped only for
 *additive* changes to the agent surface that clients may care about.
 **Breaking** changes (DTO signature, method removal/rename) still require
 a fresh `org.qiftop.NetworkAgent2` interface per §8.
+
+> Historical note: the 0.1 → 0.2 bump (pre-release v0.1-alpha2 → alpha3)
+> WAS a breaking wire reshape (added `direction` byte, switched `proto`
+> semantics to IANA, renamed `accountingChanged` → `AccountingChanged`).
+> Since only pre-release alphas existed, we reshaped in place rather than
+> branching `NetworkAgent2`. Older alpha clients failing to unmarshal
+> fall back cleanly to the in-process backend via the existing probe.
 
 `Capabilities` is a `QStringList` of dash-separated lowercase tokens.
 Clients gate optional behaviour on token presence — never on a Version
@@ -149,6 +169,8 @@ older agents. Tokens currently emitted:
 | `name-owner-cleanup`  | Hints dropped on `NameOwnerChanged` (peer disconnect).      |
 | `monotonic-clock`     | Hint TTL uses `CLOCK_MONOTONIC` (immune to wall-clock jumps). |
 | `snapshot-cap`        | `ConnectionsChanged` payload is capped at top-N by bytes.   |
+| `iana-proto`          | `ConnectionDto.proto` is an IANA number (RFC 5237), not the internal enum index. |
+| `direction-on-wire`   | `ConnectionDto.direction` is populated server-side; clients can skip the heuristic when non-zero. |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.
@@ -260,15 +282,14 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_proxies`             | `ConnectionFilterProxy` + `InterfaceFilterProxy` visibility rules |
 | `test_agent_config`        | `qiftop::agent::loadIdleConfig` (defaults, schedule, clamp, tolerance) |
 | `test_agent_integration`   | Spawns real `qiftop-agent --session`, drives Version/Capabilities/GetInterfaces/SetDesiredIntervalMs end-to-end |
+| `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp |
 
 ### 6.3 Gaps worth filling
 
-1. **`dbus::Types` round-trip** — `Connection` ↔ `ConnectionDto` ↔
-   `QDBusArgument`. Pure marshalling; should be trivial to test.
-2. **`ConntrackMonitor::Worker` per-flow diff math** — once extracted
+1. **`ConntrackMonitor::Worker` per-flow diff math** — once extracted
    per §6.4 #3, the diff/accounting logic can be exercised without a
    live conntrack handle.
-3. **End-to-end with a real conntrack table** — requires root; needs a
+2. **End-to-end with a real conntrack table** — requires root; needs a
    CI runner with `CAP_NET_ADMIN` or a privileged container.
 
 ### 6.4 Refactors that would unblock more testing

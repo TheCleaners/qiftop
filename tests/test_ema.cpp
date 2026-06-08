@@ -2,7 +2,7 @@
 
 #include <QtTest/QtTest>
 
-#include "ui/ConnectionHeuristics.h"
+#include "util/ConnectionHeuristics.h"
 
 using qiftop::heuristics::emaUpdate;
 

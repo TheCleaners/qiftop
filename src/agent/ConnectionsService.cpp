@@ -2,13 +2,75 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QFile>
+#include <QRegularExpression>
+#include <QStringList>
 
 #include <algorithm>
 
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 #include "IdleManager.h"
 #include "backend/ConnectionMonitor.h"
+#include "util/ConnectionHeuristics.h"
 
 namespace qiftop::agent {
+
+namespace {
+
+// Snapshot of "what counts as this host" for direction inference.
+// Refreshed every tick because addresses can come and go (DHCP renew,
+// VPN up/down, container creation).
+struct HostContext {
+    QSet<QHostAddress> localAddrs;
+    QSet<QHostAddress> loopbackAddrs;
+    quint16            ephemeralLow  = 32768;
+    quint16            ephemeralHigh = 60999;
+};
+
+HostContext gatherHostContext()
+{
+    HostContext ctx;
+
+    struct ifaddrs *head = nullptr;
+    if (getifaddrs(&head) == 0) {
+        for (auto *p = head; p; p = p->ifa_next) {
+            if (!p->ifa_addr) continue;
+            const int fam = p->ifa_addr->sa_family;
+            if (fam != AF_INET && fam != AF_INET6) continue;
+            QHostAddress addr;
+            addr.setAddress(p->ifa_addr);
+            if (addr.isNull()) continue;
+            if (addr.isLoopback()) ctx.loopbackAddrs.insert(addr);
+            else                   ctx.localAddrs.insert(addr);
+        }
+        freeifaddrs(head);
+    }
+
+    // /proc/sys/net/ipv4/ip_local_port_range is two integers separated
+    // by whitespace (typically a single tab). The IPv6 ephemeral range
+    // mirrors the IPv4 one on Linux, so reading one file is enough.
+    QFile portRange(QStringLiteral("/proc/sys/net/ipv4/ip_local_port_range"));
+    if (portRange.open(QIODevice::ReadOnly)) {
+        const auto parts = QString::fromLatin1(portRange.readAll())
+                               .split(QRegularExpression(QStringLiteral("\\s+")),
+                                      Qt::SkipEmptyParts);
+        if (parts.size() >= 2) {
+            bool ok1 = false, ok2 = false;
+            const auto lo = parts[0].toUShort(&ok1);
+            const auto hi = parts[1].toUShort(&ok2);
+            if (ok1 && ok2 && hi > lo) {
+                ctx.ephemeralLow  = lo;
+                ctx.ephemeralHigh = hi;
+            }
+        }
+    }
+    return ctx;
+}
+
+} // namespace
 
 ConnectionsService::ConnectionsService(ConnectionMonitor *monitor, QObject *parent)
     : QObject(parent)
@@ -45,23 +107,33 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
     // top N by total bytes — those are what the user actually wants to
     // see in a "top talkers" tool — and log when we truncate.
     static constexpr int kMaxConnections = 4096;
-    if (conns.size() <= kMaxConnections) {
-        m_last = dbus::toDtos(conns);
-    } else {
-        QList<Connection> sorted = conns;
-        std::partial_sort(sorted.begin(),
-                          sorted.begin() + kMaxConnections,
-                          sorted.end(),
+
+    QList<Connection> kept = conns;
+    if (kept.size() > kMaxConnections) {
+        std::partial_sort(kept.begin(),
+                          kept.begin() + kMaxConnections,
+                          kept.end(),
                           [](const Connection &a, const Connection &b) {
                               return (a.rxBytes + a.txBytes) > (b.rxBytes + b.txBytes);
                           });
-        sorted.resize(kMaxConnections);
-        m_last = dbus::toDtos(sorted);
+        kept.resize(kMaxConnections);
         // qWarning, not qCInfo, because it means the user is losing data.
         qWarning().noquote()
             << "ConnectionsService: capping snapshot at" << kMaxConnections
             << "of" << conns.size() << "flows (kept top talkers by bytes)";
     }
+
+    // Populate Direction server-side so non-Qt libqiftop consumers don't
+    // have to reimplement the heuristic. Done AFTER truncation so we
+    // only pay for flows we'll actually ship.
+    const auto ctx = gatherHostContext();
+    for (auto &c : kept) {
+        c.direction = heuristics::inferDirection(
+            c, ctx.localAddrs, ctx.loopbackAddrs,
+            ctx.ephemeralLow, ctx.ephemeralHigh);
+    }
+
+    m_last = dbus::toDtos(kept);
     emit ConnectionsChanged(m_last);
 }
 
@@ -74,7 +146,7 @@ void ConnectionsService::onAccountingUnavailable(const QString &detail)
 {
     if (m_accountingEnabled) {
         m_accountingEnabled = false;
-        emit accountingChanged(false);
+        emit AccountingChanged(false);
     }
     // detail is informational only; PermissionDenied is the actionable signal.
     Q_UNUSED(detail);

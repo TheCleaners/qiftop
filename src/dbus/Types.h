@@ -29,8 +29,17 @@ struct InterfaceStatsDto {
 };
 using InterfaceStatsDtoList = QList<InterfaceStatsDto>;
 
+// Wire DTO for a single flow. Field order is the DBus tuple signature
+// (wire signature: a(yysqysqttttsy) — 13 fields). Append new fields at
+// the END; reordering or removing fields requires NetworkAgent2 per
+// AGENTS.md §8.
+//
+// `proto` is encoded as the IANA L4 protocol number (RFC 5237) so non-Qt
+// clients (libqiftop consumers, Prometheus exporter, ncurses TUI) can
+// decode without knowing the internal L4Proto enum: TCP=6, UDP=17,
+// ICMP=1, ICMPv6=58. See backend/Connection.h::toIanaProto.
 struct ConnectionDto {
-    quint8  proto         = 0;
+    quint8  proto         = 0;   // IANA L4 protocol number
     quint8  localFamily   = 0;
     QString localAddress;
     quint16 localPort     = 0;
@@ -42,6 +51,7 @@ struct ConnectionDto {
     quint64 rxPackets     = 0;
     quint64 txPackets     = 0;
     QString iface;
+    quint8  direction     = 0;   // 0=Unknown, 1=Outbound, 2=Inbound — see Direction enum
 };
 using ConnectionDtoList = QList<ConnectionDto>;
 

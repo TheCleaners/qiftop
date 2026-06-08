@@ -301,7 +301,7 @@ Unit tests live under `tests/` and are built by default
   3. `cmake --build build && (cd build && ctest --output-on-failure)`.
 
 * **What's worth testing here:** pure helpers — the heuristics in
-  `src/ui/ConnectionHeuristics.h`, `Settings` migration on the
+  `src/util/ConnectionHeuristics.h`, `Settings` migration on the
   `QSettings` ini path, `Exporter` formatting, anything in `util/`
   with no Qt-widget dependency. Don't try to spin up `MainWindow`;
   the model+delegate stack is hard to fixture and most regressions
@@ -335,7 +335,7 @@ Unit tests live under `tests/` and are built by default
 When you find yourself wanting to unit-test a lambda or member function
 that touches no Qt signals/slots/event-loop, extract it into a
 header-only namespace under `src/<area>/`. Existing example:
-`src/ui/ConnectionHeuristics.h` carries `inferDirection`,
+`src/util/ConnectionHeuristics.h` carries `inferDirection`,
 `isForwardedFlow`, `emaUpdate`, `emaUpdateAsym`, `easeOutCubic`. The
 `ConnectionModel` then becomes a thin caller. Wins:
 

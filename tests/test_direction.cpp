@@ -5,7 +5,7 @@
 #include <QtTest/QtTest>
 
 #include "backend/Connection.h"
-#include "ui/ConnectionHeuristics.h"
+#include "util/ConnectionHeuristics.h"
 
 using qiftop::heuristics::inferDirection;
 

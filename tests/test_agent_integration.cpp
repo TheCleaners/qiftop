@@ -6,7 +6,7 @@
 // DBus contract:
 //
 //   • org.qiftop.NetworkAgent1 registers within a few seconds
-//   • Properties.Get(Version)      → "0.1"
+//   • Properties.Get(Version)      → "0.2"
 //   • Properties.Get(Capabilities) → contains the stable contract tokens
 //   • GetInterfaces() returns quickly without error
 //   • SetDesiredIntervalMs(200) raises StatsChanged emission rate well
@@ -128,7 +128,7 @@ private slots:
             QString::fromLatin1(kIfacesIface),
             QStringLiteral("Version"));
         QVERIFY2(vReply.isValid(), qPrintable(vReply.error().message()));
-        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.1"));
+        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.2"));
 
         QDBusReply<QDBusVariant> cReply = props.call(
             QStringLiteral("Get"),
@@ -141,7 +141,8 @@ private slots:
         // stop gating optional behaviour.
         for (const auto *tok : {"cadence-hints", "cadence-signal",
                                 "name-owner-cleanup", "monotonic-clock",
-                                "snapshot-cap"}) {
+                                "snapshot-cap", "iana-proto",
+                                "direction-on-wire"}) {
             QVERIFY2(caps.contains(QString::fromLatin1(tok)),
                      qPrintable(QStringLiteral("missing capability '%1'; got: [%2]")
                                     .arg(QString::fromLatin1(tok),

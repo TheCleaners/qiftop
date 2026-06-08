@@ -14,6 +14,38 @@ enum class L4Proto : quint8 {
     IcmpV6,
 };
 
+// IANA protocol numbers (RFC 5237). Used on the DBus wire so non-Qt
+// clients can decode `proto` without knowing our internal L4Proto enum.
+namespace l4proto::iana {
+inline constexpr quint8 kIcmp   = 1;
+inline constexpr quint8 kTcp    = 6;
+inline constexpr quint8 kUdp    = 17;
+inline constexpr quint8 kIcmpV6 = 58;
+}
+
+[[nodiscard]] inline quint8 toIanaProto(L4Proto p)
+{
+    switch (p) {
+    case L4Proto::Tcp:    return l4proto::iana::kTcp;
+    case L4Proto::Udp:    return l4proto::iana::kUdp;
+    case L4Proto::Icmp:   return l4proto::iana::kIcmp;
+    case L4Proto::IcmpV6: return l4proto::iana::kIcmpV6;
+    case L4Proto::Unknown: break;
+    }
+    return 0;
+}
+
+[[nodiscard]] inline L4Proto fromIanaProto(quint8 n)
+{
+    switch (n) {
+    case l4proto::iana::kTcp:    return L4Proto::Tcp;
+    case l4proto::iana::kUdp:    return L4Proto::Udp;
+    case l4proto::iana::kIcmp:   return L4Proto::Icmp;
+    case l4proto::iana::kIcmpV6: return L4Proto::IcmpV6;
+    default:                     return L4Proto::Unknown;
+    }
+}
+
 // Best-effort directionality of a flow relative to this host. Set by the
 // client-side model (NOT by the agent wire format) using an ephemeral-port
 // heuristic against /proc/sys/net/ipv4/ip_local_port_range so we can keep
@@ -63,7 +95,12 @@ struct Connection {
     // route, or determination is platform-unsupported).
     QString iface;
 
-    // Transient, computed client-side (see Direction). Not on the wire.
+    // Best-effort direction relative to "this host". Populated by the
+    // agent (server-side) using inferDirection() before serialising to
+    // ConnectionDto, so non-Qt libqiftop consumers don't have to
+    // reimplement the heuristic. The client may override with a more
+    // local computation if its idea of local addresses / ephemeral range
+    // differs from the agent's.
     Direction direction = Direction::Unknown;
 
     // Canonical key used by models to identify a flow across updates.

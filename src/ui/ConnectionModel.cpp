@@ -1,5 +1,5 @@
 #include "ConnectionModel.h"
-#include "ConnectionHeuristics.h"
+#include "util/ConnectionHeuristics.h"
 #include "dns/DnsResolver.h"
 #include "util/Units.h"
 
@@ -543,8 +543,13 @@ void ConnectionModel::updateConnections(QList<Connection> connections)
     m_lastElapsedMs        = nowMs;
     const double deltaSecs = deltaMs > 0 ? deltaMs / 1000.0 : 1.0;
 
-    // --- compute Direction client-side (see ConnectionHeuristics.h) ------
+    // --- compute Direction --------------------------------------------------
+    // Server (qiftop-agent ≥ 0.2) ships direction on the wire (capability
+    // token "direction-on-wire"). When the in-process backend or an older
+    // agent leaves it as Unknown, fall back to the local heuristic so
+    // ephemeral-port inference still works.
     for (Connection &c : connections) {
+        if (c.direction != Direction::Unknown) continue;
         c.direction = qiftop::heuristics::inferDirection(
             c, m_localAddrs, m_loopbackAddrs, m_ephemeralLow, m_ephemeralHigh);
     }

@@ -43,6 +43,11 @@ qiftop_add_test(test_agent_config
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
 target_link_libraries(test_agent_config PRIVATE Qt6::DBus)
 
+qiftop_add_test(test_dbus_types
+    test_dbus_types.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/Types.cpp)
+target_link_libraries(test_dbus_types PRIVATE Qt6::DBus)
+
 qiftop_add_test(test_dns_cache
     test_dns_cache.cpp
     ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp

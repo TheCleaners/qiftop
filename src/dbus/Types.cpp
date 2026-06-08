@@ -32,7 +32,8 @@ QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c)
       << c.localFamily  << c.localAddress  << c.localPort
       << c.remoteFamily << c.remoteAddress << c.remotePort
       << c.rxBytes << c.txBytes << c.rxPackets << c.txPackets
-      << c.iface;
+      << c.iface
+      << c.direction;
     a.endStructure();
     return a;
 }
@@ -44,7 +45,8 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c)
       >> c.localFamily  >> c.localAddress  >> c.localPort
       >> c.remoteFamily >> c.remoteAddress >> c.remotePort
       >> c.rxBytes >> c.txBytes >> c.rxPackets >> c.txPackets
-      >> c.iface;
+      >> c.iface
+      >> c.direction;
     a.endStructure();
     return a;
 }
@@ -94,7 +96,7 @@ QList<InterfaceStats> fromDtos(const InterfaceStatsDtoList &list)
 ConnectionDto toDto(const Connection &c)
 {
     ConnectionDto d;
-    d.proto         = quint8(c.proto);
+    d.proto         = toIanaProto(c.proto);
     d.localFamily   = c.local.isIPv6()  ? 6 : 4;
     d.localAddress  = c.local.address.toString();
     d.localPort     = c.local.port;
@@ -104,13 +106,14 @@ ConnectionDto toDto(const Connection &c)
     d.rxBytes = c.rxBytes; d.txBytes = c.txBytes;
     d.rxPackets = c.rxPackets; d.txPackets = c.txPackets;
     d.iface = c.iface;
+    d.direction = quint8(c.direction);
     return d;
 }
 
 Connection fromDto(const ConnectionDto &d)
 {
     Connection c;
-    c.proto          = static_cast<L4Proto>(d.proto);
+    c.proto          = fromIanaProto(d.proto);
     c.local.address  = QHostAddress(d.localAddress);
     c.local.port     = d.localPort;
     c.remote.address = QHostAddress(d.remoteAddress);
@@ -118,6 +121,10 @@ Connection fromDto(const ConnectionDto &d)
     c.rxBytes = d.rxBytes; c.txBytes = d.txBytes;
     c.rxPackets = d.rxPackets; c.txPackets = d.txPackets;
     c.iface = d.iface;
+    // Clamp out-of-range direction values to Unknown rather than UB.
+    c.direction = (d.direction <= quint8(Direction::Inbound))
+                  ? static_cast<Direction>(d.direction)
+                  : Direction::Unknown;
     return c;
 }
 
