@@ -478,6 +478,17 @@ void MainWindow::setupMenuAndToolbar()
     viewMenu->addAction(m_pauseAction);
     viewMenu->addSeparator();
     m_connIfaceFilterMenuAct = viewMenu->addMenu(m_connIfaceFilterMenu);
+
+    // --- Help menu: About qiftop + About Qt -----------------------------
+    // Kept minimal on purpose; "About qiftop" pops a dialog that shows
+    // both client and (when reachable) agent metadata so users can
+    // include exact version info in bug reports without grepping the
+    // process tree.
+    auto *helpMenu = menuBar()->addMenu(tr("&Help"));
+    helpMenu->addAction(
+        QIcon::fromTheme(QStringLiteral("help-about")),
+        tr("&About qiftop…"), this, &MainWindow::showAboutDialog);
+    helpMenu->addAction(tr("About &Qt…"), qApp, &QApplication::aboutQt);
 }
 
 void MainWindow::applySettingsToUi()
@@ -672,6 +683,61 @@ void MainWindow::showFilterHelp()
     }
     m_filterHelpPopup->show();
     m_filterHelpPopup->raise();
+}
+
+void MainWindow::showAboutDialog()
+{
+    // QMessageBox::about() renders rich text and gives us a focusable
+    // dialog with a Copy-to-clipboard affordance via right-click — much
+    // friendlier for bug reports than a plain "About" popup. We hand-roll
+    // the body so we can mention the agent contract version & active
+    // capability tokens (this is the one place where that information is
+    // actually useful to surface, beyond the status-bar tooltip).
+    const QString appVer = QCoreApplication::applicationVersion();
+    const QString qtVer  = QString::fromLatin1(qVersion());
+
+    QString backendLine;
+    if (m_usingAgent) {
+        const QString agentShown = m_agentVersion.isEmpty()
+                                       ? tr("(legacy, pre-Version)")
+                                       : m_agentVersion;
+        backendLine = tr("Backend: <b>qiftop-agent %1</b> over DBus")
+                          .arg(agentShown.toHtmlEscaped());
+    } else {
+        backendLine = tr("Backend: <b>in-process</b> "
+                         "(Netlink / conntrack, self-elevated)");
+    }
+
+    QString capsLine;
+    if (m_usingAgent && !m_agentCaps.isEmpty()) {
+        // Capability tokens are stable identifiers; render in monospace so
+        // they're easy to copy/paste into bug reports.
+        QStringList esc;
+        esc.reserve(m_agentCaps.size());
+        for (const QString &t : m_agentCaps)
+            esc << t.toHtmlEscaped();
+        capsLine = tr("<p>Agent capabilities:<br>"
+                      "<code style=\"font-size:small\">%1</code></p>")
+                       .arg(esc.join(QStringLiteral(", ")));
+    }
+
+    const QString body = tr(
+        "<h3>qiftop %1</h3>"
+        "<p>An iftop-style network monitor for Qt 6 on Linux.</p>"
+        "<p>%2<br>"
+        "Qt runtime: %3</p>"
+        "%4"
+        "<p><a href=\"https://github.com/TheCleaners/qiftop\">"
+        "github.com/TheCleaners/qiftop</a></p>"
+        "<p style=\"color:gray;font-size:small\">"
+        "Licensed under the GNU General Public License v2 or later."
+        "</p>")
+        .arg(appVer.toHtmlEscaped(),
+             backendLine,
+             qtVer.toHtmlEscaped(),
+             capsLine);
+
+    QMessageBox::about(this, tr("About qiftop"), body);
 }
 
 void MainWindow::applyConnIfaceFilterToProxy()
@@ -1038,6 +1104,9 @@ void MainWindow::setBackendInfo(bool usingAgent,
                                 const QString     &version,
                                 const QStringList &caps)
 {
+    m_usingAgent   = usingAgent;
+    m_agentVersion = version;
+    m_agentCaps    = caps;
     if (!m_statusBackend) return;
     if (usingAgent) {
         const QString shown = version.isEmpty() ? tr("(legacy)") : version;

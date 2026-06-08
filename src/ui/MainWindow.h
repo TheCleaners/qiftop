@@ -56,6 +56,14 @@ public:
                         const QString     &version,
                         const QStringList &caps);
 
+    // Returns the agent metadata captured by setBackendInfo(). Used by the
+    // Help → About dialog so it can show "Connected to qiftop-agent vX.Y"
+    // alongside the application version. Empty fields when running on the
+    // in-process backend (or against a pre-property agent).
+    [[nodiscard]] bool        usingAgent()        const { return m_usingAgent; }
+    [[nodiscard]] QString     agentVersion()      const { return m_agentVersion; }
+    [[nodiscard]] QStringList agentCapabilities() const { return m_agentCaps; }
+
     // Called by main.cpp when the data source is the DBus agent and has
     // notified us of a change in its effective polling cadence (sped up,
     // slowed down, or paused with ms==0). We tint the backend status-bar
@@ -78,6 +86,7 @@ private slots:
     void onConnFilterTextChanged(const QString &text);
     void applyConnFilterExpr();
     void showFilterHelp();
+    void showAboutDialog();
 
 private:
     enum class ExportFormat { Json, Csv };
@@ -127,6 +136,12 @@ protected:
 
     bool m_explicitQuit = false; // set by tray's Quit action so closeEvent exits
     bool m_proxyMode    = false; // parent is proxying for a privileged child
+
+    // Backend metadata captured by setBackendInfo() and exposed via the
+    // Help → About dialog.
+    bool        m_usingAgent = false;
+    QString     m_agentVersion;
+    QStringList m_agentCaps;
 
     // Interfaces tab
     NetworkModel         *m_netModel       = nullptr;
