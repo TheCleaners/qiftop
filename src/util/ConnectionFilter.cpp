@@ -262,19 +262,28 @@ bool evalPredicate(const Predicate &p, const Context &ctx)
     }
 }
 
-bool evalExpr(const ExprPtr &e, const Context &ctx)
+// Hard cap on AST depth and on evaluator recursion depth. The parser and
+// evaluator are both recursive (LL(1) descent + variant visit), so a
+// user-typed expression like `((((((…))))))` or an attacker-controlled
+// QSettings file can otherwise blow the UI thread's stack. 64 is well
+// past any sensible hand-written filter and well below the safe recursion
+// depth on a default 8 MiB stack.
+static constexpr int kMaxExprDepth = 64;
+
+bool evalExpr(const ExprPtr &e, const Context &ctx, int depth = 0)
 {
     if (!e) return true;
+    if (depth >= kMaxExprDepth) return false;
     return std::visit([&](const auto &n) -> bool {
         using T = std::decay_t<decltype(n)>;
         if constexpr (std::is_same_v<T, Predicate>)
             return evalPredicate(n, ctx);
         else if constexpr (std::is_same_v<T, Not>)
-            return !evalExpr(n.child, ctx);
+            return !evalExpr(n.child, ctx, depth + 1);
         else if constexpr (std::is_same_v<T, And>)
-            return evalExpr(n.lhs, ctx) && evalExpr(n.rhs, ctx);
+            return evalExpr(n.lhs, ctx, depth + 1) && evalExpr(n.rhs, ctx, depth + 1);
         else if constexpr (std::is_same_v<T, Or>)
-            return evalExpr(n.lhs, ctx) || evalExpr(n.rhs, ctx);
+            return evalExpr(n.lhs, ctx, depth + 1) || evalExpr(n.rhs, ctx, depth + 1);
         return true;
     }, e->node);
 }
@@ -395,7 +404,7 @@ public:
     {
         ParseResult res;
         if (m_cur.type == TokType::End) return res;  // empty → match-all
-        ExprPtr e = parseOr();
+        ExprPtr e = parseOr(0);
         if (!m_error.isEmpty()) {
             res.error    = m_error;
             res.errorPos = m_errorPos;
@@ -423,40 +432,56 @@ private:
         if (m_error.isEmpty()) { m_error = msg; m_errorPos = pos; }
     }
 
-    ExprPtr parseOr()
+    // Common guard: returns true if recursion would exceed kMaxExprDepth.
+    // We surface a parse error (not a silent reject) so users typing too
+    // many parens get a clear diagnostic.
+    bool tooDeep(int depth)
     {
-        ExprPtr lhs = parseAnd();
-        while (!m_error.isEmpty() ? false : (m_cur.type == TokType::Or)) {
+        if (depth < kMaxExprDepth) return false;
+        fail(QStringLiteral("expression nested too deeply (max %1)")
+                 .arg(kMaxExprDepth),
+             m_cur.pos);
+        return true;
+    }
+
+    ExprPtr parseOr(int depth)
+    {
+        if (tooDeep(depth)) return {};
+        ExprPtr lhs = parseAnd(depth + 1);
+        while (m_error.isEmpty() && m_cur.type == TokType::Or) {
             advance();
-            ExprPtr rhs = parseAnd();
+            ExprPtr rhs = parseAnd(depth + 1);
             lhs = std::make_shared<Expr>(Or{lhs, rhs});
         }
         return lhs;
     }
-    ExprPtr parseAnd()
+    ExprPtr parseAnd(int depth)
     {
-        ExprPtr lhs = parseNot();
-        while (!m_error.isEmpty() ? false : (m_cur.type == TokType::And)) {
+        if (tooDeep(depth)) return {};
+        ExprPtr lhs = parseNot(depth + 1);
+        while (m_error.isEmpty() && m_cur.type == TokType::And) {
             advance();
-            ExprPtr rhs = parseNot();
+            ExprPtr rhs = parseNot(depth + 1);
             lhs = std::make_shared<Expr>(And{lhs, rhs});
         }
         return lhs;
     }
-    ExprPtr parseNot()
+    ExprPtr parseNot(int depth)
     {
+        if (tooDeep(depth)) return {};
         if (m_cur.type == TokType::Not) {
             advance();
-            ExprPtr child = parseNot();
+            ExprPtr child = parseNot(depth + 1);
             return std::make_shared<Expr>(Not{child});
         }
-        return parseAtom();
+        return parseAtom(depth + 1);
     }
-    ExprPtr parseAtom()
+    ExprPtr parseAtom(int depth)
     {
+        if (tooDeep(depth)) return {};
         if (m_cur.type == TokType::LParen) {
             advance();
-            ExprPtr e = parseOr();
+            ExprPtr e = parseOr(depth + 1);
             if (m_cur.type != TokType::RParen) {
                 fail(QStringLiteral("expected ')'"), m_cur.pos);
                 return {};

@@ -185,6 +185,36 @@ private slots:
         // Mixed
         QVERIFY(matches(QStringLiteral("proto:tcp and (dport=443 or dport=80)"), ctx));
     }
+
+    // ---- Recursion cap (DoS hardening) --------------------------------
+    void deeplyNestedExpressionIsRejected()
+    {
+        // 200 nested parens around a trivial predicate. Without the depth
+        // cap this blows the UI thread's stack on recursion.
+        QString expr;
+        const QString pred = QStringLiteral("proto:tcp");
+        for (int i = 0; i < 200; ++i) expr += QLatin1Char('(');
+        expr += pred;
+        for (int i = 0; i < 200; ++i) expr += QLatin1Char(')');
+        const auto res = parse(expr);
+        QVERIFY(!res.error.isEmpty());
+        QVERIFY(res.error.contains(QStringLiteral("nested too deeply")));
+    }
+
+    void moderatelyNestedExpressionStillParses()
+    {
+        // Each layer of parens consumes ~4 recursion frames (Or→And→Not→Atom),
+        // so the cap of 64 leaves room for ~15 nested parens in practice.
+        // 10 is well within the budget.
+        QString expr;
+        const QString pred = QStringLiteral("proto:tcp");
+        for (int i = 0; i < 10; ++i) expr += QLatin1Char('(');
+        expr += pred;
+        for (int i = 0; i < 10; ++i) expr += QLatin1Char(')');
+        const auto res = parse(expr);
+        QVERIFY2(res.error.isEmpty(), qPrintable(res.error));
+        QVERIFY(res.expr != nullptr);
+    }
 };
 
 QTEST_MAIN(TestFilter)

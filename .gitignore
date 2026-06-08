@@ -1,1 +1,12 @@
 build/
+build-*/
+
+# Vagrant scaffolding for dev VMs (not part of the project source)
+.vagrant/
+Vagrantfile
+*.iso
+
+# Editor / OS junk
+*.swp
+*.swo
+.DS_Store

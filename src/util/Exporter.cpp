@@ -19,7 +19,13 @@ QJsonValue toJsonValue(const QVariant &v)
     case QMetaType::Int:
     case QMetaType::UInt:
     case QMetaType::LongLong:    return v.toLongLong();
-    case QMetaType::ULongLong:   return static_cast<qint64>(v.toULongLong());
+    // QJsonValue stores numbers as double, so anything past 2^53 silently
+    // loses precision. Cumulative interface counters on a long-lived
+    // 100 Gb/s NIC (or aggregated conntrack byte totals on a busy router)
+    // can exceed that. Encode as a decimal string so consumers that care
+    // about exact values can recover them; consumers that don't care can
+    // still parse the digits back into a double.
+    case QMetaType::ULongLong:   return QString::number(v.toULongLong());
     case QMetaType::Double:
     case QMetaType::Float:       return v.toDouble();
     case QMetaType::QStringList: {
