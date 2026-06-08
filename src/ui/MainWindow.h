@@ -53,14 +53,6 @@ private slots:
     void onSettingsChanged();
     void togglePaused(bool paused);
     void openSettingsDialog();
-    void exportInterfacesJson();
-    void exportInterfacesCsv();
-    void exportConnectionsJson();
-    void exportConnectionsCsv();
-    void copyInterfacesJson();
-    void copyInterfacesCsv();
-    void copyConnectionsJson();
-    void copyConnectionsCsv();
     void showInterfaceContextMenu(const QPoint &pos);
     void showConnectionContextMenu(const QPoint &pos);
     void quitFromTray();

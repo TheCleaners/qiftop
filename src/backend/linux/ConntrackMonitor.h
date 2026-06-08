@@ -4,12 +4,13 @@
 
 #include "backend/ConnectionMonitor.h"
 
-// Linux ConnectionMonitor — placeholder scaffold.
+// Linux ConnectionMonitor — libnetfilter_conntrack implementation.
 //
-// Owns a QThread and emits connectionsUpdated on a periodic tick.
-// The actual capture path is intentionally stubbed: future work plugs in
-// either libnetfilter_conntrack (preferred for flow-level stats with no
-// per-packet cost) or libpcap (for true wire-level counting like iftop).
+// Owns a QThread; the worker polls conntrack on a tick and emits
+// connectionsUpdated with the current flow set + per-flow byte/packet
+// counters. Issues separate AF_INET and AF_INET6 dumps because the
+// AF_UNSPEC dump path is unreliable across kernel/libnetfilter_conntrack
+// combos and often returns only IPv4 entries.
 class ConntrackMonitor : public ConnectionMonitor {
     Q_OBJECT
 

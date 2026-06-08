@@ -130,88 +130,73 @@ Override path: `qiftop-agent --config <path>`.
 
 ---
 
-## 6. Testing strategy (in progress)
+## 6. Testing strategy
 
-Right now there are no automated tests. This is the plan; pick up incrementally.
+Tests live in `tests/`, gated by `option(QIFTOP_BUILD_TESTS ON)` (on by
+default; turn off for distro builds that don't want QtTest in the build
+deps). Each test is its own executable so a single test's crash doesn't
+take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 
 ### 6.1 Tiers
 
 | Tier              | What                                                  | Privilege     | Where         |
 |-------------------|-------------------------------------------------------|---------------|---------------|
-| **unit**          | Pure logic, no I/O, no DBus, no kernel.               | none          | `tests/unit/` |
-| **integration**   | Spin up `qiftop-agent --session` + drive over DBus.   | none          | `tests/integration/` |
-| **end-to-end**    | Real system bus, real conntrack. Manual / CI runner.  | root          | `tests/e2e/`  |
+| **unit**          | Pure logic, no I/O, no DBus, no kernel.               | none          | `tests/`      |
+| **integration**   | Spin up `qiftop-agent --session` + drive over DBus.   | none          | (not yet)     |
+| **end-to-end**    | Real system bus, real conntrack. Manual / CI runner.  | root          | (not yet)     |
 
-### 6.2 What's already testable (unit)
+### 6.2 What's currently covered
 
-| Subject                                | Why it's unit-friendly                                              |
-|----------------------------------------|----------------------------------------------------------------------|
-| `dbus::Types` round-trip               | Pure marshalling.                                                    |
-| `IdleManager`                          | Uses `QElapsedTimer` and `QTimer`; inject fake monitors (see below). |
-| `ConnectionFilterProxy`                | `QSortFilterProxyModel` subclass with table input.                   |
-| `InterfaceFilterProxy`                 | Same.                                                                |
-| `ConnectionModel` localhost aliasing   | `setLocalAddresses` + DNS-resolved rendering.                        |
-| Config loader (`loadIdleConfig` in `main.cpp`) | Currently file-static; **refactor it out of `main.cpp` into `agent/Config.{h,cpp}`** so it can be unit-tested. (TODO.) |
+| Test                       | Subject                                                           |
+|----------------------------|-------------------------------------------------------------------|
+| `test_direction`           | `inferDirection` (ephemeral-port + local-end fallback)            |
+| `test_forwarded`           | `isForwardedFlow` heuristic                                       |
+| `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
+| `test_filter`              | Filter mini-language parser + evaluator (every field/op)          |
+| `test_settings_migration`  | `Settings` legacy-key migration logic                             |
+| `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
 
-### 6.3 What needs structural change to be testable
+### 6.3 Gaps worth filling
 
-1. **`NetlinkMonitor` / `ConntrackMonitor` need fakes.**
-   The `NetworkMonitor` / `ConnectionMonitor` abstract bases already exist;
-   add `tests/fakes/FakeNetworkMonitor.{h,cpp}` that emit canned
-   `statsUpdated` signals on demand. `IdleManager` and the services should
-   only see those abstract interfaces — they already do.
+1. **`dbus::Types` round-trip** — `Connection` ↔ `ConnectionDto` ↔
+   `QDBusArgument`. Pure marshalling; should be trivial to test.
+2. **`IdleManager` cadence** — uses `QElapsedTimer` + `QTimer`. Pattern:
+   inject fake monitors via the existing `NetworkMonitor` /
+   `ConnectionMonitor` abstract interfaces; exercise base cadence,
+   slow-down at 30s / pause at 60s, wake on `noteActivity()`, hint TTL,
+   `min()` across multiple hints, clamp at `minIntervalMs`.
+3. **`ConnectionFilterProxy` / `InterfaceFilterProxy` visibility** —
+   empty iface set, named ifaces, the empty-string sentinel for
+   unattributed flows, proto toggles, expression-filter wiring.
+4. **Integration** — spawn agent on a private session bus, assert
+   `GetInterfaces` returns non-empty within a 1s deadline, assert
+   `SetDesiredIntervalMs(250)` produces `StatsChanged` events at ≥3 Hz
+   for the next 2s.
 
-2. **`main.cpp` glue → a `qiftop::agent::Application` class.**
-   Move bus setup, service registration, and IdleManager wiring out of
-   `main()` into a small RAII class that takes a `QDBusConnection` and the
-   two monitor pointers (via the abstract interfaces). `main.cpp` becomes a
-   thin argv/`QCoreApplication` shim. Then integration tests can construct
-   the application against a private bus.
+### 6.4 Refactors that would unblock more testing
 
-3. **Config loader** must move out of `main.cpp` (see 6.2 table).
+1. **Extract `loadIdleConfig` from `src/agent/main.cpp` into
+   `agent/Config.{h,cpp}`** so the INI parser can be unit-tested
+   without spawning the agent. Currently file-static.
+2. **`main.cpp` glue → `qiftop::agent::Application` class.** Move bus
+   setup, service registration, and IdleManager wiring out of `main()`
+   into a small RAII class that takes a `QDBusConnection` + the two
+   monitor pointers (via the abstract interfaces). Then integration
+   tests can construct the application against a private bus.
+3. **Extract `ConntrackMonitor::Worker`'s per-flow diff math** into a
+   free function `computeDeltas(prev, current) -> QList<Connection>` so
+   the diff/accounting tests don't need a live conntrack handle.
+4. **Add `tests/fakes/FakeNetworkMonitor.{h,cpp}`** emitting canned
+   `statsUpdated` signals on demand, to drive `IdleManager` and the
+   services from tests.
 
-4. **`ConntrackMonitor::Worker` is defined inside the .cpp.**
-   Fine for production but means unit-testing the diff/accounting math is
-   hard. When we want to test it, extract the per-flow bookkeeping into a
-   free function `computeDeltas(prev, current) -> QList<Connection>` in a
-   header so the test doesn't need a live conntrack handle.
+### 6.5 CI
 
-5. **No QML / QtTest yet.** Add `find_package(Qt6 ... Test)` and a
-   `tests/CMakeLists.txt` guarded by a `QIFTOP_BUILD_TESTS=ON` cache var so
-   end users packaging the .debs don't pull in QtTest.
-
-### 6.4 Proposed CMake skeleton
-
-```cmake
-option(QIFTOP_BUILD_TESTS "Build unit and integration tests" OFF)
-if(QIFTOP_BUILD_TESTS)
-    enable_testing()
-    find_package(Qt6 REQUIRED COMPONENTS Test)
-    add_subdirectory(tests)
-endif()
-```
-
-Each test target uses `add_test(NAME ... COMMAND ...)` and the runner is
-`ctest --test-dir build`. Integration tests should:
-* spawn the agent with `--session --config <test-tmpdir>/agent.conf`,
-* use `dbus-launch --autolaunch` or a `QProcess`-managed `dbus-daemon` with
-  an ephemeral address pinned to `DBUS_SESSION_BUS_ADDRESS`,
-* tear down by `kill` on the recorded PID.
-
-### 6.5 What to write first (suggested order)
-
-1. `IdleManager` unit tests with fake monitors — exercises every code path
-   without needing the network stack or DBus. Covers: base cadence,
-   slow-down, pause, wake on `noteActivity()`, client hints, hint TTL
-   expiry, hint clamp at `minIntervalMs`, `min()` across multiple hints.
-2. `dbus::Types` round-trip (`Connection` ↔ `ConnectionDto` ↔
-   `QDBusArgument`).
-3. `ConnectionFilterProxy` visibility rules (empty set, named ifaces, the
-   empty-string sentinel for unattributed flows).
-4. Integration: spawn agent on a private session bus, assert `GetInterfaces`
-   returns a non-empty list within a 1 s deadline, assert
-   `SetDesiredIntervalMs(250)` produces `StatsChanged` events at ≥3 Hz for
-   the next 2 s.
+`.github/workflows/ci.yml` runs the full test suite under
+`dbus-run-session` with `QT_QPA_PLATFORM=offscreen` on a matrix of
+ubuntu-22.04 + ubuntu-24.04 × Debug + Release. `HOME` is redirected to
+`$RUNNER_TEMP/home` so QSettings/Autostart tests don't trample the
+runner user. See HACKING.md §5.5 for the test-writing conventions.
 
 ---
 

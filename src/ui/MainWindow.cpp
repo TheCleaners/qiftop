@@ -268,22 +268,27 @@ void MainWindow::setupMenuAndToolbar()
                                         tr("&Connections as JSON"), this);
     m_copyConnsCsvAct     = new QAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
                                         tr("Co&nnections as CSV"),  this);
-    connect(m_exportIfacesJsonAct, &QAction::triggered,
-            this, &MainWindow::exportInterfacesJson);
-    connect(m_exportIfacesCsvAct,  &QAction::triggered,
-            this, &MainWindow::exportInterfacesCsv);
-    connect(m_exportConnsJsonAct,  &QAction::triggered,
-            this, &MainWindow::exportConnectionsJson);
-    connect(m_exportConnsCsvAct,   &QAction::triggered,
-            this, &MainWindow::exportConnectionsCsv);
-    connect(m_copyIfacesJsonAct,   &QAction::triggered,
-            this, &MainWindow::copyInterfacesJson);
-    connect(m_copyIfacesCsvAct,    &QAction::triggered,
-            this, &MainWindow::copyInterfacesCsv);
-    connect(m_copyConnsJsonAct,    &QAction::triggered,
-            this, &MainWindow::copyConnectionsJson);
-    connect(m_copyConnsCsvAct,     &QAction::triggered,
-            this, &MainWindow::copyConnectionsCsv);
+    // Wire up export / copy actions via lambdas — each call site differs
+    // only by (model, format, sink, basename), so a single helper keeps
+    // the slot machinery footprint down.
+    using EF = ExportFormat;
+    using ES = ExportSink;
+    connect(m_exportIfacesJsonAct, &QAction::triggered, this, [this] {
+        runExport(m_netModel,  EF::Json, ES::File,      QStringLiteral("interfaces"));  });
+    connect(m_exportIfacesCsvAct,  &QAction::triggered, this, [this] {
+        runExport(m_netModel,  EF::Csv,  ES::File,      QStringLiteral("interfaces"));  });
+    connect(m_exportConnsJsonAct,  &QAction::triggered, this, [this] {
+        runExport(m_connModel, EF::Json, ES::File,      QStringLiteral("connections")); });
+    connect(m_exportConnsCsvAct,   &QAction::triggered, this, [this] {
+        runExport(m_connModel, EF::Csv,  ES::File,      QStringLiteral("connections")); });
+    connect(m_copyIfacesJsonAct,   &QAction::triggered, this, [this] {
+        runExport(m_netModel,  EF::Json, ES::Clipboard, QStringLiteral("interfaces"));  });
+    connect(m_copyIfacesCsvAct,    &QAction::triggered, this, [this] {
+        runExport(m_netModel,  EF::Csv,  ES::Clipboard, QStringLiteral("interfaces"));  });
+    connect(m_copyConnsJsonAct,    &QAction::triggered, this, [this] {
+        runExport(m_connModel, EF::Json, ES::Clipboard, QStringLiteral("connections")); });
+    connect(m_copyConnsCsvAct,     &QAction::triggered, this, [this] {
+        runExport(m_connModel, EF::Csv,  ES::Clipboard, QStringLiteral("connections")); });
 
     // --- Menus ---
     auto *fileMenu = menuBar()->addMenu(tr("&File"));
@@ -825,39 +830,6 @@ void MainWindow::runExport(Exportable *src, ExportFormat fmt,
         return;
     }
     statusBar()->showMessage(tr("Exported to %1").arg(path), 5000);
-}
-
-void MainWindow::exportInterfacesJson()
-{
-    runExport(m_netModel, ExportFormat::Json, ExportSink::File, QStringLiteral("interfaces"));
-}
-void MainWindow::exportInterfacesCsv()
-{
-    runExport(m_netModel, ExportFormat::Csv,  ExportSink::File, QStringLiteral("interfaces"));
-}
-void MainWindow::exportConnectionsJson()
-{
-    runExport(m_connModel, ExportFormat::Json, ExportSink::File, QStringLiteral("connections"));
-}
-void MainWindow::exportConnectionsCsv()
-{
-    runExport(m_connModel, ExportFormat::Csv,  ExportSink::File, QStringLiteral("connections"));
-}
-void MainWindow::copyInterfacesJson()
-{
-    runExport(m_netModel, ExportFormat::Json, ExportSink::Clipboard, QStringLiteral("interfaces"));
-}
-void MainWindow::copyInterfacesCsv()
-{
-    runExport(m_netModel, ExportFormat::Csv,  ExportSink::Clipboard, QStringLiteral("interfaces"));
-}
-void MainWindow::copyConnectionsJson()
-{
-    runExport(m_connModel, ExportFormat::Json, ExportSink::Clipboard, QStringLiteral("connections"));
-}
-void MainWindow::copyConnectionsCsv()
-{
-    runExport(m_connModel, ExportFormat::Csv,  ExportSink::Clipboard, QStringLiteral("connections"));
 }
 
 // --- UI state persistence ----------------------------------------------------

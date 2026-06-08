@@ -65,19 +65,6 @@ namespace qiftop::heuristics {
     return alpha * raw + (1.0 - alpha) * prev;
 }
 
-// Asymmetric EMA: different time constants for rising vs falling
-// targets. Used for the display-rate animation so rate *drops* track
-// the latest data more aggressively than rate *climbs* (gives the
-// "rates fall faster than they rise" feel without needing a separate
-// user setting).
-[[nodiscard]] inline double emaUpdateAsym(double prev, double raw,
-                                          double dtMs,
-                                          double tauRiseMs, double tauFallMs)
-{
-    const double tau = (raw >= prev) ? tauRiseMs : tauFallMs;
-    return emaUpdate(prev, raw, dtMs, tau);
-}
-
 // Cubic ease-out: f(0)=0, f(1)=1, fast start, smooth landing.
 // Used to tween the display rate from its prior value to the new EMA
 // target over a poll interval so changes animate rather than step.

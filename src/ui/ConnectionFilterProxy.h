@@ -21,26 +21,18 @@ public:
     using QSortFilterProxyModel::QSortFilterProxyModel;
 
     void setShowIPv6(bool show);
-    [[nodiscard]] bool showIPv6() const { return m_showIPv6; }
     void setShowTcp(bool show);
-    [[nodiscard]] bool showTcp() const { return m_showTcp; }
     void setShowUdp(bool show);
-    [[nodiscard]] bool showUdp() const { return m_showUdp; }
 
     // Empty set == show all. Otherwise only rows whose iface name is in the
     // set are visible. Pass the empty-string sentinel to keep "unattributed"
     // flows visible while filtering interfaces.
     void setVisibleIfaces(const QSet<QString> &ifaces);
-    [[nodiscard]] QSet<QString> visibleIfaces() const { return m_visibleIfaces; }
-    [[nodiscard]] bool ifaceFilterActive() const      { return !m_visibleIfaces.isEmpty(); }
 
     // Free-form expression filter. Empty / null-parse → no filter.
     // Returns the parse error string for the UI to surface in a tooltip
     // (empty on success / empty input).
     QString setFilterExpression(const QString &expr);
-    [[nodiscard]] QString filterExpression() const  { return m_exprText; }
-    [[nodiscard]] QString filterError()      const  { return m_exprError; }
-    [[nodiscard]] bool    filterExprActive() const  { return static_cast<bool>(m_expr); }
 
 protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;

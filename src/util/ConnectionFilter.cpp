@@ -171,14 +171,6 @@ double extractNumber(Field f, const Context &ctx)
 
 bool evalPredicate(const Predicate &p, const Context &ctx)
 {
-    // Numeric ops + numeric fields → numeric compare.
-    const FieldInfo *fi = nullptr;
-    for (auto it = fieldTable().cbegin(); it != fieldTable().cend(); ++it) {
-        // Reverse lookup: linear but tiny table.
-        (void)it;
-    }
-    // We don't actually need the FieldInfo at eval time (it was used at
-    // parse time to coerce). Branch on op:
     if (p.op == Op::Regex) {
         const QString s = extractText(p.field, ctx);
         if (p.field == Field::Port) {

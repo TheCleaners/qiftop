@@ -5,7 +5,6 @@
 class Settings;
 class QCheckBox;
 class QComboBox;
-class QDialogButtonBox;
 class QDoubleSpinBox;
 class QSpinBox;
 

@@ -58,10 +58,12 @@ public:
     void setDnsResolver(DnsResolver *resolver);
     void setHostnameResolutionEnabled(bool enabled);
 
-    // Set of "this host"'s addresses (any interface, any family — including
-    // 127.0.0.1 / ::1 but also each interface's primary CIDR). When DNS
-    // resolution is enabled, these are rendered as "localhost" instead of
-    // their raw IP, matching how a user thinks about the local end of a flow.
+    // Set of "this host"'s addresses (any interface, any family). The
+    // model strips loopback addresses (127.0.0.1 / ::1) from this set on
+    // assignment and tracks them separately so they can always be
+    // rendered as "localhost" regardless of the iface-as-localhost
+    // toggle. When DNS resolution is enabled and the per-toggle is on,
+    // iface addresses are also rendered as "localhost".
     void setLocalAddresses(QSet<QHostAddress> addrs);
 
     // Retention windows for closed flows. UDP gets its own knob because
@@ -69,8 +71,6 @@ public:
     // kernel times conntrack entries out aggressively.
     void setStaleRetentionMs(int ms)    { m_staleRetentionMs    = ms < 0 ? 0 : ms; }
     void setStaleRetentionMsUdp(int ms) { m_staleRetentionMsUdp = ms < 0 ? 0 : ms; }
-    [[nodiscard]] int staleRetentionMs() const    { return m_staleRetentionMs; }
-    [[nodiscard]] int staleRetentionMsUdp() const { return m_staleRetentionMsUdp; }
 
     // If true, UDP flows sharing a peer are coalesced into a single row;
     // the ephemeral side is displayed as "*". Applied on each tick before
@@ -98,9 +98,11 @@ public:
     // Windowed mode. Shorter windows make the gauge more reactive;
     // longer windows make it a more stable baseline.
     void setThroughputWindowMs(int ms);
-    // EMA time constant for instantaneous rate smoothing, in
-    // milliseconds. 0 = no smoothing. Applied in updateConnections()
-    // before downstream (gauge, Max columns) consume the values.
+    // EMA time constant for the smoothing pipeline's target stage, in
+    // milliseconds. 0 = no smoothing (display = raw). The downstream
+    // gauge / Max columns / sliding-window samples / CMA all read raw
+    // rates; only the per-row display value is smoothed (and then
+    // tweened in advanceSmoothing()).
     void setRateSmoothingMs(int ms) { m_rateSmoothingMs = ms < 0 ? 0 : ms; }
     // Baseline animation duration for the display tween (typically the
     // backend poll interval). Falls use ~1/3 of this for a snappier
