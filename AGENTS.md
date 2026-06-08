@@ -153,8 +153,11 @@ open:
   source ports and peer IPs. `/proc/net/nf_conntrack` is root-only on
   most distros; the agent must not demote that.
 
-`dist/debian/postinst` ensures the `netdev` group exists; users must be
-added to it explicitly (`sudo usermod -a -G netdev <user>`). The GUI's
+`dist/debian/postinst` ensures the `netdev` group exists and, when
+installed via `sudo apt install` / `pkexec`, automatically adds the
+invoking user (`$SUDO_USER` / `$PKEXEC_UID`) to it. Users still need to
+log out and back in (or run `newgrp netdev`) for the new group
+membership to take effect. The GUI's
 `probeAgent()` does a real `GetInterfaces` call with a 1 s timeout (and
 opportunistically reads `Version` / `Capabilities`), so users without
 group access fall back cleanly to the in-process (self-elevated) backend

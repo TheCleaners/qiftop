@@ -15,6 +15,30 @@ if ! getent group netdev >/dev/null 2>&1; then
     fi
 fi
 
+# Auto-enroll the installing user into `netdev` so the GUI can reach the
+# agent immediately after `apt install` without the user having to hunt
+# down the relevant usermod command. We try, in order:
+#   1. $SUDO_USER (set when the install ran under `sudo`)
+#   2. $PKEXEC_UID (set when the install ran via pkexec, e.g. from a
+#      graphical package manager)
+# We skip root and any user already in the group. A no-op `|| true`
+# guards every step — a failure here must never break the install.
+target_user=""
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    target_user="${SUDO_USER}"
+elif [ -n "${PKEXEC_UID:-}" ]; then
+    target_user="$(getent passwd "${PKEXEC_UID}" 2>/dev/null | cut -d: -f1 || true)"
+fi
+if [ -n "${target_user}" ] && getent passwd "${target_user}" >/dev/null 2>&1; then
+    if ! id -nG "${target_user}" 2>/dev/null | tr ' ' '\n' | grep -qx netdev; then
+        if [ -x /usr/sbin/usermod ]; then
+            /usr/sbin/usermod -a -G netdev "${target_user}" || true
+            echo "qiftop-agent: added user '${target_user}' to group 'netdev'." >&2
+            echo "qiftop-agent: log out and back in (or run 'newgrp netdev') for the change to take effect." >&2
+        fi
+    fi
+fi
+
 if [ -x /usr/bin/systemctl ]; then
     systemctl daemon-reload || true
     systemctl reload dbus.service 2>/dev/null || true
