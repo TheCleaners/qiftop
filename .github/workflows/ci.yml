@@ -121,7 +121,7 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
             apt-get install -y -qq ./qiftop-agent_*.deb ./qiftop_*.deb
-            qiftop --version
+            QT_QPA_PLATFORM=offscreen qiftop --version
             qiftop-agent --version
             # postinst should have created the netdev group:
             getent group netdev
