@@ -1,22 +1,23 @@
 #include "InterfaceFilterProxy.h"
 #include "NetworkModel.h"
 
+// See note in ConnectionFilterProxy.cpp: beginFilterChange/endFilterChange
+// are Qt 6.5+. We target Qt >= 6.2 so use invalidateFilter() instead.
+
 void InterfaceFilterProxy::setShowLoopback(bool show)
 {
     if (m_showLoopback == show)
         return;
-    beginFilterChange();
     m_showLoopback = show;
-    endFilterChange();
+    invalidateFilter();
 }
 
 void InterfaceFilterProxy::setShowDown(bool show)
 {
     if (m_showDown == show)
         return;
-    beginFilterChange();
     m_showDown = show;
-    endFilterChange();
+    invalidateFilter();
 }
 
 bool InterfaceFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
