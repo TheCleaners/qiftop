@@ -70,8 +70,13 @@ public slots:
 
     // Record a per-client cadence request. `sender` is the caller's unique
     // bus name (e.g. ":1.42"); ms<=0 clears the hint. Hints expire after
-    // Config::hintTtlMs unless re-asserted.
-    void setClientHint(const QString &sender, int ms);
+    // Config::hintTtlMs unless re-asserted. Returns true if the hint was
+    // accepted (or cleared); false if rejected (empty sender or hint table
+    // full). Callers should treat rejected calls as "did no work" — in
+    // particular, they should not count toward `noteActivity` (otherwise a
+    // peer who's been rejected from the table can still keep the agent
+    // out of idle by hammering this method).
+    bool setClientHint(const QString &sender, int ms);
 
 private slots:
     void evaluate();

@@ -72,8 +72,11 @@ void InterfacesService::SetDesiredIntervalMs(uint intervalMs)
 {
     if (!m_idle) return;
     const QString sender = calledFromDBus() ? message().service() : QString();
-    m_idle->noteActivity();
-    m_idle->setClientHint(sender, static_cast<int>(intervalMs));
+    // See ConnectionsService::SetDesiredIntervalMs — only count accepted
+    // hints as activity, so a peer rejected from the hint table can't
+    // pin the agent at the active cadence indefinitely.
+    if (m_idle->setClientHint(sender, static_cast<int>(intervalMs)))
+        m_idle->noteActivity();
 }
 
 void InterfacesService::onStatsUpdated(const QList<InterfaceStats> &stats)

@@ -95,8 +95,12 @@ void ConnectionsService::SetDesiredIntervalMs(uint intervalMs)
 {
     if (!m_idle) return;
     const QString sender = calledFromDBus() ? message().service() : QString();
-    m_idle->noteActivity();
-    m_idle->setClientHint(sender, static_cast<int>(intervalMs));
+    // Only count this call as activity if the hint was actually accepted.
+    // Otherwise a rejected peer (hint table full, empty sender) could keep
+    // the agent out of idle by hammering this method even though we did
+    // no real work.
+    if (m_idle->setClientHint(sender, static_cast<int>(intervalMs)))
+        m_idle->noteActivity();
 }
 
 void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)

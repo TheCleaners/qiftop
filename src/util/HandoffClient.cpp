@@ -2,6 +2,7 @@
 #include "HandoffServer.h" // for util::handoff::encodeStats
 #include "Logging.h"
 
+#include <QFile>
 #include <QLocalSocket>
 
 namespace util {
@@ -24,11 +25,27 @@ bool HandoffClient::connectTo(const QString &socketPath, int timeoutMs)
     if (socketPath.isEmpty()) return false;
     if (m_sock) return m_sock->state() == QLocalSocket::ConnectedState;
 
-    const QByteArray nonce = qgetenv("QIFTOP_HANDOFF_NONCE");
+    // Auth nonce: prefer reading from a 0600 file (so the secret never
+    // appears in argv / /proc/<pid>/cmdline). Fall back to the env-var
+    // form for backwards-compat with older parents during upgrade.
+    QByteArray nonce;
+    const QByteArray nonceFile = qgetenv("QIFTOP_HANDOFF_NONCE_FILE");
+    if (!nonceFile.isEmpty()) {
+        QFile f(QString::fromLocal8Bit(nonceFile));
+        if (f.open(QIODevice::ReadOnly)) {
+            nonce = f.readAll().trimmed();
+            f.close();
+            // Unlink immediately: the secret is now in memory only.
+            QFile::remove(QString::fromLocal8Bit(nonceFile));
+        }
+    }
+    if (nonce.isEmpty())
+        nonce = qgetenv("QIFTOP_HANDOFF_NONCE");
     if (nonce.isEmpty()) {
-        qCWarning(lcVerbose) << "handoff-client: QIFTOP_HANDOFF_NONCE not set; "
-                                "refusing to connect (would let any same-uid "
-                                "process spoof the parent's tray)";
+        qCWarning(lcVerbose) << "handoff-client: no QIFTOP_HANDOFF_NONCE_FILE or "
+                                "QIFTOP_HANDOFF_NONCE; refusing to connect "
+                                "(would let any same-uid process spoof the "
+                                "parent's tray)";
         return false;
     }
 

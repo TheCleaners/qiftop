@@ -456,12 +456,38 @@ runner user. See HACKING.md §5.5 for the test-writing conventions.
   audit whether an attacker could weaponise it. The same allowlist is
   applied to every QProcess we spawn (not just pkexec) via
   `scrubbedHelperEnv()` so that kdesu / gksudo / lxqt-sudo / beesu can't
-  pass through hostile env vars either.
+  pass through hostile env vars either. **`PATH` is deliberately NOT on
+  the allowlist** — both `sessionEnv()` and `scrubbedHelperEnv()` force
+  `PATH=/usr/sbin:/usr/bin:/sbin:/bin` to keep the privileged child safe
+  from any future relative-path exec resolving through a user-controlled
+  directory (LPE primitive). Pinned by `test_priv_escalator`.
+* **Handoff IPC hardening.** `HandoffServer` (parent ↔ privileged child
+  IPC) enforces several invariants worth keeping intact:
+    - Socket lives under `$XDG_RUNTIME_DIR` (mode 0700, kernel-managed)
+      or, when that's missing, a freshly `mkdtemp`'d 0700 directory under
+      `$HOME/.cache/qiftop/handoff-XXXXXX/`. **Never `/tmp`** — `bind()`
+      in a world-writable directory leaves a permission-race window.
+    - Every accepted peer must pass `SO_PEERCRED` (uid matches parent
+      or is 0). Defence-in-depth on top of the 0600 socket mode.
+    - The 256-bit auth nonce is written to a 0600 file and the *path*
+      is forwarded via `QIFTOP_HANDOFF_NONCE_FILE`. **Never put the
+      nonce on argv** — `/proc/<pid>/cmdline` is world-readable for the
+      lifetime of the pkexec prompt. The child reads + unlinks
+      immediately.
+    - An unauthenticated incumbent peer is evicted in favour of a
+      newcomer, so a same-uid process can't camp the slot pre-HELLO.
+      Once authenticated the slot is sticky.
+    - Read buffers are capped: 1 KiB pre-auth, 1 MiB post-auth.
+    - Pinned by `test_handoff_auth`.
 * **CSV / spreadsheet injection.** `src/util/Exporter.cpp::csvSanitise`
   prepends a leading apostrophe to any field starting with `=`, `+`, `-`,
   `@`, `\t`, or `\r` before quoting. Attacker-controlled hostnames (via
   reverse DNS) or interface names from the kernel must not be able to
   execute as spreadsheet formulas when the user opens an exported CSV.
+* **`IdleManager::setClientHint` returns `bool`.** Services should only
+  call `noteActivity()` on accepted hints — otherwise a peer rejected
+  from the (capped) hint table can still pin the agent out of idle by
+  hammering `SetDesiredIntervalMs`. Pinned by `test_idle`.
 
 ---
 

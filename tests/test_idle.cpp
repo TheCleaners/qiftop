@@ -131,15 +131,30 @@ private slots:
         FakeNet net; FakeConn conn;
         qiftop::agent::IdleManager idle(&net, &conn, fastConfig());
         // Fill to the documented cap with progressively stricter hints.
-        for (int i = 0; i < 64; ++i)
-            idle.setClientHint(QStringLiteral(":1.%1").arg(i),
-                               100 - (i % 50)); // always >= minInterval
+        for (int i = 0; i < 64; ++i) {
+            const bool ok = idle.setClientHint(QStringLiteral(":1.%1").arg(i),
+                                               100 - (i % 50)); // always >= minInterval
+            QVERIFY(ok);
+        }
         const int beforeMs = idle.currentIntervalMs();
         // 65th hint MUST be rejected, even if it would have lowered the
         // effective interval — rejecting (not evicting) is what stops a
         // hostile peer from kicking out legitimate clients' hints.
-        idle.setClientHint(QStringLiteral(":1.attacker"), 50);
+        const bool rejected = idle.setClientHint(QStringLiteral(":1.attacker"), 50);
+        QVERIFY(!rejected);
         QCOMPARE(idle.currentIntervalMs(), beforeMs);
+    }
+
+    void setClientHintReturnSignalsAcceptance()
+    {
+        // Services use the return value to decide whether to call
+        // noteActivity(): a rejected hint MUST NOT keep the agent out of
+        // idle. Empty sender → false; ms<=0 (clear) → true; normal → true.
+        FakeNet net; FakeConn conn;
+        qiftop::agent::IdleManager idle(&net, &conn, fastConfig());
+        QVERIFY(!idle.setClientHint(QString(), 100));        // empty sender
+        QVERIFY( idle.setClientHint(QStringLiteral(":1.1"), 100));
+        QVERIFY( idle.setClientHint(QStringLiteral(":1.1"), 0)); // clear
     }
 
     void degradesAndPausesOverTime()

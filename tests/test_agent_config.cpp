@@ -125,6 +125,27 @@ schedule=not-a-schedule
         QCOMPARE(cfg.slow1IntervalMs, defaults.slow1IntervalMs);
         QCOMPARE(cfg.slow1WindowMs,   defaults.slow1WindowMs);
     }
+
+    void hugeSecondsValueDoesNotOverflow()
+    {
+        // Regression: previously `parts[0].toInt() * 1000` was computed in
+        // 32-bit *before* the range clamp, so anything > ~2.1M seconds
+        // overflowed (UB). Now seconds are clamped to [0, 86400] first
+        // and multiplied in 64-bit. The huge value should fall back to
+        // the compile-time default with a warning (not silently wrap to
+        // a tiny/negative number that clamps into a degenerate cadence).
+        QTemporaryDir dir; QVERIFY(dir.isValid());
+        const QString path = writeConf(dir, R"([idle]
+timeout_secs=2147484
+schedule=2147484:2000,2147484:5000,2147484:0
+)");
+        const qiftop::agent::IdleManager::Config defaults;
+        const auto cfg = qiftop::agent::loadIdleConfig(path);
+        QCOMPARE(cfg.idleTimeoutMs,  defaults.idleTimeoutMs);
+        QCOMPARE(cfg.activeWindowMs, defaults.activeWindowMs);
+        QCOMPARE(cfg.slow1WindowMs,  defaults.slow1WindowMs);
+        QCOMPARE(cfg.slow2WindowMs,  defaults.slow2WindowMs);
+    }
 };
 
 QTEST_MAIN(TestAgentConfig)

@@ -74,15 +74,15 @@ void IdleManager::noteActivity()
         applyInterval(target);
 }
 
-void IdleManager::setClientHint(const QString &sender, int ms)
+bool IdleManager::setClientHint(const QString &sender, int ms)
 {
-    if (sender.isEmpty()) return;
+    if (sender.isEmpty()) return false;
     if (ms <= 0) {
         if (m_hints.remove(sender) > 0) {
             qCInfo(lcVerbose).noquote() << "IdleManager: cleared hint from" << sender;
             evaluate();
         }
-        return;
+        return true;
     }
     // Cap the hash so a peer churning unique bus names can't bloat us
     // unboundedly. 64 distinct hinters per agent is well beyond any
@@ -93,7 +93,7 @@ void IdleManager::setClientHint(const QString &sender, int ms)
         qCWarning(lcVerbose).noquote()
             << "IdleManager: refusing hint from" << sender
             << "— hint table full (" << kMaxHints << ")";
-        return;
+        return false;
     }
     const int clamped = qMax(ms, m_cfg.minIntervalMs);
     const qint64 exp  = nowMs() + m_cfg.hintTtlMs;
@@ -102,6 +102,7 @@ void IdleManager::setClientHint(const QString &sender, int ms)
         << "IdleManager: hint from" << sender << "→" << clamped << "ms (ttl"
         << m_cfg.hintTtlMs/1000 << "s)";
     evaluate();
+    return true;
 }
 
 int IdleManager::effectiveActiveIntervalMs()

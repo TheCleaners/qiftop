@@ -9,8 +9,14 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QRandomGenerator>
+#include <QSaveFile>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QUuid>
+
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 namespace util {
 
@@ -45,15 +51,62 @@ HandoffServer::~HandoffServer()
     if (!m_socketPath.isEmpty()) {
         QFile::remove(m_socketPath);
     }
+    if (!m_nonceFilePath.isEmpty()) {
+        QFile::remove(m_nonceFilePath);
+    }
+    if (!m_socketDir.isEmpty()) {
+        // Best-effort rmdir; only succeeds if empty, which is what we want
+        // (don't take out user data if something unexpected lived here).
+        QDir().rmdir(m_socketDir);
+    }
 }
+
+namespace {
+// Return a per-user runtime directory suitable for our 0600 socket + nonce.
+// Prefers $XDG_RUNTIME_DIR (kernel-managed, mode 0700, tmpfs); falls back
+// to a freshly mkdtemp'd 0700 directory under $HOME/.cache/qiftop/. Never
+// returns /tmp: bind()-then-chmod in a world-writable directory leaves a
+// permission-race window during which any same-host user can connect.
+QString pickRuntimeDir(QString *outErr)
+{
+    const QString xdg = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (!xdg.isEmpty() && QDir(xdg).exists())
+        return xdg;
+    const QString cacheRoot =
+        QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
+    if (cacheRoot.isEmpty()) {
+        if (outErr) *outErr = QStringLiteral("no writable cache directory");
+        return {};
+    }
+    QDir().mkpath(cacheRoot + QStringLiteral("/qiftop"));
+    QTemporaryDir tdir(cacheRoot + QStringLiteral("/qiftop/handoff-XXXXXX"));
+    if (!tdir.isValid()) {
+        if (outErr) *outErr = tdir.errorString();
+        return {};
+    }
+    tdir.setAutoRemove(false); // caller cleans up
+    // QTemporaryDir creates with 0700 on POSIX.
+    return tdir.path();
+}
+} // namespace
 
 QString HandoffServer::listen()
 {
     if (m_server) return m_socketPath;
 
-    QString dir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    if (dir.isEmpty() || !QDir(dir).exists())
-        dir = QStringLiteral("/tmp");
+    QString pickErr;
+    QString dir = pickRuntimeDir(&pickErr);
+    if (dir.isEmpty()) {
+        m_lastError = QStringLiteral("handoff: no safe runtime dir: %1").arg(pickErr);
+        return {};
+    }
+    // If pickRuntimeDir created a fresh per-handoff directory under
+    // ~/.cache/qiftop/, remember it so we can rmdir on teardown.
+    if (!dir.startsWith(QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation))
+        || QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation).isEmpty())
+    {
+        m_socketDir = dir;
+    }
 
     const QString name = QStringLiteral("qiftop-handoff-%1.sock")
         .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
@@ -62,12 +115,47 @@ QString HandoffServer::listen()
 
     m_nonce = makeNonce();
 
+    // Persist the nonce to a 0600 file rather than passing it on argv: argv
+    // is world-readable via /proc/<pid>/cmdline during the (often long)
+    // pkexec auth prompt window. The child reads it via HandoffClient and
+    // unlinks immediately.
+    m_nonceFilePath = QDir(dir).filePath(
+        QStringLiteral("qiftop-handoff-%1.nonce")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    {
+        QSaveFile nf(m_nonceFilePath);
+        // Create with restrictive perms; QSaveFile honours setPermissions
+        // before the atomic rename.
+        if (!nf.open(QIODevice::WriteOnly)) {
+            m_lastError = QStringLiteral("handoff: cannot write nonce file: %1")
+                              .arg(nf.errorString());
+            m_socketPath.clear();
+            m_nonce.clear();
+            m_nonceFilePath.clear();
+            return {};
+        }
+        nf.write(m_nonce.toLatin1());
+        if (!nf.commit()) {
+            m_lastError = QStringLiteral("handoff: cannot commit nonce file: %1")
+                              .arg(nf.errorString());
+            m_socketPath.clear();
+            m_nonce.clear();
+            m_nonceFilePath.clear();
+            return {};
+        }
+        QFile::setPermissions(m_nonceFilePath,
+                              QFile::ReadOwner | QFile::WriteOwner);
+    }
+    m_expectedChildUid = ::geteuid();
+
     m_server = new QLocalServer(this);
     m_server->setSocketOptions(QLocalServer::UserAccessOption);
     if (!m_server->listen(m_socketPath)) {
         m_lastError  = m_server->errorString();
+        QFile::remove(m_nonceFilePath);
         m_socketPath.clear();
         m_nonce.clear();
+        m_nonceFilePath.clear();
         delete m_server;
         m_server = nullptr;
         return {};
@@ -77,20 +165,55 @@ QString HandoffServer::listen()
             this,     &HandoffServer::handleNewConnection);
 
     qCInfo(lcVerbose).noquote() << "handoff: listening on" << m_socketPath
-                                << "(nonce: 64 hex chars)";
+                                << "(nonce file:" << m_nonceFilePath << ")";
     return m_socketPath;
 }
 
 void HandoffServer::handleNewConnection()
 {
     while (auto *sock = m_server->nextPendingConnection()) {
-        // Only accept one persistent client — the privileged child. Reject
-        // any further connections so a stray process can't hijack us.
-        if (m_client) {
-            qCInfo(lcVerbose) << "handoff: rejecting extra connection";
+        // SO_PEERCRED gate: the legitimate child is either the same uid
+        // (self-elevation handoff via pkexec → root → drops back to user)
+        // or root (privileged child writing back). Reject any other uid
+        // before they even get a chance to send HELLO. This is defence in
+        // depth — UserAccessOption already 0600s the socket — but cheap.
+        const qintptr fd = sock->socketDescriptor();
+        struct ucred cred{};
+        socklen_t len = sizeof(cred);
+        if (fd < 0 || getsockopt(int(fd), SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
+            qCWarning(lcVerbose) << "handoff: SO_PEERCRED failed; rejecting peer";
             sock->disconnectFromServer();
             sock->deleteLater();
             continue;
+        }
+        if (cred.uid != m_expectedChildUid && cred.uid != 0) {
+            qCWarning(lcVerbose).noquote()
+                << "handoff: rejecting peer uid" << cred.uid
+                << "(expected" << m_expectedChildUid << "or 0)";
+            sock->disconnectFromServer();
+            sock->deleteLater();
+            continue;
+        }
+
+        if (m_client) {
+            // If the incumbent is unauthenticated, evict it: an attacker
+            // could otherwise camp the slot pre-auth and lock out the real
+            // root child forever. Once authenticated, the slot is sticky.
+            if (!m_authenticated) {
+                qCInfo(lcVerbose)
+                    << "handoff: evicting unauthenticated incumbent peer "
+                       "to make room for newcomer";
+                disconnect(m_client, nullptr, this, nullptr);
+                m_client->disconnectFromServer();
+                m_client->deleteLater();
+                m_client = nullptr;
+                m_readBuf.clear();
+            } else {
+                qCInfo(lcVerbose) << "handoff: rejecting extra connection";
+                sock->disconnectFromServer();
+                sock->deleteLater();
+                continue;
+            }
         }
         m_client = sock;
         m_authenticated = false;
@@ -121,6 +244,13 @@ void HandoffServer::handleReadyRead()
     // a giant unterminated line before HELLO.
     if (!m_authenticated && m_readBuf.size() > 1024) {
         rejectClient("oversized pre-auth payload");
+        return;
+    }
+    // Post-auth cap: a buggy/compromised child shouldn't be able to grow
+    // our buffer without bound by never sending a newline.
+    static constexpr int kPostAuthCap = 1 * 1024 * 1024;
+    if (m_authenticated && m_readBuf.size() > kPostAuthCap) {
+        rejectClient("oversized post-auth payload");
         return;
     }
     int nl;

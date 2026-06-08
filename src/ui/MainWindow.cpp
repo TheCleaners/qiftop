@@ -1199,7 +1199,10 @@ void MainWindow::relaunchAsAdmin()
         handoff = nullptr;
     } else {
         qputenv("QIFTOP_HANDOFF_SOCKET", sockPath.toLocal8Bit());
-        qputenv("QIFTOP_HANDOFF_NONCE",  handoff->nonce().toLatin1());
+        // Pass the nonce via a 0600 file path on the env, not argv: the
+        // nonce-on-argv form was world-readable via /proc/<pid>/cmdline
+        // for the lifetime of the pkexec auth prompt.
+        qputenv("QIFTOP_HANDOFF_NONCE_FILE", handoff->nonceFilePath().toLocal8Bit());
         prepareProxyMode(handoff);
     }
 
@@ -1222,7 +1225,7 @@ void MainWindow::relaunchAsAdmin()
     QString used;
     const bool ok = esc.relaunch(self, tail, &used);
     qunsetenv("QIFTOP_HANDOFF_SOCKET");
-    qunsetenv("QIFTOP_HANDOFF_NONCE");
+    qunsetenv("QIFTOP_HANDOFF_NONCE_FILE");
 
     if (ok) {
         m_connBannerLbl->setText(tr("Privileged instance launching via %1. "

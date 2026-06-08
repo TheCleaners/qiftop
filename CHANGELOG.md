@@ -10,6 +10,55 @@ human-readable summary for *shipping* releases.
 
 ## [Unreleased]
 
+### Security
+
+A pre-v0.1 security audit (sub-agent code review + manual pass) surfaced
+seven findings worth addressing before tagging stable. Fixed in this
+release:
+
+- **HIGH — Privileged child no longer inherits the user's `PATH`.**
+  `PATH` was on the env allowlist forwarded into the root child via
+  `pkexec env PATH=… qiftop`. Any future `QProcess` / `findExecutable`
+  in the privileged process would have resolved through user-controlled
+  directories first — a latent LPE primitive. `PATH` is now dropped from
+  the allowlist; both `sessionEnv()` (root child) and `scrubbedHelperEnv()`
+  (helper subprocesses) force `PATH=/usr/sbin:/usr/bin:/sbin:/bin`.
+- **MEDIUM — Handoff socket can no longer be slot-camped by a same-uid
+  process.** `HandoffServer` now evicts an unauthenticated incumbent in
+  favour of a newcomer (so an attacker holding the slot pre-HELLO can't
+  lock out the real privileged child) and gates every accepted peer on
+  `SO_PEERCRED` (must be the same uid as the parent, or root).
+- **MEDIUM — Handoff nonce is no longer passed on argv.** Previously the
+  256-bit nonce travelled via `pkexec env QIFTOP_HANDOFF_NONCE=hex …`,
+  which is world-readable via `/proc/<pid>/cmdline` for the lifetime of
+  the polkit prompt. The nonce is now written to a 0600 file under
+  `$XDG_RUNTIME_DIR` (or `$HOME/.cache/qiftop/handoff-XXXXXX/`); only the
+  file path is forwarded via `QIFTOP_HANDOFF_NONCE_FILE`. The child
+  reads + unlinks immediately. The env-var form is still accepted for
+  one release for transitional compat.
+- **MEDIUM — `HandoffServer` no longer falls back to `/tmp`.** When
+  `$XDG_RUNTIME_DIR` is empty/missing (headless / minimal sessions),
+  the server now `mkdtemp`s a 0700 directory under
+  `~/.cache/qiftop/handoff-XXXXXX/` instead. The previous `/tmp`
+  fallback exposed a `bind()`-then-chmod permission-race window during
+  which a different uid could connect.
+- **MEDIUM — `agent::loadIdleConfig` no longer suffers signed-int
+  overflow on huge schedule/timeout values.** Seconds are now bounded
+  to `[0, 86400]` before being multiplied into milliseconds in 64-bit;
+  out-of-range values fall back to the compile-time default with a
+  warning (admin-only input, but UB is UB).
+- **LOW — `IdleManager::setClientHint` now returns `bool` and the
+  services only count *accepted* hints as activity.** Previously a peer
+  rejected from the (capped) hint table could still pin the agent at
+  the active cadence by hammering `SetDesiredIntervalMs`.
+- **INFO — `HandoffServer` post-auth read buffer is now capped at 1 MiB.**
+  Was unbounded; low real risk (peer is the privileged child) but a
+  robustness gap.
+
+Defence-in-depth items deferred to v0.2: per-helper PATH-injection
+checks, full Desktop Entry escaping in `Autostart`, additional systemd
+hardening knobs (`SystemCallFilter`, `ProtectProc=invisible`, etc.).
+
 ### Added
 - **Per-table column widths / order persisted** across runs
   (`QHeaderView::saveState` for both Interfaces and Connections tabs).

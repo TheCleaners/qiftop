@@ -27,6 +27,7 @@ private slots:
     void filterEnv_keepsAllowlistedKeys();
     void filterEnv_skipsEmptyValues();
     void filterEnv_preservesValues();
+    void filterEnv_dropsPathFromAllowlist();
     void allowlist_excludesQtPluginPath();
 };
 
@@ -43,7 +44,6 @@ void TestPrivilegeEscalator::allowlist_includesExpectedKeys()
             QByteArray("XDG_RUNTIME_DIR"),
             QByteArray("DBUS_SESSION_BUS_ADDRESS"),
             QByteArray("HOME"),
-            QByteArray("PATH"),
             QByteArray("LANG"),
             QByteArray("LC_ALL"),
         }) {
@@ -131,7 +131,6 @@ void TestPrivilegeEscalator::filterEnv_keepsAllowlistedKeys()
     in.insert(QStringLiteral("XDG_RUNTIME_DIR"),          QStringLiteral("/run/user/1000"));
     in.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), QStringLiteral("unix:path=/foo"));
     in.insert(QStringLiteral("LANG"),                     QStringLiteral("en_US.UTF-8"));
-    in.insert(QStringLiteral("PATH"),                     QStringLiteral("/usr/bin:/bin"));
 
     const QProcessEnvironment out = util::PrivilegeEscalator::filterEnv(in);
 
@@ -141,7 +140,18 @@ void TestPrivilegeEscalator::filterEnv_keepsAllowlistedKeys()
     QCOMPARE(out.value(QStringLiteral("XDG_RUNTIME_DIR")), QStringLiteral("/run/user/1000"));
     QCOMPARE(out.value(QStringLiteral("DBUS_SESSION_BUS_ADDRESS")), QStringLiteral("unix:path=/foo"));
     QCOMPARE(out.value(QStringLiteral("LANG")),          QStringLiteral("en_US.UTF-8"));
-    QCOMPARE(out.value(QStringLiteral("PATH")),          QStringLiteral("/usr/bin:/bin"));
+}
+
+void TestPrivilegeEscalator::filterEnv_dropsPathFromAllowlist()
+{
+    // PATH must NOT be forwarded by the allowlist filter — see comment in
+    // PrivilegeEscalator.cpp. A user-controlled PATH in the privileged
+    // child is a latent LPE primitive for any future relative-path exec.
+    // sessionEnv() injects a safe absolute PATH separately.
+    QProcessEnvironment in;
+    in.insert(QStringLiteral("PATH"), QStringLiteral("/tmp/evil:/usr/bin"));
+    const QProcessEnvironment out = util::PrivilegeEscalator::filterEnv(in);
+    QVERIFY(!out.contains(QStringLiteral("PATH")));
 }
 
 void TestPrivilegeEscalator::filterEnv_skipsEmptyValues()

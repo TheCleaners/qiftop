@@ -52,6 +52,7 @@ public:
     [[nodiscard]] QString errorString() const { return m_lastError; }
     [[nodiscard]] QString socketPath()  const { return m_socketPath; }
     [[nodiscard]] QString nonce()       const { return m_nonce; }
+    [[nodiscard]] QString nonceFilePath() const { return m_nonceFilePath; }
     [[nodiscard]] bool    hasChild()    const { return m_client != nullptr && m_authenticated; }
 
     void sendShow();
@@ -78,8 +79,11 @@ private:
     QLocalSocket *m_client         = nullptr;
     QByteArray    m_readBuf;
     QString       m_socketPath;
+    QString       m_socketDir;        // populated only when we mkdtemp'd
     QString       m_nonce;            // 64 hex chars, 256 bits of entropy
+    QString       m_nonceFilePath;    // 0600 file holding m_nonce
     QString       m_lastError;
+    uint          m_expectedChildUid = 0;
     bool          m_authenticated   = false;
 };
 

@@ -45,8 +45,35 @@ IdleManager::Config loadIdleConfig(const QString &path)
     constexpr int kMaxMs = 60 * 60 * 1000;
     // Timeouts/windows can be zero (meaning "disable that step") or up to
     // ~24 hours; negative is always wrong.
-    constexpr int kMinWin = 0;
     constexpr int kMaxWin = 24 * 60 * 60 * 1000;
+
+    // Helper: read an INI key as seconds, clamp into [0, 24h], then multiply
+    // into milliseconds in 64-bit and clamp into the int range. Doing the
+    // multiplication in 32-bit on the raw INI value (which a typo could
+    // easily make huge) is UB on overflow — the previous code clamped after
+    // multiplying, which doesn't save you from the overflow itself.
+    constexpr qint64 kMaxSec = 24 * 60 * 60;
+    auto secsToMs = [&](const char *key, const QString &iniKey, int defaultMs) -> int {
+        const qint64 raw = ini.value(iniKey, qint64(defaultMs) / 1000).toLongLong();
+        if (raw < 0 || raw > kMaxSec) {
+            qWarning().noquote()
+                << "agent: config key" << key << "value" << raw
+                << "seconds out of range [0," << kMaxSec << "] — using"
+                << defaultMs / 1000;
+            return defaultMs;
+        }
+        return int(raw * 1000);
+    };
+    auto secsToMsInline = [&](const char *key, qint64 raw, int defaultMs) -> int {
+        if (raw < 0 || raw > kMaxSec) {
+            qWarning().noquote()
+                << "agent: config key" << key << "value" << raw
+                << "seconds out of range [0," << kMaxSec << "] — using"
+                << defaultMs / 1000;
+            return defaultMs;
+        }
+        return int(raw * 1000);
+    };
 
     cfg.minIntervalMs    = clampCfg("poll/min_interval_ms",
                                     ini.value(QStringLiteral("poll/min_interval_ms"),
@@ -56,13 +83,12 @@ IdleManager::Config loadIdleConfig(const QString &path)
                                     ini.value(QStringLiteral("poll/base_interval_ms"),
                                               cfg.activeIntervalMs).toInt(),
                                     cfg.minIntervalMs, kMaxMs, cfg.activeIntervalMs);
-    cfg.idleTimeoutMs    = clampCfg("idle/timeout_secs (ms)",
-                                    ini.value(QStringLiteral("idle/timeout_secs"),
-                                              cfg.idleTimeoutMs / 1000).toInt() * 1000,
-                                    kMinWin, kMaxWin, cfg.idleTimeoutMs);
+    cfg.idleTimeoutMs    = secsToMs("idle/timeout_secs",
+                                    QStringLiteral("idle/timeout_secs"),
+                                    cfg.idleTimeoutMs);
     cfg.hintTtlMs        = clampCfg("idle/hint_ttl_secs (ms)",
-                                    ini.value(QStringLiteral("idle/hint_ttl_secs"),
-                                              cfg.hintTtlMs / 1000).toInt() * 1000,
+                                    int(qBound<qint64>(0, ini.value(QStringLiteral("idle/hint_ttl_secs"),
+                                              qint64(cfg.hintTtlMs) / 1000).toLongLong(), kMaxSec) * 1000),
                                     kMinMs, kMaxWin, cfg.hintTtlMs);
 
     // schedule = active_window_secs:slow1_ms,slow1_window_secs:slow2_ms,slow2_window_secs:0
@@ -73,9 +99,9 @@ IdleManager::Config loadIdleConfig(const QString &path)
     if (pairs.size() >= 1) {
         const auto parts = pairs[0].split(QLatin1Char(':'));
         if (parts.size() == 2) {
-            cfg.activeWindowMs  = clampCfg("idle/schedule window1 (ms)",
-                                           parts[0].trimmed().toInt() * 1000,
-                                           kMinWin, kMaxWin, cfg.activeWindowMs);
+            cfg.activeWindowMs  = secsToMsInline("idle/schedule window1",
+                                                 parts[0].trimmed().toLongLong(),
+                                                 cfg.activeWindowMs);
             cfg.slow1IntervalMs = clampCfg("idle/schedule slow1 (ms)",
                                            parts[1].trimmed().toInt(),
                                            cfg.minIntervalMs, kMaxMs, cfg.slow1IntervalMs);
@@ -84,9 +110,9 @@ IdleManager::Config loadIdleConfig(const QString &path)
     if (pairs.size() >= 2) {
         const auto parts = pairs[1].split(QLatin1Char(':'));
         if (parts.size() == 2) {
-            cfg.slow1WindowMs   = clampCfg("idle/schedule window2 (ms)",
-                                           parts[0].trimmed().toInt() * 1000,
-                                           kMinWin, kMaxWin, cfg.slow1WindowMs);
+            cfg.slow1WindowMs   = secsToMsInline("idle/schedule window2",
+                                                 parts[0].trimmed().toLongLong(),
+                                                 cfg.slow1WindowMs);
             cfg.slow2IntervalMs = clampCfg("idle/schedule slow2 (ms)",
                                            parts[1].trimmed().toInt(),
                                            cfg.minIntervalMs, kMaxMs, cfg.slow2IntervalMs);
@@ -95,9 +121,9 @@ IdleManager::Config loadIdleConfig(const QString &path)
     if (pairs.size() >= 3) {
         const auto parts = pairs[2].split(QLatin1Char(':'));
         if (parts.size() == 2) {
-            cfg.slow2WindowMs = clampCfg("idle/schedule window3 (ms)",
-                                         parts[0].trimmed().toInt() * 1000,
-                                         kMinWin, kMaxWin, cfg.slow2WindowMs);
+            cfg.slow2WindowMs = secsToMsInline("idle/schedule window3",
+                                               parts[0].trimmed().toLongLong(),
+                                               cfg.slow2WindowMs);
             // third interval is the "paused" sentinel; we keep idleTimeoutMs separate
         }
     }

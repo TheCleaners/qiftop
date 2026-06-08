@@ -3,6 +3,8 @@
 // peer so we can drive bad protocol behaviour the real client wouldn't.
 
 #include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
 #include <QLocalSocket>
 #include <QRegularExpression>
 #include <QSignalSpy>
@@ -116,16 +118,93 @@ private slots:
         QLocalSocket first;
         first.connectToServer(path);
         QVERIFY(first.waitForConnected(1000));
+        // Authenticate the first connection so the slot becomes sticky.
         first.write("HELLO\t" + srv.nonce().toLatin1() + "\n");
         first.flush();
-        QTest::qWait(50);
+        QTRY_VERIFY_WITH_TIMEOUT(srv.hasChild(), 1000);
 
         QLocalSocket second;
         second.connectToServer(path);
         QVERIFY(second.waitForConnected(1000));
-        // The server already has a peer; the second connection should be
-        // dropped immediately.
+        // The server already has an *authenticated* peer; the second
+        // connection should be dropped immediately.
         QVERIFY(waitFor(second, QAbstractSocket::UnconnectedState));
+        // The first peer must still be live.
+        QVERIFY(srv.hasChild());
+    }
+
+    void evictsUnauthenticatedIncumbentForNewcomer()
+    {
+        // Defence against pre-auth slot-camping: any same-uid process
+        // could otherwise sit on the socket without sending HELLO and
+        // block the real privileged child from ever connecting.
+        util::HandoffServer srv;
+        const QString path = srv.listen();
+        QVERIFY(!path.isEmpty());
+
+        QLocalSocket camper;
+        camper.connectToServer(path);
+        QVERIFY(camper.waitForConnected(1000));
+        // Don't send HELLO — just camp.
+        QTest::qWait(50);
+        QVERIFY(!srv.hasChild());
+
+        // Newcomer should evict the camper and complete auth.
+        QLocalSocket newcomer;
+        newcomer.connectToServer(path);
+        QVERIFY(newcomer.waitForConnected(1000));
+        newcomer.write("HELLO\t" + srv.nonce().toLatin1() + "\n");
+        newcomer.flush();
+        QTRY_VERIFY_WITH_TIMEOUT(srv.hasChild(), 1000);
+        // The camper should have been disconnected by the eviction.
+        QTRY_COMPARE_WITH_TIMEOUT(int(camper.state()),
+                                  int(QAbstractSocket::UnconnectedState), 1000);
+    }
+
+    void noncePersistedAsModeSixHundredFile()
+    {
+        util::HandoffServer srv;
+        const QString path = srv.listen();
+        QVERIFY(!path.isEmpty());
+
+        const QString nonceFile = srv.nonceFilePath();
+        QVERIFY(!nonceFile.isEmpty());
+        QFileInfo fi(nonceFile);
+        QVERIFY(fi.exists());
+        // POSIX: owner-only RW, no group/world access — otherwise the
+        // secret is readable by anyone who can stat the file.
+        const auto perms = fi.permissions();
+        QVERIFY(perms & QFile::ReadOwner);
+        QVERIFY(perms & QFile::WriteOwner);
+        QVERIFY(!(perms & QFile::ReadGroup));
+        QVERIFY(!(perms & QFile::WriteGroup));
+        QVERIFY(!(perms & QFile::ReadOther));
+        QVERIFY(!(perms & QFile::WriteOther));
+
+        QFile f(nonceFile);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromLatin1(f.readAll().trimmed()), srv.nonce());
+    }
+
+    void disconnectsOnOversizedPostAuthPayload()
+    {
+        util::HandoffServer srv;
+        const QString path = srv.listen();
+        QVERIFY(!path.isEmpty());
+
+        QLocalSocket sock;
+        sock.connectToServer(path);
+        QVERIFY(sock.waitForConnected(1000));
+        sock.write("HELLO\t" + srv.nonce().toLatin1() + "\n");
+        sock.flush();
+        QTRY_VERIFY_WITH_TIMEOUT(srv.hasChild(), 1000);
+
+        // Send a >1 MiB unterminated blob post-auth. The cap should kick
+        // in and disconnect us before we ever send '\n'.
+        QByteArray spam(2 * 1024 * 1024, 'A');
+        sock.write(spam);
+        sock.flush();
+        QVERIFY(waitFor(sock, QAbstractSocket::UnconnectedState, 5000));
     }
 };
 

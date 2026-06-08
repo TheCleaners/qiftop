@@ -27,9 +27,12 @@ QSet<QByteArray> PrivilegeEscalator::envAllowlist()
         "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE",
         "LC_MONETARY", "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS",
         "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION",
-        // Working directory + PATH (PATH is needed so the child can find its
-        // own helpers; pkexec sets a safe default if we omit it).
-        "HOME", "PWD", "PATH",
+        // Working directory. HOME is forwarded so Qt finds the user's
+        // theme/font config; we do NOT forward PATH (see sessionEnv()): a
+        // user-controlled PATH in the root child would arm any future
+        // relative-path QProcess/findExecutable into a privilege-escalation
+        // primitive. The child's PATH is forced to a safe default below.
+        "HOME", "PWD",
         // Theme integration. These are read by Qt directly; QT_PLUGIN_PATH /
         // QT_QPA_PLATFORM_PLUGIN_PATH are deliberately NOT in this list
         // because they let an attacker inject a Qt plugin into the root
@@ -66,15 +69,21 @@ QStringList sessionEnv()
     const auto keys = filtered.keys();
     for (const QString &k : keys)
         out << QStringLiteral("%1=%2").arg(k, filtered.value(k));
-    // The handoff socket path and nonce are added explicitly. They're
-    // host-local to the user (abstract or under $XDG_RUNTIME_DIR); the
-    // protocol authenticates the connection via the nonce (see HandoffServer).
+    // Force a safe PATH for the root child. Never forward the user's PATH:
+    // any later QProcess / QStandardPaths::findExecutable in the privileged
+    // process would resolve through user-controlled directories first
+    // (LPE primitive). This overrides whatever PATH pkexec / sudo would
+    // default to, which historically has varied between distros.
+    out << QStringLiteral("PATH=/usr/sbin:/usr/bin:/sbin:/bin");
+    // The handoff socket path is added explicitly. The auth nonce is NOT
+    // passed on argv (would be world-readable via /proc/<pid>/cmdline) —
+    // it lives in a 0600 file whose path is given via QIFTOP_HANDOFF_NONCE_FILE.
     const QString handoff = qEnvironmentVariable("QIFTOP_HANDOFF_SOCKET");
     if (!handoff.isEmpty())
         out << QStringLiteral("QIFTOP_HANDOFF_SOCKET=%1").arg(handoff);
-    const QString handoffNonce = qEnvironmentVariable("QIFTOP_HANDOFF_NONCE");
-    if (!handoffNonce.isEmpty())
-        out << QStringLiteral("QIFTOP_HANDOFF_NONCE=%1").arg(handoffNonce);
+    const QString handoffNonceFile = qEnvironmentVariable("QIFTOP_HANDOFF_NONCE_FILE");
+    if (!handoffNonceFile.isEmpty())
+        out << QStringLiteral("QIFTOP_HANDOFF_NONCE_FILE=%1").arg(handoffNonceFile);
     return out;
 }
 
@@ -86,7 +95,12 @@ QStringList sessionEnv()
 // site-locally.
 QProcessEnvironment scrubbedHelperEnv()
 {
-    return PrivilegeEscalator::filterEnv(QProcessEnvironment::systemEnvironment());
+    auto env = PrivilegeEscalator::filterEnv(QProcessEnvironment::systemEnvironment());
+    // Same PATH-hardening rationale as sessionEnv(): never let a
+    // user-controlled PATH steer our QProcess child to a fake pkexec / sudo.
+    env.insert(QStringLiteral("PATH"),
+               QStringLiteral("/usr/sbin:/usr/bin:/sbin:/bin"));
+    return env;
 }
 
 QString findHelper(const QString &name)

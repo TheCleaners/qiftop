@@ -214,12 +214,14 @@ int main(int argc, char *argv[])
     const QByteArray handoffPath = qgetenv("QIFTOP_HANDOFF_SOCKET");
     if (!handoffPath.isEmpty()) {
         qunsetenv("QIFTOP_HANDOFF_SOCKET"); // don't recurse into our own children
-        // Clear the nonce from env AFTER HandoffClient::connectTo() reads it,
-        // so it doesn't leak to any QProcess we later spawn.
+        // Clear the nonce-file env AFTER HandoffClient::connectTo() reads
+        // and unlinks it, so neither the path nor the secret leak to any
+        // QProcess we later spawn.
         if (handoffClient.connectTo(QString::fromLocal8Bit(handoffPath))) {
             window.attachHandoffClient(&handoffClient);
             QTimer::singleShot(0, &handoffClient, &util::HandoffClient::sendReady);
         }
+        qunsetenv("QIFTOP_HANDOFF_NONCE_FILE");
         qunsetenv("QIFTOP_HANDOFF_NONCE");
     }
 
