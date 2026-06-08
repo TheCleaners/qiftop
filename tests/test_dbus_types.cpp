@@ -58,6 +58,8 @@ private slots:
         original.txPackets      = 502;
         original.iface          = QStringLiteral("wlp1s0");
         original.direction      = Direction::Outbound;
+        original.ifIndex        = 42;
+        original.tcpState       = TcpState::Established;
 
         // DTO -> QVariant -> DTO via the marshalling operators
         const auto dtoIn = qiftop::dbus::toDto(original);
@@ -78,6 +80,8 @@ private slots:
         QCOMPARE(dtoOut.txBytes,       dtoIn.txBytes);
         QCOMPARE(dtoOut.iface,         dtoIn.iface);
         QCOMPARE(dtoOut.direction,     quint8(Direction::Outbound));
+        QCOMPARE(dtoOut.ifIndex,       quint32(42));
+        QCOMPARE(dtoOut.tcpState,      quint8(TcpState::Established));
 
         // Full round-trip back through fromDto must restore the value semantics
         const Connection rebuilt = qiftop::dbus::fromDto(dtoOut);
@@ -89,6 +93,8 @@ private slots:
         QCOMPARE(rebuilt.rxBytes,        original.rxBytes);
         QCOMPARE(rebuilt.iface,          original.iface);
         QCOMPARE(rebuilt.direction,      Direction::Outbound);
+        QCOMPARE(rebuilt.ifIndex,        quint32(42));
+        QCOMPARE(rebuilt.tcpState,       TcpState::Established);
     }
 
     void fromDtoClampsOutOfRangeDirection()
@@ -101,6 +107,56 @@ private slots:
         d.direction = 99;
         const auto c = qiftop::dbus::fromDto(d);
         QCOMPARE(c.direction, Direction::Unknown);
+    }
+
+    void fromDtoClampsOutOfRangeTcpState()
+    {
+        // Same safety net for TCP state — a future kernel could grow the
+        // enum (it already did once: SYN_SENT2 came in 4.x) and we don't
+        // want UB on the receiver.
+        qiftop::dbus::ConnectionDto d;
+        d.proto    = 6;
+        d.tcpState = 250;
+        const auto c = qiftop::dbus::fromDto(d);
+        QCOMPARE(c.tcpState, TcpState::None);
+    }
+
+    void interfaceStatsDtoRoundTrip()
+    {
+        InterfaceStats s;
+        s.name       = QStringLiteral("eth0");
+        s.type       = QStringLiteral("ethernet");
+        s.mtu        = 1500;
+        s.addresses  = {QStringLiteral("10.0.0.5/24")};
+        s.rxBytes    = 1ULL << 40;          // exercises >32-bit values
+        s.txBytes    = 2ULL << 40;
+        s.rxPackets  = 1'000'000;
+        s.txPackets  = 500'000;
+        s.isUp       = true;
+        s.isLoopback = false;
+        s.ifIndex    = 7;
+        s.operState  = 6;                    // IF_OPER_UP
+        s.rxErrors   = 11;
+        s.txErrors   = 22;
+        s.rxDropped  = 33;
+        s.txDropped  = 44;
+
+        const auto dto = qiftop::dbus::toDto(s);
+        QVariant v;
+        v.setValue(dto);
+        const auto round = qvariant_cast<qiftop::dbus::InterfaceStatsDto>(v);
+        const auto back  = qiftop::dbus::fromDto(round);
+
+        QCOMPARE(back.name, s.name);
+        QCOMPARE(back.mtu,  s.mtu);
+        QCOMPARE(back.rxBytes,   s.rxBytes);
+        QCOMPARE(back.txBytes,   s.txBytes);
+        QCOMPARE(back.ifIndex,   s.ifIndex);
+        QCOMPARE(back.operState, s.operState);
+        QCOMPARE(back.rxErrors,  s.rxErrors);
+        QCOMPARE(back.txErrors,  s.txErrors);
+        QCOMPARE(back.rxDropped, s.rxDropped);
+        QCOMPARE(back.txDropped, s.txDropped);
     }
 };
 

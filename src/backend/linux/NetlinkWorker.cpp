@@ -172,6 +172,15 @@ void NetlinkWorker::poll()
             .txPackets  = rtnl_link_get_stat(link, RTNL_LINK_TX_PACKETS),
             .isUp       = (flags & IFF_UP) != 0,
             .isLoopback = isLoopback,
+            .ifIndex    = static_cast<quint32>(rtnl_link_get_ifindex(link)),
+            // libnl returns the IF_OPER_* enum value directly. 0 == UNKNOWN
+            // is what we want when the driver doesn't report operstate
+            // (older virt drivers, some loopback paths).
+            .operState  = static_cast<quint8>(rtnl_link_get_operstate(link)),
+            .rxErrors   = rtnl_link_get_stat(link, RTNL_LINK_RX_ERRORS),
+            .txErrors   = rtnl_link_get_stat(link, RTNL_LINK_TX_ERRORS),
+            .rxDropped  = rtnl_link_get_stat(link, RTNL_LINK_RX_DROPPED),
+            .txDropped  = rtnl_link_get_stat(link, RTNL_LINK_TX_DROPPED),
         };
         stats.append(std::move(s));
     }

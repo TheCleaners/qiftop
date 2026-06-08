@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDBusContext>
+#include <QElapsedTimer>
 #include <QObject>
 #include "dbus/Types.h"
 
@@ -33,7 +34,9 @@ public slots:
     void SetDesiredIntervalMs(uint intervalMs);
 
 signals:
-    Q_SCRIPTABLE void ConnectionsChanged(qiftop::dbus::ConnectionDtoList conns);
+    // See InterfacesService::StatsChanged for the meaning of `monotonicMs`.
+    Q_SCRIPTABLE void ConnectionsChanged(qulonglong monotonicMs,
+                                         qiftop::dbus::ConnectionDtoList conns);
     Q_SCRIPTABLE void PermissionDenied(QString detail);
     Q_SCRIPTABLE void AccountingChanged(bool enabled);
 
@@ -47,6 +50,7 @@ private:
     IdleManager             *m_idle    = nullptr;
     dbus::ConnectionDtoList  m_last;
     bool                     m_accountingEnabled = true;
+    QElapsedTimer            m_clock;       // started in ctor; drives snapshot timestamps
 };
 
 } // namespace qiftop::agent

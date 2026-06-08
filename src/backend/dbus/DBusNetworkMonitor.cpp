@@ -104,8 +104,15 @@ void DBusNetworkMonitor::requestInitialSnapshot()
 void DBusNetworkMonitor::onStatsChanged(const QDBusMessage &msg)
 {
     const auto args = msg.arguments();
-    if (args.isEmpty()) return;
-    const auto arg = args.first().value<QDBusArgument>();
+    // v0.3 wire layout: (t monotonicMs, a(...) stats). Older agents only
+    // emit the array; tolerate both during alpha rollover.
+    QDBusArgument arg;
+    if (args.size() >= 2)
+        arg = args.at(1).value<QDBusArgument>();
+    else if (args.size() == 1)
+        arg = args.at(0).value<QDBusArgument>();
+    else
+        return;
     qiftop::dbus::InterfaceStatsDtoList list;
     arg >> list;
     emit statsUpdated(qiftop::dbus::fromDtos(list));

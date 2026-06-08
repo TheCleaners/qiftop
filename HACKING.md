@@ -214,6 +214,24 @@ busctl --user get-property org.qiftop.NetworkAgent1 \
 
 `qdbus6 org.qiftop.NetworkAgent1` works too if you prefer that tool.
 
+To inspect the raw wire format of a snapshot signal (useful when
+debugging a DTO mismatch between client and agent — e.g. after a
+breaking-then-merged reshape that left a stale alpha .deb on the
+system):
+
+```bash
+# Stream signals with type sigs so you can see the exact tuple shape
+# the agent is emitting right now.
+gdbus monitor --session --dest org.qiftop.NetworkAgent1 \
+    --object-path /org/qiftop/NetworkAgent1/Connections
+
+# Or, dump introspection XML to confirm signal sigs match what
+# AGENTS.md §4 documents:
+busctl --user introspect --xml-interface \
+    org.qiftop.NetworkAgent1 /org/qiftop/NetworkAgent1/Connections \
+    | grep -E '<(signal|method)'
+```
+
 Note (system-bus only): the policy in `dist/dbus/` restricts callers to
 members of the `netdev` group. From a non-netdev shell, every method call
 will return `AccessDenied`; this is the correct production behaviour. Run
@@ -275,8 +293,26 @@ will return `AccessDenied`; this is the correct production behaviour. Run
 
 ### 5.4 Change a DBus DTO
 
-Breaking change. Bump the interface to `NetworkAgent2`, keep `NetworkAgent1`
-alive for one release. See AGENTS.md §8.
+**During v0.1 alpha pre-releases:** reshape freely. Append the new
+field at the END of the struct (DBus struct sigs hash the field list
+— reordering breaks subscribers), update the matching `<<` / `>>`
+operators in `src/dbus/Types.cpp` in the SAME declaration order,
+extend `toDto` / `fromDto`, bump `kAgentVersion` in
+`InterfacesService.cpp` and add a capability token describing the new
+behaviour. Also update AGENTS.md §4 (signature string + field list +
+capabilities table) in the same commit — the two drift trivially if
+you split them across commits, and the next contract review will
+waste cycles re-discovering it.
+
+Clamp every newly-added wire-sourced enum on the receive path in
+`fromDto`: `(d.x <= quint8(Enum::Max)) ? static_cast<Enum>(d.x) :
+Enum::SafeDefault`. Don't `static_cast` directly — a buggy or
+future-extended sender will produce UB on the receiver otherwise.
+Add a clamp test in `tests/test_dbus_types.cpp`.
+
+**Post-v0.1-stable:** breaking change. Bump the interface name to
+`NetworkAgent2`, keep `NetworkAgent1` alive for one release. See
+AGENTS.md §8.
 
 ### 5.5 Adding tests
 

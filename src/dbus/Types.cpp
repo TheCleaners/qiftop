@@ -10,7 +10,9 @@ QDBusArgument &operator<<(QDBusArgument &a, const InterfaceStatsDto &s)
     a.beginStructure();
     a << s.name << s.type << s.mtu << s.addresses
       << s.rxBytes << s.txBytes << s.rxPackets << s.txPackets
-      << s.isUp   << s.isLoopback;
+      << s.isUp   << s.isLoopback
+      << s.ifIndex << s.operState
+      << s.rxErrors << s.txErrors << s.rxDropped << s.txDropped;
     a.endStructure();
     return a;
 }
@@ -20,7 +22,9 @@ const QDBusArgument &operator>>(const QDBusArgument &a, InterfaceStatsDto &s)
     a.beginStructure();
     a >> s.name >> s.type >> s.mtu >> s.addresses
       >> s.rxBytes >> s.txBytes >> s.rxPackets >> s.txPackets
-      >> s.isUp   >> s.isLoopback;
+      >> s.isUp   >> s.isLoopback
+      >> s.ifIndex >> s.operState
+      >> s.rxErrors >> s.txErrors >> s.rxDropped >> s.txDropped;
     a.endStructure();
     return a;
 }
@@ -33,7 +37,8 @@ QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c)
       << c.remoteFamily << c.remoteAddress << c.remotePort
       << c.rxBytes << c.txBytes << c.rxPackets << c.txPackets
       << c.iface
-      << c.direction;
+      << c.direction
+      << c.ifIndex << c.tcpState;
     a.endStructure();
     return a;
 }
@@ -46,7 +51,8 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c)
       >> c.remoteFamily >> c.remoteAddress >> c.remotePort
       >> c.rxBytes >> c.txBytes >> c.rxPackets >> c.txPackets
       >> c.iface
-      >> c.direction;
+      >> c.direction
+      >> c.ifIndex >> c.tcpState;
     a.endStructure();
     return a;
 }
@@ -66,6 +72,9 @@ InterfaceStatsDto toDto(const InterfaceStats &s)
     d.rxBytes = s.rxBytes; d.txBytes = s.txBytes;
     d.rxPackets = s.rxPackets; d.txPackets = s.txPackets;
     d.isUp = s.isUp; d.isLoopback = s.isLoopback;
+    d.ifIndex = s.ifIndex; d.operState = s.operState;
+    d.rxErrors = s.rxErrors; d.txErrors = s.txErrors;
+    d.rxDropped = s.rxDropped; d.txDropped = s.txDropped;
     return d;
 }
 
@@ -76,6 +85,9 @@ InterfaceStats fromDto(const InterfaceStatsDto &d)
     s.rxBytes = d.rxBytes; s.txBytes = d.txBytes;
     s.rxPackets = d.rxPackets; s.txPackets = d.txPackets;
     s.isUp = d.isUp; s.isLoopback = d.isLoopback;
+    s.ifIndex = d.ifIndex; s.operState = d.operState;
+    s.rxErrors = d.rxErrors; s.txErrors = d.txErrors;
+    s.rxDropped = d.rxDropped; s.txDropped = d.txDropped;
     return s;
 }
 
@@ -107,6 +119,8 @@ ConnectionDto toDto(const Connection &c)
     d.rxPackets = c.rxPackets; d.txPackets = c.txPackets;
     d.iface = c.iface;
     d.direction = quint8(c.direction);
+    d.ifIndex   = c.ifIndex;
+    d.tcpState  = quint8(c.tcpState);
     return d;
 }
 
@@ -125,6 +139,11 @@ Connection fromDto(const ConnectionDto &d)
     c.direction = (d.direction <= quint8(Direction::Inbound))
                   ? static_cast<Direction>(d.direction)
                   : Direction::Unknown;
+    c.ifIndex   = d.ifIndex;
+    // Clamp TCP state; unknown values become None rather than UB.
+    c.tcpState  = (d.tcpState <= quint8(TcpState::SynSent2))
+                  ? static_cast<TcpState>(d.tcpState)
+                  : TcpState::None;
     return c;
 }
 

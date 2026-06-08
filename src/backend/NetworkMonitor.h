@@ -14,8 +14,22 @@ struct InterfaceStats {
     quint64 txBytes   = 0;
     quint64 rxPackets = 0;
     quint64 txPackets = 0;
-    bool    isUp       = false;
+    bool    isUp       = false;     // IFF_UP (admin) — kept for back-compat
     bool    isLoopback = false;
+
+    quint32 ifIndex   = 0;          // Kernel ifindex (0 = unknown).
+
+    // Linux IF_OPER_* per RFC 2863:
+    //   0 UNKNOWN, 1 NOTPRESENT, 2 DOWN, 3 LOWERLAYERDOWN,
+    //   4 TESTING, 5 DORMANT, 6 UP.
+    // 0 when the backend can't determine it.
+    quint8  operState = 0;
+
+    // Cumulative kernel counters since interface creation.
+    quint64 rxErrors  = 0;
+    quint64 txErrors  = 0;
+    quint64 rxDropped = 0;
+    quint64 txDropped = 0;
 };
 
 Q_DECLARE_METATYPE(InterfaceStats)

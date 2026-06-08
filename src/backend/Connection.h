@@ -56,6 +56,40 @@ enum class Direction : quint8 {
     Inbound,        // remote end picked the ephemeral port (we're listening)
 };
 
+// Connection-tracking TCP state. Mirrors the values from
+// <linux/netfilter/nf_conntrack_tcp.h> (TCP_CONNTRACK_*) so libqiftop
+// consumers can decode without pulling in kernel headers. Non-TCP flows
+// always report `None`.
+enum class TcpState : quint8 {
+    None        = 0,
+    SynSent     = 1,
+    SynRecv     = 2,
+    Established = 3,
+    FinWait     = 4,
+    CloseWait   = 5,
+    LastAck     = 6,
+    TimeWait    = 7,
+    Close       = 8,
+    SynSent2    = 9,
+};
+
+[[nodiscard]] inline QString tcpStateToString(TcpState s)
+{
+    switch (s) {
+    case TcpState::None:        return QStringLiteral("");
+    case TcpState::SynSent:     return QStringLiteral("SYN_SENT");
+    case TcpState::SynRecv:     return QStringLiteral("SYN_RECV");
+    case TcpState::Established: return QStringLiteral("ESTABLISHED");
+    case TcpState::FinWait:     return QStringLiteral("FIN_WAIT");
+    case TcpState::CloseWait:   return QStringLiteral("CLOSE_WAIT");
+    case TcpState::LastAck:     return QStringLiteral("LAST_ACK");
+    case TcpState::TimeWait:    return QStringLiteral("TIME_WAIT");
+    case TcpState::Close:       return QStringLiteral("CLOSE");
+    case TcpState::SynSent2:    return QStringLiteral("SYN_SENT2");
+    }
+    return QStringLiteral("?");
+}
+
 [[nodiscard]] inline QString l4ProtoToString(L4Proto p)
 {
     switch (p) {
@@ -95,6 +129,11 @@ struct Connection {
     // route, or determination is platform-unsupported).
     QString iface;
 
+    // Kernel ifindex matching `iface`. 0 = unattributed or unknown.
+    // Populated server-side; libqiftop consumers prefer this over `iface`
+    // for stable identity (iface names can be reused across netns).
+    quint32 ifIndex = 0;
+
     // Best-effort direction relative to "this host". Populated by the
     // agent (server-side) using inferDirection() before serialising to
     // ConnectionDto, so non-Qt libqiftop consumers don't have to
@@ -102,6 +141,9 @@ struct Connection {
     // local computation if its idea of local addresses / ephemeral range
     // differs from the agent's.
     Direction direction = Direction::Unknown;
+
+    // Conntrack TCP state for TCP flows. `None` for UDP/ICMP/unknown.
+    TcpState  tcpState  = TcpState::None;
 
     // Canonical key used by models to identify a flow across updates.
     // Includes direction so aggregated inbound/outbound rows for the same

@@ -123,39 +123,77 @@ Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 
 | Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
 |----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
-| `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged`, `CadenceChanged(u)`                    | `Version: s`, `Capabilities: as` |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged`, `PermissionDenied`, `AccountingChanged` |                             |
+| `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged(t, a(...))`, `CadenceChanged(u)`         | `Version: s`, `Capabilities: as` |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
 
-DTOs live in `src/dbus/Types.h`. The connection signature is
-`a(yysqysqttttsy)` — 13 fields per flow:
+Both data signals carry a leading `quint64 monotonicMs` (a
+`QElapsedTimer`-based, agent-process-local monotonic millisecond
+counter) sampled at the moment the snapshot was serialised. This is
+the canonical timestamp for downstream rate computation (libqiftop
+history, Prometheus exporter, alerts): it's immune to wall-clock
+jumps and to DBus delivery jitter. It is NOT comparable across agent
+restarts.
+
+DTOs live in `src/dbus/Types.h`.
+
+**Connection wire signature** (15 fields per flow):
+`a(yysqysqttttsyuy)` =
 `(proto, localFamily, localAddress, localPort, remoteFamily, remoteAddress,
-remotePort, rxBytes, txBytes, rxPackets, txPackets, iface, direction)`.
+remotePort, rxBytes, txBytes, rxPackets, txPackets, iface, direction,
+ifIndex, tcpState)`.
 
-* `proto` is the **IANA L4 protocol number** (RFC 5237): TCP=6, UDP=17,
-  ICMP=1, ICMPv6=58, Unknown=0. Earlier (pre-0.2) the wire shipped the
-  internal `L4Proto` enum index — that was a silent landmine for any
-  non-Qt client, hence the migration. See `toIanaProto` /
-  `fromIanaProto` in `src/backend/Connection.h`.
-* `direction` is `0=Unknown / 1=Outbound / 2=Inbound`, computed
-  server-side via the `qiftop::heuristics::inferDirection` heuristic
-  (ephemeral-port range + local-address fallback). Clients SHOULD trust
-  the wire value when non-zero and only run the heuristic locally as a
-  fallback when it's `Unknown` (true today for in-process / handoff
-  backends that don't fill it in).
+**InterfaceStats wire signature** (16 fields per row):
+`(ssusasttttbbuytttt)` =
+`(name, type, mtu, addresses, rxBytes, txBytes, rxPackets, txPackets,
+isUp, isLoopback, ifIndex, operState, rxErrors, txErrors, rxDropped,
+txDropped)`.
+
+Per-field notes:
+
+* `proto` — **IANA L4 number** (RFC 5237): TCP=6, UDP=17, ICMP=1,
+  ICMPv6=58, Unknown=0. See `toIanaProto` / `fromIanaProto` in
+  `src/backend/Connection.h`. Capability: `iana-proto`.
+* `direction` — `0=Unknown / 1=Outbound / 2=Inbound`. Computed
+  server-side via `qiftop::heuristics::inferDirection`. Clients SHOULD
+  trust non-zero values and fall back to a local heuristic only when
+  the wire says `Unknown` (true today for in-process / handoff
+  backends). `fromDto` clamps out-of-range values to `Unknown` rather
+  than `static_cast`-ing them (UB-safe against buggy/future agents).
+  Capability: `direction-on-wire`.
+* `ifIndex` — Kernel ifindex matching `iface` / `name`. Prefer this
+  over the iface name string for stable identity (names can be reused
+  across netns; ifindex cannot within a single namespace). 0 = unknown
+  or unattributed. Capability: `ifindex`.
+* `operState` — Linux `IF_OPER_*` (RFC 2863): 0 UNKNOWN, 1 NOTPRESENT,
+  2 DOWN, 3 LOWERLAYERDOWN, 4 TESTING, 5 DORMANT, 6 UP. Distinguishes
+  "admin up but link not up" from "admin down" — the simple `isUp`
+  bool only tells you about IFF_UP (admin). Capability: `oper-state`.
+* `tcpState` — Conntrack TCP state (`TCP_CONNTRACK_*` per
+  `<linux/netfilter/nf_conntrack_tcp.h>`): 0 NONE, 1 SYN_SENT, 2
+  SYN_RECV, 3 ESTABLISHED, 4 FIN_WAIT, 5 CLOSE_WAIT, 6 LAST_ACK, 7
+  TIME_WAIT, 8 CLOSE, 9 SYN_SENT2. Non-TCP flows always report 0.
+  `fromDto` clamps unknown values to NONE. Capability: `tcp-state`.
+* `rxErrors` / `txErrors` / `rxDropped` / `txDropped` — Cumulative
+  kernel counters via libnl `RTNL_LINK_RX/TX_ERRORS / RX/TX_DROPPED`.
+  Useful for surfacing flaky NICs and tight-budget tunnels. Capability:
+  `link-errors`.
 
 ### Contract version & capabilities
 
-`Version` is a free-form string (currently `"0.2"`) bumped only for
+`Version` is a free-form string (currently `"0.3"`) bumped only for
 *additive* changes to the agent surface that clients may care about.
 **Breaking** changes (DTO signature, method removal/rename) still require
 a fresh `org.qiftop.NetworkAgent2` interface per §8.
 
-> Historical note: the 0.1 → 0.2 bump (pre-release v0.1-alpha2 → alpha3)
-> WAS a breaking wire reshape (added `direction` byte, switched `proto`
-> semantics to IANA, renamed `accountingChanged` → `AccountingChanged`).
-> Since only pre-release alphas existed, we reshaped in place rather than
-> branching `NetworkAgent2`. Older alpha clients failing to unmarshal
-> fall back cleanly to the in-process backend via the existing probe.
+> Historical note: the 0.1 → 0.2 bump (pre-release v0.1-alpha2 →
+> alpha3) reshaped the wire (added `direction` byte, switched `proto`
+> to IANA, PascalCased `AccountingChanged`). The 0.2 → 0.3 bump
+> (alpha3 → tag tbd) extended both DTOs and added a `monotonicMs`
+> leading arg to both data signals. Since only pre-release alphas
+> existed in either window we reshaped in place rather than branching
+> `NetworkAgent2`. Older alpha clients failing to unmarshal fall back
+> cleanly to the in-process backend via the existing probe. Post-v0.1
+> stable release, breaking changes MUST go through `NetworkAgent2`.
 
 `Capabilities` is a `QStringList` of dash-separated lowercase tokens.
 Clients gate optional behaviour on token presence — never on a Version
@@ -171,9 +209,80 @@ older agents. Tokens currently emitted:
 | `snapshot-cap`        | `ConnectionsChanged` payload is capped at top-N by bytes.   |
 | `iana-proto`          | `ConnectionDto.proto` is an IANA number (RFC 5237), not the internal enum index. |
 | `direction-on-wire`   | `ConnectionDto.direction` is populated server-side; clients can skip the heuristic when non-zero. |
+| `snapshot-timestamp`  | `StatsChanged` / `ConnectionsChanged` prefix the payload with a CLOCK_MONOTONIC ms counter. |
+| `ifindex`             | `InterfaceStatsDto.ifIndex` and `ConnectionDto.ifIndex` populated. |
+| `oper-state`          | `InterfaceStatsDto.operState` populated with `IF_OPER_*` per RFC 2863. |
+| `link-errors`         | `InterfaceStatsDto` carries `rxErrors` / `txErrors` / `rxDropped` / `txDropped`. |
+| `tcp-state`           | `ConnectionDto.tcpState` populated for TCP flows.           |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.
+
+### Wire-contract wisdom
+
+Lessons accumulated across the v0.1 contract reviews (#1 and #2). When
+designing or extending any DBus method/signal/DTO, prefer these defaults
+over re-deriving them each time:
+
+* **Don't ship internal enum *indices* across the wire.** Use an
+  external, stable encoding (IANA numbers, IETF RFCs, kernel UAPI
+  values) so non-Qt consumers don't need to mirror our private
+  `enum class` declarations. The 0.1 wire shipped `L4Proto` indices
+  (TCP=1); the 0.2 wire ships IANA numbers (TCP=6). The latter is
+  recoverable by anyone with an RFC 5237 lookup; the former required
+  reading our header.
+* **Clamp every wire-sourced enum on the receive path.** Use a range
+  check + fallback to a known-safe value instead of `static_cast<E>(x)`
+  when `x` comes from a peer process. UB on the receiver from a
+  malicious or future-extended sender is otherwise free. See
+  `fromDto`'s direction/tcpState clamps.
+* **Append-only struct fields.** DBus struct sigs hash the field list;
+  reordering or removing breaks every subscriber. Always add new
+  fields at the END of the DTO. The `<<`/`>>` operators must list
+  fields in declaration order; mismatch = silent off-by-one on the
+  wire.
+* **Capability tokens are append-only too.** Once a token is shipped,
+  it must keep its name forever (clients use presence as a feature
+  flag). Add new tokens for new behaviour; never delete or rename.
+* **Tokens advertise BEHAVIOUR, not version.** `cadence-hints` means
+  "the agent honours hints", not "agent ≥ 0.1". Clients should always
+  branch on token presence, never on `Version` comparison.
+* **Snapshot signals should carry their own timestamp.** Receipt time
+  on the client is noisy (DBus delivery jitter, GC pauses, UI
+  hangs). Sample the timestamp at the producer at serialise time.
+  Use `CLOCK_MONOTONIC` (or `QElapsedTimer::elapsed()`) not wall
+  clock — wall-clock jumps WILL corrupt rate calculations the moment
+  NTP or systemd-timesyncd nudges the clock.
+* **Cap snapshot payloads at the producer.** On a busy router
+  conntrack can hold 100 k+ flows; a 10 MB DBus message every second
+  hurts both sides and `m_last` will pin the high-water mark for the
+  life of the process. Sort by importance, truncate, log a `qWarning`.
+* **Server-side enrichment beats client-side enrichment for shared
+  derivations.** Direction inference and ifindex lookup both used to
+  be (or would have been) client-side; moving them server-side
+  means each new frontend (libqiftop, exporter, TUI) doesn't have
+  to reimplement them. The cost is one inferDirection call per
+  capped flow per tick — trivial compared to the conntrack dump
+  itself.
+* **Stable identity ≠ display name.** Always ship the kernel index
+  (ifindex) alongside the human name (ifname). Names get reused
+  across netns; indices don't within one namespace.
+* **Pre-release breaking changes are cheap; post-release ones are
+  not.** While only `vX.Y-alphaN` tags exist publicly, reshape the
+  wire freely and bump the additive `Version` field. After the first
+  stable tag, breaking changes MUST branch a new interface name
+  (`NetworkAgent2`) and keep `NetworkAgent1` alive for at least one
+  release.
+* **Bump `Version` AND add a capability token for every additive
+  change.** Version tells the user which agent build they're talking
+  to; the capability token is what clients actually branch on.
+  Different jobs, both required.
+* **The wire schema lives in two places** — `src/dbus/Types.{h,cpp}`
+  (the C++ source of truth) and `AGENTS.md §4` (the human-readable
+  contract). They drift trivially. Update both in the same commit, or
+  the next contract review wastes time re-discovering the drift (we
+  did, in review #2: the signature string was `(yysqysqtttts)` —
+  only 12 type chars — while the prose claimed 13 named fields).
 
 ### Bounded payloads
 

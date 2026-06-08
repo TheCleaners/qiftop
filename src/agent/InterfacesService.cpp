@@ -14,13 +14,14 @@ namespace {
 // and gate optional feature use. Breaking wire changes still require a
 // NetworkAgent2 interface (AGENTS.md §8); this is the *additive* contract
 // version.
-constexpr auto kAgentVersion = "0.2";
+constexpr auto kAgentVersion = "0.3";
 } // namespace
 
 InterfacesService::InterfacesService(NetworkMonitor *monitor, QObject *parent)
     : QObject(parent)
     , m_monitor(monitor)
 {
+    m_clock.start();
     connect(m_monitor, &NetworkMonitor::statsUpdated,
             this,      &InterfacesService::onStatsUpdated);
 }
@@ -53,6 +54,11 @@ QStringList InterfacesService::capabilities() const
         QStringLiteral("snapshot-cap"),      // ConnectionsChanged capped (top-N)
         QStringLiteral("iana-proto"),        // ConnectionDto.proto is IANA RFC 5237, not L4Proto enum
         QStringLiteral("direction-on-wire"), // ConnectionDto carries server-computed direction
+        QStringLiteral("snapshot-timestamp"),// {Stats,Connections}Changed prefix payload with CLOCK_MONOTONIC ms
+        QStringLiteral("ifindex"),           // InterfaceStatsDto/ConnectionDto carry kernel ifindex
+        QStringLiteral("oper-state"),        // InterfaceStatsDto carries IF_OPER_* per RFC 2863
+        QStringLiteral("link-errors"),       // InterfaceStatsDto carries rx/tx errors + drops
+        QStringLiteral("tcp-state"),         // ConnectionDto carries conntrack TCP state (TcpState enum)
     };
 }
 
@@ -73,7 +79,7 @@ void InterfacesService::SetDesiredIntervalMs(uint intervalMs)
 void InterfacesService::onStatsUpdated(const QList<InterfaceStats> &stats)
 {
     m_last = dbus::toDtos(stats);
-    emit StatsChanged(m_last);
+    emit StatsChanged(static_cast<qulonglong>(m_clock.elapsed()), m_last);
 }
 
 void InterfacesService::onCadenceChanged(int ms)

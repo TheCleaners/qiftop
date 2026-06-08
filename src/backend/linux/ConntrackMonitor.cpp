@@ -13,6 +13,7 @@ extern "C" {
 #include <libnetfilter_conntrack/libnetfilter_conntrack.h>
 }
 #include <arpa/inet.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -99,7 +100,17 @@ struct PollCtx {
     const QSet<QHostAddress>     *localAddrs;
     const IfaceMap               *ifaceMap;
     QHash<QHostAddress, QString> *routeCache;   // dst → ifname
+    QHash<QString, quint32>      *ifIndexCache; // ifname → ifindex (cached if_nametoindex)
 };
+
+quint32 cachedIfIndex(QHash<QString, quint32> *cache, const QString &name)
+{
+    if (name.isEmpty()) return 0;
+    if (auto it = cache->constFind(name); it != cache->cend()) return it.value();
+    const unsigned idx = ::if_nametoindex(name.toLocal8Bit().constData());
+    cache->insert(name, idx);
+    return idx;
+}
 
 QString attributeIface(PollCtx *ctx, const QHostAddress &local, const QHostAddress &remote)
 {
@@ -189,7 +200,16 @@ int nfctCallback(enum nf_conntrack_msg_type, struct nf_conntrack *ct, void *data
         c.txBytes = replBytes;  c.rxBytes  = origBytes;
         c.txPackets = replPkts; c.rxPackets = origPkts;
     }
-    c.iface = attributeIface(ctx, c.local.address, c.remote.address);
+    c.iface   = attributeIface(ctx, c.local.address, c.remote.address);
+    c.ifIndex = cachedIfIndex(ctx->ifIndexCache, c.iface);
+    if (proto == L4Proto::Tcp && nfct_attr_is_set(ct, ATTR_TCP_STATE)) {
+        const quint8 raw = nfct_get_attr_u8(ct, ATTR_TCP_STATE);
+        // Clamp to known TcpState range; future kernel additions become None
+        // rather than silently mis-decoded on the wire.
+        c.tcpState = (raw <= quint8(TcpState::SynSent2))
+                     ? static_cast<TcpState>(raw)
+                     : TcpState::None;
+    }
     ctx->out->append(c);
     return NFCT_CB_CONTINUE;
 }
@@ -309,12 +329,16 @@ private slots:
             return;
         }
 
-        PollCtx ctx{&flows, &localAddrs, &ifaceMap, &m_routeCache};
+        PollCtx ctx{&flows, &localAddrs, &ifaceMap, &m_routeCache, &m_ifIndexCache};
         // Bound the route cache so a busy router can't make it grow forever.
         // Eviction is whole-cache; entries are cheap to rebuild on the next
         // miss (one connect()/getsockname() per unique destination).
         if (m_routeCache.size() > 8192)
             m_routeCache.clear();
+        // ifIndex cache is much smaller (one entry per interface name) but
+        // we still cap it in case of pathological hot-plug churn.
+        if (m_ifIndexCache.size() > 256)
+            m_ifIndexCache.clear();
         nfct_callback_register(h, NFCT_T_ALL, &nfctCallback, &ctx);
 
         // Dump v4 and v6 in two separate queries. AF_UNSPEC is documented
@@ -350,6 +374,9 @@ private:
     // flows). Bounded so it can't grow unboundedly on a busy router. Cleared
     // periodically inside poll() if it gets too large.
     QHash<QHostAddress, QString> m_routeCache;
+    // ifname → ifindex cache, shared across the whole tick. Avoids one
+    // if_nametoindex() syscall per flow.
+    QHash<QString, quint32>      m_ifIndexCache;
 };
 
 ConntrackMonitor::ConntrackMonitor(QObject *parent)

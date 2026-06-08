@@ -108,8 +108,16 @@ void DBusConnectionMonitor::requestInitialSnapshot()
 void DBusConnectionMonitor::onConnectionsChanged(const QDBusMessage &msg)
 {
     const auto args = msg.arguments();
-    if (args.isEmpty()) return;
-    const auto arg = args.first().value<QDBusArgument>();
+    // v0.3 wire layout: (t monotonicMs, a(...) conns). Pre-0.3 agents only
+    // emit the array; index defensively so a pre-0.3 agent doesn't crash a
+    // new client (the version probe is what gates the bus name anyway).
+    QDBusArgument arg;
+    if (args.size() >= 2)
+        arg = args.at(1).value<QDBusArgument>();
+    else if (args.size() == 1)
+        arg = args.at(0).value<QDBusArgument>();
+    else
+        return;
     qiftop::dbus::ConnectionDtoList list;
     arg >> list;
     emit connectionsUpdated(qiftop::dbus::fromDtos(list));

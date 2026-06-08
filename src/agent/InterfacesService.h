@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDBusContext>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QStringList>
 #include "dbus/Types.h"
@@ -49,7 +50,16 @@ public slots:
 
 signals:
     // DBus signal — fires on each polling tick of the backend.
-    Q_SCRIPTABLE void StatsChanged(qiftop::dbus::InterfaceStatsDtoList stats);
+    //
+    // `monotonicMs` is a CLOCK_MONOTONIC-based millisecond counter (Qt's
+    // `QElapsedTimer::msecsSinceReference()` clock) sampled at the moment
+    // the agent emits this snapshot. Consumers building rate series
+    // (Prometheus exporter, alerting, libqiftop history) should prefer
+    // this to local arrival time so DBus delivery jitter and small CPU
+    // hiccups don't corrupt their Δt. It is NOT a wall-clock and is not
+    // comparable across `qiftop-agent` restarts.
+    Q_SCRIPTABLE void StatsChanged(qulonglong monotonicMs,
+                                   qiftop::dbus::InterfaceStatsDtoList stats);
 
     // DBus signal — mirrors IdleManager::cadenceChanged. Fires whenever
     // the effective polling interval changes (sped up, slowed down, or
@@ -66,6 +76,7 @@ private:
     NetworkMonitor              *m_monitor = nullptr;
     IdleManager                 *m_idle    = nullptr;
     dbus::InterfaceStatsDtoList  m_last;
+    QElapsedTimer                m_clock;        // started in ctor; drives snapshot timestamps
 };
 
 } // namespace qiftop::agent

@@ -24,13 +24,23 @@ struct InterfaceStatsDto {
     quint64     txBytes   = 0;
     quint64     rxPackets = 0;
     quint64     txPackets = 0;
-    bool        isUp        = false;
+    bool        isUp        = false;     // IFF_UP (admin flag) — kept for back-compat
     bool        isLoopback  = false;
+    // v0.3 additions (capability tokens: ifindex, oper-state, link-errors).
+    // Old (v0.1/0.2) clients unmarshalling this struct will fail at the
+    // ifIndex field; agents detect that path via the version probe and
+    // clients fall back to the in-process backend.
+    quint32     ifIndex     = 0;
+    quint8      operState   = 0;         // IF_OPER_* (RFC 2863); 0 = unknown.
+    quint64     rxErrors    = 0;
+    quint64     txErrors    = 0;
+    quint64     rxDropped   = 0;
+    quint64     txDropped   = 0;
 };
 using InterfaceStatsDtoList = QList<InterfaceStatsDto>;
 
 // Wire DTO for a single flow. Field order is the DBus tuple signature
-// (wire signature: a(yysqysqttttsy) — 13 fields). Append new fields at
+// (wire signature: a(yysqysqttttsyuy) — 15 fields). Append new fields at
 // the END; reordering or removing fields requires NetworkAgent2 per
 // AGENTS.md §8.
 //
@@ -52,6 +62,9 @@ struct ConnectionDto {
     quint64 txPackets     = 0;
     QString iface;
     quint8  direction     = 0;   // 0=Unknown, 1=Outbound, 2=Inbound — see Direction enum
+    // v0.3 additions.
+    quint32 ifIndex       = 0;   // Matches `iface`; 0 = unknown.
+    quint8  tcpState      = 0;   // TCP_CONNTRACK_*; 0 (None) for non-TCP — see TcpState enum
 };
 using ConnectionDtoList = QList<ConnectionDto>;
 

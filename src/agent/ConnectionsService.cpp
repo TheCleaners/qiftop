@@ -76,6 +76,7 @@ ConnectionsService::ConnectionsService(ConnectionMonitor *monitor, QObject *pare
     : QObject(parent)
     , m_monitor(monitor)
 {
+    m_clock.start();
     connect(m_monitor, &ConnectionMonitor::connectionsUpdated,
             this,      &ConnectionsService::onConnectionsUpdated);
     connect(m_monitor, &ConnectionMonitor::permissionDenied,
@@ -134,7 +135,7 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
     }
 
     m_last = dbus::toDtos(kept);
-    emit ConnectionsChanged(m_last);
+    emit ConnectionsChanged(static_cast<qulonglong>(m_clock.elapsed()), m_last);
 }
 
 void ConnectionsService::onPermissionDenied(const QString &detail)
