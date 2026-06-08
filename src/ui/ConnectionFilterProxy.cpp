@@ -2,54 +2,50 @@
 #include "ConnectionModel.h"
 #include "backend/Connection.h"
 
+// NOTE: QSortFilterProxyModel::beginFilterChange / endFilterChange were
+// added in Qt 6.5. We target Qt >= 6.2 (Ubuntu 22.04 / 24.04 baseline),
+// so we use invalidateFilter() which has been available since Qt 5 and
+// has the same observable effect (just no batched-edit optimisation).
+
 void ConnectionFilterProxy::setShowIPv6(bool show)
 {
     if (m_showIPv6 == show)
         return;
-    beginFilterChange();
     m_showIPv6 = show;
-    endFilterChange();
+    invalidateFilter();
 }
 
 void ConnectionFilterProxy::setShowTcp(bool show)
 {
     if (m_showTcp == show) return;
-    beginFilterChange();
     m_showTcp = show;
-    endFilterChange();
+    invalidateFilter();
 }
 
 void ConnectionFilterProxy::setShowUdp(bool show)
 {
     if (m_showUdp == show) return;
-    beginFilterChange();
     m_showUdp = show;
-    endFilterChange();
+    invalidateFilter();
 }
 
 void ConnectionFilterProxy::setVisibleIfaces(const QSet<QString> &ifaces)
 {
     if (m_visibleIfaces == ifaces)
         return;
-    beginFilterChange();
     m_visibleIfaces = ifaces;
-    endFilterChange();
+    invalidateFilter();
 }
-
-#include "ConnectionFilterProxy.h"
-#include "ConnectionModel.h"
-#include "backend/Connection.h"
 
 QString ConnectionFilterProxy::setFilterExpression(const QString &expr)
 {
     if (expr == m_exprText)
         return m_exprError;
-    beginFilterChange();
-    m_exprText = expr;
-    auto res   = qiftop::filter::parse(expr.trimmed());
-    m_expr     = res.expr;
+    m_exprText  = expr;
+    auto res    = qiftop::filter::parse(expr.trimmed());
+    m_expr      = res.expr;
     m_exprError = res.error;
-    endFilterChange();
+    invalidateFilter();
     return m_exprError;
 }
 
