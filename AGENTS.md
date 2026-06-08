@@ -66,6 +66,31 @@ dist/
    self-elevated, the platform monitor).
 4. **`dbus/Types.h` is the wire contract.** Changing it is a breaking change
    for every installed client; bump a version or add a new method.
+5. **`util/`, `dbus/`, and `backend/` (excluding `backend/dbus/` which is
+   client-side) must not include from `ui/` or depend on Qt Widgets.**
+   These directories — plus the pure-logic headers under `ui/` like
+   `ui/ConnectionHeuristics.h` — are the future `libqiftop` material
+   (see §10). Anything pulling in `QWidget`, `QAbstract*Model`,
+   `QSortFilterProxyModel`, or similar belongs in `ui/`.
+
+### Future direction (long-term)
+
+The current binary split (`qiftop` GUI + `qiftop-agent` daemon) is
+expected to grow a third component: **`libqiftop`**, a Qt6::Core-only
+shared library carrying the DTOs, aggregation/EMA helpers, filter
+mini-language, and unit formatters. Planned consumers beyond the Qt
+GUI: a Prometheus-style metrics exporter, an alerting daemon, and
+possibly an ncurses frontend. This is **not v0.1 work**, but two
+things follow now:
+
+* The DBus contract is effectively a public ABI for those future
+  consumers — treat DTO breakage as a multi-frontend cost, not just
+  a GUI cost.
+* Resist any change that tightens Widgets coupling in `util/`,
+  `dbus/`, `backend/`, or the pure-logic headers under `ui/`. If you
+  catch yourself reaching for `QAbstractItemModel` in a utility,
+  that's a smell — the model should wrap a plain `QObject`
+  aggregator, not be the aggregator.
 
 ---
 
