@@ -96,16 +96,14 @@ jobs:
 
       - name: lintian
         working-directory: build
-        # We intentionally fail on errors only — info/warnings from cpack-
-        # generated debs include known cosmetic items (no changelog.Debian,
-        # no upstream-metadata) that we'll address incrementally. The set
-        # we *do* fail on catches genuine breakage (bad shebang, broken
-        # symlink, executable-not-elf, depends-on-nonexistent-package).
+        # Fail on errors only — suppressed tags are cosmetic items we've
+        # consciously deferred (no man page, no changelog.Debian, no
+        # upstream copyright file; maintainer-script-calls-systemctl is
+        # explicit by design for the on-demand DBus daemon). The
+        # unsuppressed set still catches real breakage (bad shebang,
+        # broken symlink, depends-on-nonexistent-package, unstripped
+        # binaries, malformed Description).
         run: |
-          lintian --fail-on error --suppress-tags \
-            no-manual-page,no-changelog,changelog-file-missing-in-native-package,no-copyright-file,extended-description-is-empty,helper-templates-in-copyright,maintainer-script-calls-systemctl \
-            *.deb || true
-          # Re-run with stricter exit semantics so a true error fails the job:
           lintian --fail-on error --suppress-tags \
             no-manual-page,no-changelog,changelog-file-missing-in-native-package,no-copyright-file,extended-description-is-empty,helper-templates-in-copyright,maintainer-script-calls-systemctl \
             *.deb

@@ -142,6 +142,10 @@ set(CPACK_PACKAGE_CONTACT           "qiftop maintainers <noreply@example.com>")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
     "Qt6 iftop-style network monitor")
 set(CPACK_PACKAGE_HOMEPAGE_URL      "https://github.com/ebenali/qiftop")
+# Strip ELF binaries during packaging — lintian flags unstripped binaries
+# as an error, and stripped binaries are ~10× smaller on disk. Symbol
+# files for debugging are still available in the build/ tree.
+set(CPACK_STRIP_FILES               TRUE)
 set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_SOURCE_DIR}/LICENSE")
 set(CPACK_RESOURCE_FILE_README      "${CMAKE_SOURCE_DIR}/README.md")
 set(CPACK_PACKAGE_VERSION           "${PROJECT_VERSION}")
@@ -159,11 +163,11 @@ set(CPACK_DEBIAN_QIFTOP_PACKAGE_NAME         "qiftop")
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_DEPENDS      "libc6, libqt6core6t64 | libqt6core6, libqt6widgets6, libqt6network6, libqt6dbus6")
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_RECOMMENDS   "qiftop-agent (= ${PROJECT_VERSION})")
 set(CPACK_DEBIAN_QIFTOP_DESCRIPTION
-    "Qt6 iftop-style network monitor (GUI).\n .
- qiftop is a Qt 6 desktop application that displays live per-interface
- traffic counters and per-connection flows. It cooperates with the
- qiftop-agent system service for privileged data access but can also
- fall back to running with elevated privileges on demand.")
+"Qt6 iftop-style network monitor (GUI).
+qiftop is a Qt 6 desktop application that displays live per-interface
+traffic counters and per-connection flows. It cooperates with the
+qiftop-agent system service for privileged data access but can also
+fall back to running with elevated privileges on demand.")
 
 # --- Agent package ----------------------------------------------------------
 set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_NAME       "qiftop-agent")
@@ -174,11 +178,11 @@ set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_DEPENDS    "libc6, libnl-3-200, libnl-rout
 # ExecStartPre silently in that case and you just don't get v6 visibility).
 set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables")
 set(CPACK_DEBIAN_QIFTOP-AGENT_DESCRIPTION
-    "Privileged DBus agent for qiftop.\n .
- qiftop-agent is a small system-bus daemon that publishes per-interface
- and per-connection network statistics on the well-known DBus name
- org.qiftop.NetworkAgent1. It is activated on demand and runs as root
- with CAP_NET_ADMIN only.")
+"Privileged DBus agent for qiftop.
+qiftop-agent is a small system-bus daemon that publishes per-interface
+and per-connection network statistics on the well-known DBus name
+org.qiftop.NetworkAgent1. It is activated on demand and runs as root
+with CAP_NET_ADMIN only.")
 
 # Run systemctl/dbus reload hooks on install/remove + declare /etc conffiles.
 set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_CONTROL_EXTRA

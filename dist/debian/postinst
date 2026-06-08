@@ -2,16 +2,19 @@
 # postinst for qiftop-agent
 set -e
 
+# Use bare command names so lintian doesn't flag absolute paths in
+# maintainer scripts. PATH is set to a sane default by dpkg.
+
 # Ensure the `netdev` group exists (it's standard on Debian/Ubuntu via
 # `base-passwd`, but the DBus policy in dist/dbus/ depends on it). Members
 # of this group are permitted to talk to org.qiftop.NetworkAgent1; users
 # not in it will see the GUI fall back to its in-process (self-elevated)
 # backend.
 if ! getent group netdev >/dev/null 2>&1; then
-    if [ -x /usr/sbin/groupadd ]; then
-        /usr/sbin/groupadd -r netdev || true
-    elif [ -x /usr/sbin/addgroup ]; then
-        /usr/sbin/addgroup --system netdev || true
+    if command -v groupadd >/dev/null 2>&1; then
+        groupadd -r netdev || true
+    elif command -v addgroup >/dev/null 2>&1; then
+        addgroup --system netdev || true
     fi
 fi
 
@@ -31,18 +34,17 @@ elif [ -n "${PKEXEC_UID:-}" ]; then
 fi
 if [ -n "${target_user}" ] && getent passwd "${target_user}" >/dev/null 2>&1; then
     if ! id -nG "${target_user}" 2>/dev/null | tr ' ' '\n' | grep -qx netdev; then
-        if [ -x /usr/sbin/usermod ]; then
-            /usr/sbin/usermod -a -G netdev "${target_user}" || true
+        if command -v usermod >/dev/null 2>&1; then
+            usermod -a -G netdev "${target_user}" || true
             echo "qiftop-agent: added user '${target_user}' to group 'netdev'." >&2
             echo "qiftop-agent: log out and back in (or run 'newgrp netdev') for the change to take effect." >&2
         fi
     fi
 fi
 
-if [ -x /usr/bin/systemctl ]; then
+if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
     systemctl reload dbus.service 2>/dev/null || true
 fi
 
-#DEBHELPER#
 exit 0
