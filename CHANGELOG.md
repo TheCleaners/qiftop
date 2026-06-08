@@ -8,7 +8,14 @@ Pre-release alpha tags (`v0.1-alphaN`) are intentionally omitted —
 their commit history is preserved in `git log`. This file is the
 human-readable summary for *shipping* releases.
 
-## [Unreleased]
+## [0.1] — 2026-06-08
+
+The first qiftop stable release. A Qt 6 iftop-style Linux network
+monitor shipped as two Debian packages (`qiftop` GUI client +
+`qiftop-agent` privileged DBus daemon). See the
+**Initial release highlights** subsection further down for the
+comprehensive feature list; the entries directly below cover the
+late-cycle polish landed between `v0.1-alpha2` and `v0.1`.
 
 ### Security
 
@@ -106,17 +113,16 @@ hardening knobs (`SystemCallFilter`, `ProtectProc=invisible`, etc.).
   filter-expression regex example (the `~` regex value needs quotes
   when the regex contains `.`).
 
-## [0.1] — first public release
+### Initial release highlights
 
-The first qiftop release. A Qt 6 iftop-style Linux network monitor
-shipped as two Debian packages:
+The first qiftop release ships two Debian packages:
 
 * **`qiftop`** — unprivileged GUI client.
 * **`qiftop-agent`** — privileged DBus daemon (DBus-activatable;
   optional systemd unit). Speaks `org.qiftop.NetworkAgent1` on the
   system bus.
 
-### Highlights
+#### Feature highlights
 
 * **Real-time per-interface throughput** — Qt model/view tab with
   hand-drawn row gauges and tray-icon sparklines. Counters come
@@ -142,7 +148,7 @@ shipped as two Debian packages:
 * **System tray** with live throughput sparkline; optional autostart
   to tray on login (XDG `~/.config/autostart/qiftop.desktop`).
 
-### Architecture
+#### Architecture
 
 * Two-binary design: `qiftop` GUI talks to `qiftop-agent` over DBus
   (system bus in production, session bus in dev with `--session`).
@@ -161,7 +167,7 @@ shipped as two Debian packages:
   alerting daemon, ncurses TUI). See AGENTS.md §2 "Future
   direction".
 
-### DBus contract — `org.qiftop.NetworkAgent1`
+#### DBus contract — `org.qiftop.NetworkAgent1`
 
 * **Version**: `"0.3"` (additive; breaking changes will branch
   `NetworkAgent2`).
@@ -184,7 +190,7 @@ shipped as two Debian packages:
   feature-detect by token presence, not Version comparison. See
   AGENTS.md §4 for the full table.
 
-### Security
+#### Security
 
 * The system-bus policy restricts every method call and signal
   delivery to members of the `netdev` group — closes both a
@@ -208,7 +214,7 @@ shipped as two Debian packages:
   (via reverse DNS) or kernel-supplied interface names can't
   execute when the user opens the exported file.
 
-### Packaging & install
+#### Packaging & install
 
 * Two `.deb` packages built via `cpack -G DEB`: `qiftop` (GUI) and
   `qiftop-agent` (root daemon).
@@ -219,7 +225,7 @@ shipped as two Debian packages:
   (debuggable crash reports from early testers); `Release` +
   stripped for the eventual stable tag.
 
-### Testing
+#### Testing
 
 * 14-test ctest suite running under `dbus-run-session` on every
   CI build (Ubuntu 22.04 + 24.04 × Debug + Release):
@@ -234,7 +240,7 @@ shipped as two Debian packages:
   `desktop-file-validate`, and a Docker-based smoke install on
   a fresh Ubuntu 24.04 image.
 
-### Known limitations
+#### Known limitations
 
 * Linux only. The configure step on any other platform fails
   fast with `No backend available for platform: <name>` — by
@@ -243,5 +249,4 @@ shipped as two Debian packages:
 * No separated debug-info `.ddeb` companion packages yet — alpha
   builds carry full debug info inline; stable .deb is stripped.
 
-[Unreleased]: https://github.com/TheCleaners/qiftop/compare/v0.1...HEAD
 [0.1]: https://github.com/TheCleaners/qiftop/releases/tag/v0.1
