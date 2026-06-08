@@ -11,6 +11,26 @@ human-readable summary for *shipping* releases.
 ## [Unreleased]
 
 ### Added
+- **Per-table column widths / order persisted** across runs
+  (`QHeaderView::saveState` for both Interfaces and Connections tabs).
+  Window geometry, window state, current tab, and sort order were
+  already persisted; column layout joins them.
+- **`Ctrl+F`** focuses the filter expression bar (switches to the
+  Connections tab first if needed) and selects its contents.
+- **`Esc`** clears the filter expression when the filter bar has focus.
+- **`Ctrl+C`** in either table copies the selected rows to the
+  clipboard — connections use the existing flow-line formatter,
+  interfaces fall back to tab-separated cells.
+- **`Ctrl+1` / `Ctrl+2`** switch tabs (generalised to Ctrl+N for up
+  to 9 tabs in case the count ever grows).
+- **Connections context menu**: new "Show only flows to/from <peer>"
+  and "Hide flows to/from <peer>" entries seed the filter expression
+  with `host="<addr>"` (or `not host="<addr>"`). Quoted form is used
+  so IPv6 colons don't confuse the parser.
+- **Empty-state placeholder** on the Connections tab when no flows
+  match — a centered, palette-aware rich-text hint suggesting
+  `ping 1.1.1.1` and a Ctrl+F reminder. Replaces the previous
+  blank-table-that-looks-broken UX.
 - `QIFTOP_TESTS_SANITIZE` CMake option (`OFF` / `address` /
   `undefined` / `address+undefined` / `thread` / `leak`). Applies
   sanitizer flags per-test-target only, leaving production binaries

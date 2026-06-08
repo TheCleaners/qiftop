@@ -31,12 +31,15 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QShortcut>
+#include <QItemSelectionModel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
 #include <QSettings>
+#include <QSortFilterProxyModel>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTableView>
@@ -66,6 +69,7 @@ MainWindow::MainWindow(Settings          *settings,
     setupMenuAndToolbar();
     applySettingsToUi();
     readUiState();
+    installShortcuts();
 
     // Toolbar button + View submenu for the iface filter only apply on
     // the Connections tab; toggle their state whenever the tab changes,
@@ -204,6 +208,51 @@ void MainWindow::setupUi()
     m_connView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_connView, &QWidget::customContextMenuRequested,
             this,        &MainWindow::showConnectionContextMenu);
+
+    // Empty-state placeholder: a centered hint shown when the model has
+    // zero rows. Parented to the viewport so it scrolls with the (empty)
+    // canvas and inherits the table's palette. Visibility is driven by
+    // onConnectionsUpdated() and the proxy's rowsInserted/rowsRemoved.
+    m_connEmptyOverlay = new QLabel(m_connView->viewport());
+    m_connEmptyOverlay->setAlignment(Qt::AlignCenter);
+    m_connEmptyOverlay->setWordWrap(true);
+    m_connEmptyOverlay->setText(tr(
+        "<p style='color: palette(placeholderText); font-size: large;'>"
+        "<b>No active flows</b></p>"
+        "<p style='color: palette(placeholderText);'>"
+        "Generate some traffic — for example "
+        "<code>ping 1.1.1.1</code> or open a web page — and rows will "
+        "appear here.</p>"
+        "<p style='color: palette(placeholderText);'>"
+        "If you expected flows but see none, check the filter expression "
+        "(Ctrl+F) and the active protocol / interface filters.</p>"));
+    m_connEmptyOverlay->setTextFormat(Qt::RichText);
+    m_connEmptyOverlay->setContextMenuPolicy(Qt::NoContextMenu);
+    m_connEmptyOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_connEmptyOverlay->hide();
+    // Keep the overlay sized to the viewport. We install a single
+    // eventFilter on the viewport (Show/Resize) and re-layout in the
+    // handler. installEventFilter is set later, after m_connView is
+    // fully constructed.
+    m_connView->viewport()->installEventFilter(this);
+    // Toggle visibility whenever the proxy gains/loses rows. Using the
+    // proxy (not the source model) is intentional: a filter that hides
+    // every row should also show the empty-state, with copy adjusted
+    // by the existing text (which already mentions "check the filter").
+    auto refreshEmpty = [this] {
+        if (!m_connEmptyOverlay || !m_connProxy) return;
+        const bool empty = m_connProxy->rowCount() == 0;
+        m_connEmptyOverlay->setVisible(empty);
+        if (empty) {
+            m_connEmptyOverlay->resize(m_connView->viewport()->size());
+            m_connEmptyOverlay->move(0, 0);
+        }
+    };
+    connect(m_connProxy, &QAbstractItemModel::rowsInserted,       this, refreshEmpty);
+    connect(m_connProxy, &QAbstractItemModel::rowsRemoved,        this, refreshEmpty);
+    connect(m_connProxy, &QAbstractItemModel::modelReset,         this, refreshEmpty);
+    connect(m_connProxy, &QAbstractItemModel::layoutChanged,      this, refreshEmpty);
+    refreshEmpty();
 
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(m_netView,  tr("Interfaces"));
@@ -916,6 +965,8 @@ constexpr auto kUiNetSortColumn    = "ui/interfaces/sortColumn";
 constexpr auto kUiNetSortOrder     = "ui/interfaces/sortOrder";
 constexpr auto kUiConnSortColumn   = "ui/connections/sortColumn";
 constexpr auto kUiConnSortOrder    = "ui/connections/sortOrder";
+constexpr auto kUiNetHeaderState   = "ui/interfaces/headerState";
+constexpr auto kUiConnHeaderState  = "ui/connections/headerState";
 } // namespace
 
 void MainWindow::readUiState()
@@ -940,6 +991,15 @@ void MainWindow::readUiState()
     const auto connOrder = static_cast<Qt::SortOrder>(
         s.value(kUiConnSortOrder, Qt::DescendingOrder).toInt());
     m_connView->sortByColumn(connCol, connOrder);
+
+    // Per-header column widths / order / hidden state. Restoring here
+    // (after sortByColumn so QHeaderView::saveState's serialised sort
+    // section index is the one that wins on next save) — Qt's
+    // restoreState also pulls in the sort indicator state.
+    if (const QByteArray nh = s.value(kUiNetHeaderState).toByteArray(); !nh.isEmpty())
+        m_netView->horizontalHeader()->restoreState(nh);
+    if (const QByteArray ch = s.value(kUiConnHeaderState).toByteArray(); !ch.isEmpty())
+        m_connView->horizontalHeader()->restoreState(ch);
 }
 
 void MainWindow::writeUiState()
@@ -955,6 +1015,9 @@ void MainWindow::writeUiState()
     s.setValue(kUiConnSortColumn, m_connView->horizontalHeader()->sortIndicatorSection());
     s.setValue(kUiConnSortOrder,
                static_cast<int>(m_connView->horizontalHeader()->sortIndicatorOrder()));
+
+    s.setValue(kUiNetHeaderState,  m_netView->horizontalHeader()->saveState());
+    s.setValue(kUiConnHeaderState, m_connView->horizontalHeader()->saveState());
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -970,6 +1033,131 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
     writeUiState();
     QMainWindow::closeEvent(event);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    // Resize the empty-state overlay together with the Connections viewport
+    // so the placeholder stays centered and clipped to the visible area.
+    if (m_connEmptyOverlay && m_connView
+        && watched == m_connView->viewport()
+        && (event->type() == QEvent::Resize || event->type() == QEvent::Show))
+    {
+        if (m_connEmptyOverlay->isVisible())
+            m_connEmptyOverlay->resize(m_connView->viewport()->size());
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::installShortcuts()
+{
+    // Ctrl+F focuses the filter expression bar (and selects its contents so
+    // the user can start typing immediately). Only meaningful on the
+    // Connections tab; on the Interfaces tab we still focus it after
+    // switching tabs — surprise-free for muscle memory.
+    auto *focusFilter = new QShortcut(QKeySequence(QKeySequence::Find), this);
+    focusFilter->setContext(Qt::ApplicationShortcut);
+    connect(focusFilter, &QShortcut::activated, this, [this] {
+        if (!m_connFilterEdit) return;
+        if (m_tabs && m_tabs->currentWidget() != m_connTab && m_connTab)
+            m_tabs->setCurrentWidget(m_connTab);
+        m_connFilterEdit->setFocus(Qt::ShortcutFocusReason);
+        m_connFilterEdit->selectAll();
+    });
+
+    // Esc: clears the filter when the filter bar has focus. Doesn't steal
+    // global Esc (which closes dialogs, popups, etc.) — we install it on
+    // the QLineEdit itself with WidgetShortcut context.
+    if (m_connFilterEdit) {
+        auto *clearFilter = new QShortcut(QKeySequence(Qt::Key_Escape), m_connFilterEdit);
+        clearFilter->setContext(Qt::WidgetShortcut);
+        connect(clearFilter, &QShortcut::activated, this, [this] {
+            m_connFilterEdit->clear();
+        });
+    }
+
+    // Ctrl+C in either table copies the selected rows. QTableView's default
+    // Ctrl+C copies a single cell — we want the whole row(s), formatted via
+    // the existing copyTextForFlow() / Exportable CSV emitter.
+    auto installCopy = [this](QTableView *view) {
+        auto *act = new QShortcut(QKeySequence(QKeySequence::Copy), view);
+        act->setContext(Qt::WidgetShortcut);
+        connect(act, &QShortcut::activated, this,
+                [this, view] { copyTableSelectionToClipboard(view); });
+    };
+    if (m_connView) installCopy(m_connView);
+    if (m_netView)  installCopy(m_netView);
+
+    // Ctrl+1 / Ctrl+2: switch tabs. Common Qt-app convention; harmless on
+    // single-tab platforms.
+    if (m_tabs) {
+        for (int i = 0; i < qMin(9, m_tabs->count()); ++i) {
+            auto *sc = new QShortcut(
+                QKeySequence(QStringLiteral("Ctrl+%1").arg(i + 1)), this);
+            sc->setContext(Qt::ApplicationShortcut);
+            connect(sc, &QShortcut::activated, this, [this, i] {
+                if (m_tabs && i < m_tabs->count())
+                    m_tabs->setCurrentIndex(i);
+            });
+        }
+    }
+}
+
+void MainWindow::copyTableSelectionToClipboard(QTableView *view)
+{
+    if (!view) return;
+    auto *sel = view->selectionModel();
+    if (!sel) return;
+    const QModelIndexList rows = sel->selectedRows();
+    if (rows.isEmpty()) return;
+
+    QStringList lines;
+    lines.reserve(rows.size());
+    for (const QModelIndex &viewIdx : rows) {
+        QModelIndex src = viewIdx;
+        // Map proxy → source row when applicable so the model can use its
+        // own row indices.
+        if (auto *proxy = qobject_cast<QSortFilterProxyModel *>(view->model()))
+            src = proxy->mapToSource(viewIdx);
+        if (!src.isValid()) continue;
+        if (view == m_connView && m_connModel) {
+            lines << m_connModel->copyTextForFlow(src.row());
+        } else if (view == m_netView && m_netModel) {
+            // No copyTextForFlow on NetworkModel; fall back to a tab-joined
+            // row dump via DisplayRole. Good enough for a 4-column table.
+            QStringList cells;
+            const int cols = m_netModel->columnCount();
+            for (int c = 0; c < cols; ++c) {
+                const QModelIndex idx = m_netModel->index(src.row(), c);
+                cells << idx.data(Qt::DisplayRole).toString();
+            }
+            lines << cells.join(QLatin1Char('\t'));
+        }
+    }
+    if (!lines.isEmpty())
+        QApplication::clipboard()->setText(lines.join(QLatin1Char('\n')));
+}
+
+void MainWindow::filterByConnectionRow(const QPoint &pos, bool exclude)
+{
+    if (!m_connView || !m_connFilterEdit || !m_connModel || !m_connProxy) return;
+    const QModelIndex viewIdx = m_connView->indexAt(pos);
+    if (!viewIdx.isValid()) return;
+    const QModelIndex srcIdx = m_connProxy->mapToSource(viewIdx);
+    if (!srcIdx.isValid()) return;
+
+    const QString peer = m_connModel->peerAddressText(srcIdx.row());
+    if (peer.isEmpty()) return;
+
+    // Quote the address so IPv6 colons can't be mis-tokenised by the
+    // filter parser. `host` matches both endpoints' addresses and (when
+    // resolution is enabled) hostnames; for excluding it's the same field
+    // wrapped in `not`.
+    const QString clause = exclude
+        ? QStringLiteral("not host=\"%1\"").arg(peer)
+        : QStringLiteral("host=\"%1\"").arg(peer);
+    m_connFilterEdit->setText(clause);
+    m_connFilterEdit->setFocus(Qt::OtherFocusReason);
 }
 
 void MainWindow::quitFromTray()
@@ -1328,6 +1516,7 @@ void MainWindow::showConnectionContextMenu(const QPoint &pos)
             const QString dstText  = m_connModel->copyTextForEndpoint(
                 row, ConnectionModel::FlowEnd::Destination);
             const QString lineText = m_connModel->copyTextForFlow(row);
+            const QString peer     = m_connModel->peerAddressText(row);
 
             auto *copySrc  = menu.addAction(tr("Copy source: %1").arg(srcText));
             auto *copyDst  = menu.addAction(tr("Copy destination: %1").arg(dstText));
@@ -1340,6 +1529,21 @@ void MainWindow::showConnectionContextMenu(const QPoint &pos)
             connect(copySrc,  &QAction::triggered, this, [copyToClip, srcText]  { copyToClip(srcText);  });
             connect(copyDst,  &QAction::triggered, this, [copyToClip, dstText]  { copyToClip(dstText);  });
             connect(copyLine, &QAction::triggered, this, [copyToClip, lineText] { copyToClip(lineText); });
+
+            if (!peer.isEmpty()) {
+                menu.addSeparator();
+                // The captured `pos` is in viewport coordinates relative to
+                // m_connView and is the same point we'll re-resolve to a row
+                // when the user clicks the action; this stays correct even
+                // if the proxy resorts before the action fires.
+                const QPoint capturePos = pos;
+                auto *only    = menu.addAction(tr("Show only flows to/from %1").arg(peer));
+                auto *exclude = menu.addAction(tr("Hide flows to/from %1").arg(peer));
+                connect(only,    &QAction::triggered, this,
+                        [this, capturePos] { filterByConnectionRow(capturePos, /*exclude=*/false); });
+                connect(exclude, &QAction::triggered, this,
+                        [this, capturePos] { filterByConnectionRow(capturePos, /*exclude=*/true);  });
+            }
         }
     }
 

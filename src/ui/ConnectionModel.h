@@ -129,6 +129,11 @@ public:
     enum class FlowEnd { Source, Destination };
     [[nodiscard]] QString copyTextForEndpoint(int row, FlowEnd which) const;
     [[nodiscard]] QString copyTextForFlow(int row) const;
+    // Returns the numeric address of the remote (peer) endpoint of `row`
+    // as plain text (no port, no hostname). Used to seed a filter
+    // expression like `host="<addr>"` from the connection context menu.
+    // Empty on invalid row or null address.
+    [[nodiscard]] QString peerAddressText(int row) const;
 
 public slots:
     void updateConnections(QList<Connection> connections);

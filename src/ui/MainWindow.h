@@ -122,9 +122,18 @@ public:
 private:
     void readUiState();
     void writeUiState();
+    void installShortcuts();
+    // Copies the currently-selected rows of `view` to the clipboard,
+    // formatted via the matching Exportable model's CSV emitter for
+    // selected rows, or via copyTextForFlow() for connections.
+    void copyTableSelectionToClipboard(QTableView *view);
+    // Sets the Connections filter expression to one isolating (or
+    // excluding) the peer at the row under `pos` in m_connView.
+    void filterByConnectionRow(const QPoint &pos, bool exclude);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
     Settings          *m_settings    = nullptr;
     NetworkMonitor    *m_netMonitor  = nullptr;
@@ -194,6 +203,11 @@ protected:
     QLabel *m_statusConnections = nullptr;
     QLabel *m_statusThroughput  = nullptr;
     QLabel *m_statusBackend     = nullptr;
+
+    // Centered "no flows" placeholder shown over the Connections view
+    // when the model is empty. Parented to the view's viewport so it
+    // tracks size + alternating-row background naturally.
+    QLabel *m_connEmptyOverlay  = nullptr;
 
     bool m_paused = false;
 };

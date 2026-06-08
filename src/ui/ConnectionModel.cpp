@@ -294,6 +294,18 @@ QString ConnectionModel::copyTextForFlow(int row) const
         .arg(protoLabel(c), src, dst, iface);
 }
 
+QString ConnectionModel::peerAddressText(int row) const
+{
+    if (row < 0 || row >= m_rows.size()) return {};
+    const Connection &c = m_rows[row].current;
+    // Peer = the non-local end. With an unknown direction we fall back to
+    // `remote`, matching how copyTextForEndpoint(Destination) renders for
+    // unknown-direction outbound-style flows.
+    const Endpoint &peer = (c.direction == Direction::Inbound) ? c.local : c.remote;
+    if (peer.address.isNull()) return {};
+    return peer.address.toString();
+}
+
 void ConnectionModel::requestResolution(const QHostAddress &addr)
 {
     if (m_resolveEnabled && m_resolver && !addr.isNull())
