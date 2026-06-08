@@ -60,6 +60,10 @@ checks, full Desktop Entry escaping in `Autostart`, additional systemd
 hardening knobs (`SystemCallFilter`, `ProtectProc=invisible`, etc.).
 
 ### Added
+- **Help → Keyboard Shortcuts…** (bound to `F1`) dialog enumerating every
+  shortcut and context-menu action, so the global `QShortcut` bindings
+  (`Ctrl+F`, `Esc`, `Ctrl+C`, `Ctrl+1`…`Ctrl+9`) — which don't appear in
+  any menu — are discoverable.
 - **Per-table column widths / order persisted** across runs
   (`QHeaderView::saveState` for both Interfaces and Connections tabs).
   Window geometry, window state, current tab, and sort order were

@@ -534,6 +534,11 @@ void MainWindow::setupMenuAndToolbar()
     // include exact version info in bug reports without grepping the
     // process tree.
     auto *helpMenu = menuBar()->addMenu(tr("&Help"));
+    auto *shortcutsAct = helpMenu->addAction(
+        tr("&Keyboard Shortcuts…"), this, &MainWindow::showShortcutsDialog);
+    shortcutsAct->setShortcut(QKeySequence::HelpContents); // F1
+    shortcutsAct->setShortcutContext(Qt::ApplicationShortcut);
+    helpMenu->addSeparator();
     helpMenu->addAction(
         QIcon::fromTheme(QStringLiteral("help-about")),
         tr("&About qiftop…"), this, &MainWindow::showAboutDialog);
@@ -787,6 +792,54 @@ void MainWindow::showAboutDialog()
              capsLine);
 
     QMessageBox::about(this, tr("About qiftop"), body);
+}
+
+void MainWindow::showShortcutsDialog()
+{
+    // Static-content reference dialog. Anything bound via installShortcuts()
+    // or via QAction::setShortcut() in createMenusAndToolbar() should be
+    // listed here — there's no way to discover the global QShortcut-based
+    // bindings (Ctrl+F, Esc, Ctrl+C in tables, Ctrl+N tab switch) through
+    // the menu UI, so this dialog is their canonical home.
+    const QString body = tr(
+        "<h3>Keyboard Shortcuts</h3>"
+        "<table cellpadding=4>"
+        "<tr><th align=left colspan=2>Navigation</th></tr>"
+        "<tr><td><b>Ctrl+1</b> … <b>Ctrl+9</b></td>"
+        "<td>Switch to tab <i>N</i> (Interfaces / Connections)</td></tr>"
+        "<tr><td><b>F1</b></td><td>Show this dialog</td></tr>"
+        "<tr><td><b>Ctrl+,</b></td><td>Open Preferences</td></tr>"
+        "<tr><td><b>Ctrl+W</b></td><td>Close window (stays in tray if enabled)</td></tr>"
+        "<tr><td><b>Ctrl+Q</b></td><td>Quit the application</td></tr>"
+        "<tr><th align=left colspan=2>Filtering (Connections tab)</th></tr>"
+        "<tr><td><b>Ctrl+F</b></td>"
+        "<td>Focus the filter expression bar (switches tab if needed)</td></tr>"
+        "<tr><td><b>Esc</b></td>"
+        "<td>Clear the filter expression (when filter bar has focus)</td></tr>"
+        "<tr><th align=left colspan=2>Selection</th></tr>"
+        "<tr><td><b>Ctrl+C</b></td>"
+        "<td>Copy selected rows to clipboard "
+        "(connections as flow lines, interfaces as TSV)</td></tr>"
+        "<tr><th align=left colspan=2>Context menu (right-click a row)</th></tr>"
+        "<tr><td>Connections</td>"
+        "<td>Copy source / destination / line · "
+        "Show / Hide flows to/from peer · Resolve hostname</td></tr>"
+        "<tr><td>Interfaces</td>"
+        "<td>Copy interface name · Reset counters</td></tr>"
+        "<tr><th align=left colspan=2>Filter mini-language</th></tr>"
+        "<tr><td colspan=2>The filter bar accepts a small expression "
+        "language — click the <b>?</b> button next to it for the full "
+        "syntax (fields like <tt>host</tt>, <tt>proto</tt>, "
+        "<tt>rate_total</tt>; operators <tt>:</tt> <tt>=</tt> <tt>~</tt> "
+        "<tt>&lt;</tt> <tt>&gt;</tt>; combinators <tt>and</tt> / "
+        "<tt>or</tt> / <tt>not</tt>).</td></tr>"
+        "</table>");
+
+    QMessageBox box(QMessageBox::NoIcon, tr("Keyboard Shortcuts"), body,
+                    QMessageBox::Close, this);
+    box.setTextFormat(Qt::RichText);
+    box.setTextInteractionFlags(Qt::TextBrowserInteraction);
+    box.exec();
 }
 
 void MainWindow::applyConnIfaceFilterToProxy()

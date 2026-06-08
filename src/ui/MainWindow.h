@@ -87,6 +87,7 @@ private slots:
     void applyConnFilterExpr();
     void showFilterHelp();
     void showAboutDialog();
+    void showShortcutsDialog();
 
 private:
     enum class ExportFormat { Json, Csv };
