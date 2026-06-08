@@ -56,3 +56,80 @@ jobs:
           export HOME="${RUNNER_TEMP}/home"
           mkdir -p "$HOME"
           dbus-run-session -- ctest --output-on-failure --no-tests=error
+
+  packaging-qa:
+    name: Packaging QA (.deb lint + smoke install)
+    runs-on: ubuntu-24.04
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + QA dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            libgl1-mesa-dev \
+            libnl-3-dev libnl-route-3-dev \
+            libnetfilter-conntrack-dev \
+            file fakeroot lintian desktop-file-utils
+
+      - name: Configure + build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQIFTOP_BUILD_TESTS=OFF \
+            -DQIFTOP_AUTO_PACKAGE=OFF
+          cmake --build build --parallel
+
+      - name: Package (.deb)
+        working-directory: build
+        run: |
+          cpack -G DEB
+          ls -la *.deb
+
+      - name: desktop-file-validate
+        # The .desktop file is the user-facing menu entry; broken syntax
+        # means a hidden launcher on every Linux desktop. Fail hard.
+        run: desktop-file-validate dist/desktop/qiftop.desktop
+
+      - name: lintian
+        working-directory: build
+        # We intentionally fail on errors only — info/warnings from cpack-
+        # generated debs include known cosmetic items (no changelog.Debian,
+        # no upstream-metadata) that we'll address incrementally. The set
+        # we *do* fail on catches genuine breakage (bad shebang, broken
+        # symlink, executable-not-elf, depends-on-nonexistent-package).
+        run: |
+          lintian --fail-on error --suppress-tags \
+            no-manual-page,no-changelog,changelog-file-missing-in-native-package,no-copyright-file,extended-description-is-empty,helper-templates-in-copyright,maintainer-script-calls-systemctl \
+            *.deb || true
+          # Re-run with stricter exit semantics so a true error fails the job:
+          lintian --fail-on error --suppress-tags \
+            no-manual-page,no-changelog,changelog-file-missing-in-native-package,no-copyright-file,extended-description-is-empty,helper-templates-in-copyright,maintainer-script-calls-systemctl \
+            *.deb
+
+      - name: Smoke install in clean container
+        working-directory: build
+        # Ubuntu 24.04 container, same as the release target. Verifies:
+        #   - dpkg dependency closure (apt resolves everything)
+        #   - postinst runs without error
+        #   - both binaries are on PATH and report --version
+        # We can't easily exercise the DBus daemon inside a stock container
+        # (no systemd PID 1) — that's covered by test_agent_integration.
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work ubuntu:24.04 bash -euxc '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq ./qiftop-agent_*.deb ./qiftop_*.deb
+            qiftop --version
+            qiftop-agent --version
+            # postinst should have created the netdev group:
+            getent group netdev
+            # systemd unit file (CPack default install dir is /lib/systemd):
+            test -f /lib/systemd/system/qiftop-agent.service \
+              || test -f /usr/lib/systemd/system/qiftop-agent.service
+            # nft conntrack shim should be present:
+            test -f /usr/share/qiftop/qiftop-conntrack.nft
+          '

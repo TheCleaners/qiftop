@@ -47,7 +47,7 @@ jobs:
             libgl1-mesa-dev \
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
-            file fakeroot
+            file fakeroot lintian desktop-file-utils
 
       - name: Configure
         # The project() VERSION in CMakeLists.txt is the single source
@@ -92,6 +92,33 @@ jobs:
         run: |
           cpack -G DEB -V
           ls -la *.deb
+
+      - name: desktop-file-validate
+        run: desktop-file-validate dist/desktop/qiftop.desktop
+
+      - name: lintian
+        working-directory: build
+        # See ci.yml packaging-qa job for the rationale on suppressed tags.
+        # This is the release-gating copy: a true error here blocks publish.
+        run: |
+          lintian --fail-on error --suppress-tags \
+            no-manual-page,no-changelog,changelog-file-missing-in-native-package,no-copyright-file,extended-description-is-empty,helper-templates-in-copyright,maintainer-script-calls-systemctl \
+            *.deb
+
+      - name: Smoke install in clean ubuntu:24.04 container
+        working-directory: build
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work ubuntu:24.04 bash -euxc '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq ./qiftop-agent_*.deb ./qiftop_*.deb
+            qiftop --version
+            qiftop-agent --version
+            getent group netdev
+            test -f /lib/systemd/system/qiftop-agent.service \
+              || test -f /usr/lib/systemd/system/qiftop-agent.service
+            test -f /usr/share/qiftop/qiftop-conntrack.nft
+          '
 
       - name: Compute checksums
         working-directory: build
