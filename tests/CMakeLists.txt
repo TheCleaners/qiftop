@@ -2,7 +2,7 @@
 # Each TU is built as its own executable so CTest can report them
 # individually and a single test's crash doesn't take the rest down.
 
-find_package(Qt6 REQUIRED COMPONENTS Test Core Network)
+find_package(Qt6 REQUIRED COMPONENTS Test Core Network DBus)
 
 function(qiftop_add_test name)
     add_executable(${name} ${ARGN})
@@ -24,3 +24,25 @@ qiftop_add_test(test_autostart
 qiftop_add_test(test_filter
     test_filter.cpp
     ${CMAKE_SOURCE_DIR}/src/util/ConnectionFilter.cpp)
+
+qiftop_add_test(test_exporter
+    test_exporter.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/Exporter.cpp)
+
+qiftop_add_test(test_idle
+    test_idle.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/IdleManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/ConnectionMonitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/NetworkMonitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
+target_link_libraries(test_idle PRIVATE Qt6::DBus)
+
+qiftop_add_test(test_dns_cache
+    test_dns_cache.cpp
+    ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp
+    ${CMAKE_SOURCE_DIR}/src/dns/QtDnsResolver.cpp)
+
+qiftop_add_test(test_handoff_auth
+    test_handoff_auth.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/HandoffServer.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)

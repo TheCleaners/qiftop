@@ -29,6 +29,16 @@ public slots:
     void resolve(const QHostAddress &addr) override;
     void clearCache() override;
 
+public:
+    // Test seam: bypass QHostInfo and seed the cache directly so unit
+    // tests can exercise the LRU bound without depending on real DNS.
+    // Not for production use — the resolve() path is what production
+    // callers want.
+    void primeCacheForTest(const QHostAddress &addr,
+                           const QString      &name,
+                           bool                negative = false);
+    [[nodiscard]] int  cacheSizeForTest() const { return m_cache.size(); }
+
 private slots:
     void onLookupFinished(const class QHostInfo &info);
 

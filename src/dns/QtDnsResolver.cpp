@@ -48,6 +48,13 @@ void QtDnsResolver::clearCache()
     m_order.clear();
 }
 
+void QtDnsResolver::primeCacheForTest(const QHostAddress &addr,
+                                      const QString      &name,
+                                      bool                negative)
+{
+    store(addr, name, negative);
+}
+
 void QtDnsResolver::store(const QHostAddress &addr, const QString &name, bool negative)
 {
     if (!m_cache.contains(addr))
