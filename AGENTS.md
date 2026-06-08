@@ -105,6 +105,33 @@ DTOs live in `src/dbus/Types.h`. The connection signature is
 `a(yysqysqtttts)` (family, l3proto, src, sport, dst, dport, l4proto, state,
 bytes_out, pkts_out, bytes_in, pkts_in, iface).
 
+### Access control
+
+The system-bus policy (`dist/dbus/org.qiftop.NetworkAgent1.conf`) restricts
+all method calls and signal reception to members of the `netdev` group.
+This closes two issues that the previous "any local user" policy left
+open:
+
+* **CPU/netlink amplification DoS.** Any caller could pin the root agent
+  at `poll.min_interval_ms` (100 ms) indefinitely by re-asserting a
+  cadence hint every few seconds. Each hint also called `noteActivity()`,
+  so the IdleManager never wound down.
+* **Information disclosure.** `GetConnections()` returns the full
+  conntrack table — every flow on the host, including other users'
+  source ports and peer IPs. `/proc/net/nf_conntrack` is root-only on
+  most distros; the agent must not demote that.
+
+`dist/debian/postinst` ensures the `netdev` group exists; users must be
+added to it explicitly (`sudo usermod -a -G netdev <user>`). The GUI's
+`agentReachable()` probe does a real `GetInterfaces` call with a 1 s
+timeout, so users without group access fall back cleanly to the
+in-process (self-elevated) backend rather than seeing an empty UI.
+
+When adding a new method, no XML edit is required — the group gate
+applies at the interface level. If a specific method needs a stricter
+gate (e.g. an admin-only setter), add a `<deny send_member="…"/>` to
+the default policy and a matching `<allow>` to the privileged stanza.
+
 ### Cadence control
 
 * The agent has a built-in baseline cadence (`poll.base_interval_ms`, 1 s).
@@ -116,6 +143,9 @@ bytes_out, pkts_out, bytes_in, pkts_in, iface).
   `NameOwnerChanged` plumbing — TTL handles disconnects.
 * If no method calls arrive for `idle.timeout_secs`, polling is paused
   entirely (no signals, near-zero CPU). The first incoming call wakes it.
+* Setting any window or `idle.timeout_secs` to `0` disables that step
+  (the comparison is guarded; see `IdleManager::evaluate`). This matches
+  what `dist/conf/agent.conf` has always documented.
 
 ---
 
@@ -125,6 +155,12 @@ bytes_out, pkts_out, bytes_in, pkts_in, iface).
 at startup. See the shipped file (`dist/conf/agent.conf`) for the
 authoritative documentation of every key. Marked as a Debian conffile so
 user edits survive package upgrades.
+
+Every parsed value is routed through a `clampCfg()` helper that bounds it
+to a sensible range and emits a `qWarning()` if the file value is out of
+range (intervals: `[10 ms, 1 h]`; windows/timeouts: `[0, 24 h]`, with `0`
+meaning "disable that step"). Typos in the conffile produce a visible
+warning, not a degenerate cadence.
 
 Override path: `qiftop-agent --config <path>`.
 
@@ -214,6 +250,22 @@ runner user. See HACKING.md §5.5 for the test-writing conventions.
   `calledFromDBus() / message().service()` to get the caller's unique name.
 * Backend `setPollIntervalMs(int ms)` semantics: `ms <= 0` means "pause the
   timer, emit nothing"; positive values set the interval and (re)start.
+* **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
+  uses an **allowlist** (`sessionEnv()`) when forwarding environment
+  variables into the privileged child, not a denylist. The root child runs
+  with `AT_SECURE` unset, so ld.so honours `LD_PRELOAD` / `LD_LIBRARY_PATH`
+  / `LD_AUDIT` / `QT_PLUGIN_PATH` etc. from whatever environment it sees;
+  a denylist would always lose this race against new loader knobs. If a
+  helper needs a new env var to work, add it to `kAllow` explicitly and
+  audit whether an attacker could weaponise it. The same allowlist is
+  applied to every QProcess we spawn (not just pkexec) via
+  `scrubbedHelperEnv()` so that kdesu / gksudo / lxqt-sudo / beesu can't
+  pass through hostile env vars either.
+* **CSV / spreadsheet injection.** `src/util/Exporter.cpp::csvSanitise`
+  prepends a leading apostrophe to any field starting with `=`, `+`, `-`,
+  `@`, `\t`, or `\r` before quoting. Attacker-controlled hostnames (via
+  reverse DNS) or interface names from the kernel must not be able to
+  execute as spreadsheet formulas when the user opens an exported CSV.
 
 ---
 

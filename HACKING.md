@@ -147,6 +147,29 @@ sudo systemctl start qiftop-agent.service
 ./build/qiftop --verbose
 ```
 
+**Group access (post-hardening, June 2026).** The system-bus policy
+(`dist/dbus/org.qiftop.NetworkAgent1.conf`) only permits members of the
+`netdev` group to call agent methods. If your dev user isn't already a
+member, the GUI silently falls back to its in-process backend (which
+needs self-elevation via pkexec each launch — annoying for dev). One-time
+fix:
+
+```bash
+sudo usermod -a -G netdev "$USER"
+# then log out + back in (group membership is set at session start);
+# or for a single shell session: `newgrp netdev`
+```
+
+The Debian `postinst` creates the `netdev` group if it doesn't already
+exist, but never auto-adds users to it (we don't silently relax
+permissions). On distros without a stock `netdev` group, either add it
+(`sudo groupadd -r netdev`) or change the `<policy group="netdev">`
+stanza to a group that exists on your system.
+
+`agentReachable()` (in `src/main.cpp`) probes the agent with a real
+`GetInterfaces` call now, so a user who isn't in `netdev` falls back
+cleanly to the in-process backend instead of staring at an empty UI.
+
 ### Iftop-style filtering
 
 ```bash
@@ -182,6 +205,11 @@ dbus-monitor --session "interface=org.qiftop.NetworkAgent1.Interfaces"
 
 `qdbus6 org.qiftop.NetworkAgent1` works too if you prefer that tool.
 
+Note (system-bus only): the policy in `dist/dbus/` restricts callers to
+members of the `netdev` group. From a non-netdev shell, every method call
+will return `AccessDenied`; this is the correct production behaviour. Run
+`busctl --system …` from a netdev shell (or use `sudo -g netdev busctl …`).
+
 ---
 
 ## 5. Common dev tasks (cookbook)
@@ -197,9 +225,11 @@ dbus-monitor --session "interface=org.qiftop.NetworkAgent1.Interfaces"
    `if (m_idle) m_idle->noteActivity();` if it should count as activity.
 3. Re-build. Qt auto-MOC picks it up; the method is automatically exposed
    because we register the objects with `QDBusConnection::ExportAllContents`.
-4. **No XML/policy edits required** — bus policy in
-   `dist/dbus/org.qiftop.NetworkAgent1.conf` is interface-level allow, so any
-   new method on an existing interface is automatically callable.
+4. **Bus policy:** the system-bus policy is group-gated
+   (`<policy group="netdev">`); any new method you add inherits that gate
+   automatically. If you need a different access model for one method
+   specifically, add a `<deny send_member="MethodName"/>` under the
+   default policy and a matching `<allow>` under the privileged group.
 5. Add a client-side wrapper in `src/backend/dbus/DBus*Monitor.{h,cpp}` if
    the GUI is going to use it.
 6. Document the new method in AGENTS.md §4 (the DBus contract table).
@@ -208,9 +238,16 @@ dbus-monitor --session "interface=org.qiftop.NetworkAgent1.Interfaces"
 
 1. Add the field to `IdleManager::Config` (or wherever appropriate) with a
    sane default.
-2. Read it in `loadIdleConfig()` (`src/agent/main.cpp`).
+2. Read it in `loadIdleConfig()` (`src/agent/main.cpp`) — and **always
+   route the parsed value through `clampCfg()`** so a typo in
+   `/etc/qiftop/agent.conf` produces a `qWarning()` instead of a degenerate
+   cadence. Pick bounds that make sense (millisecond intervals: `[10,
+   3'600'000]`; window/timeout: `[0, 86'400'000]`, with `0` meaning
+   "disable that step").
 3. Document it in `dist/conf/agent.conf` with a top-of-section comment
    block and inline `Default: …` line — that file IS the documentation.
+   If the value can be `0` to disable, say so explicitly; admins read the
+   conffile, not the source.
 4. The file is already a Debian conffile (see `dist/debian/conffiles`),
    so additions are upgrade-safe.
 
@@ -354,6 +391,24 @@ sudo cat /usr/share/dbus-1/system.d/org.qiftop.NetworkAgent1.conf
 The policy file must allow `<allow own="org.qiftop.NetworkAgent1"/>` for the
 root user. If you renamed the service, the policy needs updating too.
 
+### GUI silently falls back to in-process backend / "Relaunch as administrator"
+
+Most common cause after the June 2026 hardening: your user isn't in the
+`netdev` group, so the DBus policy denies every method call. The
+`agentReachable()` probe in `src/main.cpp` calls `GetInterfaces` with a
+1 s timeout; AccessDenied makes it return `false` and the GUI drops into
+the in-process path. To confirm:
+
+```bash
+busctl --system call org.qiftop.NetworkAgent1 \
+    /org/qiftop/NetworkAgent1/Interfaces \
+    org.qiftop.NetworkAgent1.Interfaces GetInterfaces
+# "Access denied" → you're not in netdev.
+
+groups | tr ' ' '\n' | grep -x netdev || echo "not in netdev"
+sudo usermod -a -G netdev "$USER"   # then log out + back in
+```
+
 ### Polling looks frozen
 
 Run the agent with `--verbose`. Look for the IdleManager log line:
@@ -366,6 +421,11 @@ That's expected after `idle.timeout_secs` with no method calls. Next call
 unpauses it. If a client wants sub-second updates, it must call
 `SetDesiredIntervalMs(<ms>)` at most every `idle.hint_ttl_secs / 2` seconds
 to keep the hint alive.
+
+If you set `idle.timeout_secs=0` in `/etc/qiftop/agent.conf` and the
+agent is still pausing, you're on a pre-hardening build — that value
+used to invert and pause immediately. Current behaviour: `0` for any
+schedule window or timeout means "disable that step", as documented.
 
 ### Conntrack EPERM
 

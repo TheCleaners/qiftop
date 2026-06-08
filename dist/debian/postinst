@@ -2,6 +2,19 @@
 # postinst for qiftop-agent
 set -e
 
+# Ensure the `netdev` group exists (it's standard on Debian/Ubuntu via
+# `base-passwd`, but the DBus policy in dist/dbus/ depends on it). Members
+# of this group are permitted to talk to org.qiftop.NetworkAgent1; users
+# not in it will see the GUI fall back to its in-process (self-elevated)
+# backend.
+if ! getent group netdev >/dev/null 2>&1; then
+    if [ -x /usr/sbin/groupadd ]; then
+        /usr/sbin/groupadd -r netdev || true
+    elif [ -x /usr/sbin/addgroup ]; then
+        /usr/sbin/addgroup --system netdev || true
+    fi
+fi
+
 if [ -x /usr/bin/systemctl ]; then
     systemctl daemon-reload || true
     systemctl reload dbus.service 2>/dev/null || true

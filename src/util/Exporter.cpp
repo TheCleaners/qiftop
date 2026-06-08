@@ -33,8 +33,32 @@ QJsonValue toJsonValue(const QVariant &v)
     }
 }
 
-QString csvEscape(const QString &field)
+// Neutralise CSV-injection ("formula injection") payloads. A field that
+// begins with one of these characters will be interpreted as a formula by
+// Excel / LibreOffice / Google Sheets, allowing an attacker who controls
+// the input (notably reverse-DNS hostnames, but also interface names from
+// the kernel) to execute spreadsheet formulas in the consumer's session
+// when the exported CSV is opened.
+//
+// The fix prepends a single leading apostrophe, which spreadsheet apps
+// uniformly treat as a literal-text marker. We do it before the quoting
+// step so the apostrophe ends up *inside* the quoted field if quoting is
+// also needed.
+static QString csvSanitise(const QString &field)
 {
+    if (field.isEmpty()) return field;
+    const QChar c0 = field.at(0);
+    if (c0 == QLatin1Char('=') || c0 == QLatin1Char('+') ||
+        c0 == QLatin1Char('-') || c0 == QLatin1Char('@') ||
+        c0 == QLatin1Char('\t') || c0 == QLatin1Char('\r')) {
+        return QLatin1Char('\'') + field;
+    }
+    return field;
+}
+
+QString csvEscape(const QString &raw)
+{
+    const QString field = csvSanitise(raw);
     const bool needsQuoting = field.contains(QLatin1Char(','))
                               || field.contains(QLatin1Char('"'))
                               || field.contains(QLatin1Char('\n'))

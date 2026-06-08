@@ -2,6 +2,7 @@
 #include <QCommandLineParser>
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
+#include <QDBusMessage>
 #include <QIcon>
 #include <QTimer>
 
@@ -24,23 +25,35 @@ namespace {
 
 constexpr auto kAgentBusName = "org.qiftop.NetworkAgent1";
 
-// Returns true if the privileged agent is reachable on the system bus.
-// We accept either an already-running instance or a registered activation
-// stub (DBus activation will spawn it on first call).
+// Returns true if the privileged agent is reachable on the system bus AND
+// our DBus policy permits us to call its methods. We do BOTH a name lookup
+// (to trigger DBus activation if needed) and a low-cost probe call against
+// the Interfaces service, because the bus policy is now group-gated
+// (`netdev`) and a non-netdev user would see name registration succeed but
+// every subsequent method call return AccessDenied — better to fall back
+// to the in-process backend cleanly than to leave the UI showing an empty
+// table forever.
 bool agentReachable()
 {
     auto bus = QDBusConnection::systemBus();
     if (!bus.isConnected()) return false;
     auto *iface = bus.interface();
     if (!iface) return false;
-    if (iface->isServiceRegistered(QString::fromLatin1(kAgentBusName)))
-        return true;
-    // Try activation: if the .service file is installed but the agent is
-    // not currently running, the bus will spawn it. A successful
-    // startService call indicates the activation file is present and the
-    // helper started.
-    auto reply = iface->startService(QString::fromLatin1(kAgentBusName));
-    return reply.isValid();
+    if (!iface->isServiceRegistered(QString::fromLatin1(kAgentBusName))) {
+        // Try activation: if the .service file is installed but the agent is
+        // not currently running, the bus will spawn it.
+        auto reply = iface->startService(QString::fromLatin1(kAgentBusName));
+        if (!reply.isValid()) return false;
+    }
+    // Probe a real method. Times out fast (1 s) — we'd rather fall back than
+    // hang the GUI startup waiting for a misconfigured bus.
+    QDBusMessage probe = QDBusMessage::createMethodCall(
+        QString::fromLatin1(kAgentBusName),
+        QStringLiteral("/org/qiftop/NetworkAgent1/Interfaces"),
+        QStringLiteral("org.qiftop.NetworkAgent1.Interfaces"),
+        QStringLiteral("GetInterfaces"));
+    QDBusMessage reply = bus.call(probe, QDBus::Block, 1000);
+    return reply.type() != QDBusMessage::ErrorMessage;
 }
 
 } // namespace

@@ -11,42 +11,78 @@ namespace util {
 
 namespace {
 
-// Returns env vars to forward to the privileged child. We pass *almost* the
-// full environment so the elevated GUI inherits the user's theme, locale,
-// session bus, XDG paths, Qt/KDE/GTK settings, etc. A short denylist drops
-// variables that either don't make sense for a different uid (auth sockets,
-// the launcher's own bookkeeping) or would actively break (e.g. dbus user
-// sessions tied to the original uid).
+// Returns env vars to forward to the privileged child.
+//
+// SECURITY: This is an **allowlist**, not a denylist. The privileged child
+// runs as root with the same (non-zero) ruid loader behaviour as any normal
+// process — `AT_SECURE` is NOT set — so ld.so honours `LD_PRELOAD`,
+// `LD_LIBRARY_PATH`, `LD_AUDIT`, `QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`,
+// `GTK_MODULES`, `GIO_MODULE_DIR`, etc., from whatever environment we hand it.
+// A denylist will *always* lose this race against new ld.so / toolkit knobs;
+// only an allowlist is safe.
+//
+// Anything not in this list is dropped. If a user-visible glitch turns out
+// to be caused by a missing env var, add it here (and audit it for whether
+// an attacker could weaponise it).
 QStringList sessionEnv()
 {
-    static const QSet<QByteArray> kDeny = {
-        // Auth/agent sockets tied to the calling uid
-        "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO",
-        // Helper bookkeeping that will be reset or is inappropriate as root
-        "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND",
-        "PKEXEC_UID",
-        "_", "OLDPWD",
-        // Set fresh by pkexec / login
-        "USER", "USERNAME", "LOGNAME", "MAIL", "SHELL",
-        // Our own one-shot; cleared by the parent before launch anyway
-        "QIFTOP_HANDOFF_SOCKET",
+    static const QSet<QByteArray> kAllow = {
+        // Display server / windowing
+        "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
+        "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP",
+        // Session DBus (per-user; root child uses it for tray / notifications)
+        "DBUS_SESSION_BUS_ADDRESS",
+        // Locale
+        "LANG", "LANGUAGE",
+        "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE",
+        "LC_MONETARY", "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS",
+        "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION",
+        // Working directory + PATH (PATH is needed so the child can find its
+        // own helpers; pkexec sets a safe default if we omit it).
+        "HOME", "PWD", "PATH",
+        // Theme integration. These are read by Qt directly; QT_PLUGIN_PATH /
+        // QT_QPA_PLATFORM_PLUGIN_PATH are deliberately NOT in this list
+        // because they let an attacker inject a Qt plugin into the root
+        // process. Qt's built-in defaults find the system plugins fine.
+        "QT_STYLE_OVERRIDE", "QT_QPA_PLATFORMTHEME", "QT_SCALE_FACTOR",
+        "QT_AUTO_SCREEN_SCALE_FACTOR",
     };
 
     QStringList out;
     const auto env = QProcessEnvironment::systemEnvironment();
     const auto keys = env.keys();
     for (const QString &k : keys) {
-        if (kDeny.contains(k.toLocal8Bit())) continue;
+        if (!kAllow.contains(k.toLocal8Bit())) continue;
         const QString v = env.value(k);
         if (v.isEmpty()) continue;
         out << QStringLiteral("%1=%2").arg(k, v);
     }
-    // QIFTOP_HANDOFF_SOCKET is added explicitly so the parent can still hand
-    // it to the child even though it's on the deny list above (the deny list
-    // exists so the privileged child doesn't recurse).
+    // The handoff socket path is added explicitly. It's host-local to the
+    // user, abstract or under $XDG_RUNTIME_DIR, and the protocol authenticates
+    // separately (see HandoffServer).
     const QString handoff = qEnvironmentVariable("QIFTOP_HANDOFF_SOCKET");
     if (!handoff.isEmpty())
         out << QStringLiteral("QIFTOP_HANDOFF_SOCKET=%1").arg(handoff);
+    return out;
+}
+
+// Build a QProcessEnvironment containing only the allowlisted variables.
+// Used to scrub the env of helpers (kdesu, gksudo, lxqt-sudo, beesu,
+// x-terminal-emulator+sudo) that inherit the parent's QProcess env by
+// default — sudo's `env_reset` saves us in some cases but several of these
+// helpers don't go through sudo, and even sudo's defaults can be relaxed
+// site-locally.
+QProcessEnvironment scrubbedHelperEnv()
+{
+    QProcessEnvironment out;
+    const auto src = QProcessEnvironment::systemEnvironment();
+    const QStringList lines = sessionEnv();
+    for (const QString &line : lines) {
+        const int eq = line.indexOf(QLatin1Char('='));
+        if (eq <= 0) continue;
+        out.insert(line.left(eq), line.mid(eq + 1));
+    }
+    Q_UNUSED(src);
     return out;
 }
 
@@ -67,6 +103,12 @@ bool launchAttached(const QString &program,
 {
     auto *p = new QProcess(QCoreApplication::instance());
     p->setProcessChannelMode(QProcess::ForwardedChannels);
+    // SECURITY: scrub the helper's own env. Several helpers (kdesu, gksudo,
+    // lxqt-sudo, beesu, x-terminal-emulator) inherit our environment by
+    // default and forward it to the privileged child. Strip everything not
+    // on the allowlist; pkexec re-builds via `env` argv (see runPkexec) and
+    // therefore depends only on sessionEnv() — which is also allowlist-only.
+    p->setProcessEnvironment(scrubbedHelperEnv());
     if (verbose)
         qCInfo(lcVerbose).noquote() << "exec:" << program << args;
     p->start(program, args);

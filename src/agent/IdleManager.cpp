@@ -71,12 +71,16 @@ void IdleManager::evaluate()
 {
     const qint64 elapsed = m_since.elapsed();
     const int active = effectiveActiveIntervalMs();
+    // A zero window means "disable that step", matching the documentation
+    // in dist/conf/agent.conf. (Old behaviour: 0 collapsed the comparison
+    // to `elapsed >= 0` which is always true, so e.g. idle.timeout_secs=0
+    // silently paused polling on the very first tick.)
     int target;
-    if      (elapsed >= m_cfg.idleTimeoutMs)  target = 0;
-    else if (elapsed >= m_cfg.slow2WindowMs)  target = 0;
-    else if (elapsed >= m_cfg.slow1WindowMs)  target = qMax(m_cfg.slow2IntervalMs, active);
-    else if (elapsed >= m_cfg.activeWindowMs) target = qMax(m_cfg.slow1IntervalMs, active);
-    else                                       target = active;
+    if      (m_cfg.idleTimeoutMs  > 0 && elapsed >= m_cfg.idleTimeoutMs)  target = 0;
+    else if (m_cfg.slow2WindowMs  > 0 && elapsed >= m_cfg.slow2WindowMs)  target = 0;
+    else if (m_cfg.slow1WindowMs  > 0 && elapsed >= m_cfg.slow1WindowMs)  target = qMax(m_cfg.slow2IntervalMs, active);
+    else if (m_cfg.activeWindowMs > 0 && elapsed >= m_cfg.activeWindowMs) target = qMax(m_cfg.slow1IntervalMs, active);
+    else                                                                  target = active;
     if (target != m_currentMs)
         applyInterval(target);
 }
