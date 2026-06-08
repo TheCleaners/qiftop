@@ -37,10 +37,19 @@ jobs:
 
       - name: Configure
         run: |
+          # Debug builds enable ASan + UBSan on test targets only (production
+          # binaries stay clean). Slower than vanilla Debug but catches
+          # use-after-free, leaks, out-of-bounds, signed overflow, etc.
+          if [ "${{ matrix.build_type }}" = "Debug" ]; then
+            SAN="-DQIFTOP_TESTS_SANITIZE=address+undefined"
+          else
+            SAN="-DQIFTOP_TESTS_SANITIZE=OFF"
+          fi
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DQIFTOP_BUILD_TESTS=ON \
-            -DQIFTOP_AUTO_PACKAGE=OFF
+            -DQIFTOP_AUTO_PACKAGE=OFF \
+            $SAN
 
       - name: Build
         run: cmake --build build --parallel
