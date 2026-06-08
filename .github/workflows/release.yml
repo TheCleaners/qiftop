@@ -29,14 +29,29 @@ jobs:
         with:
           fetch-depth: 0   # tags + full history so release notes diff works
 
-      - name: Derive version from tag
+      - name: Derive version + build profile from tag
         id: ver
         run: |
           # Strip leading 'v' from the tag (v0.2 -> 0.2).
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # Pre-release tags (anything with a '-' suffix like v0.1-alpha1,
+          # v0.2-rc1, v0.3-beta) get RelWithDebInfo + unstripped binaries
+          # so user-reported crash backtraces are debuggable. Final tags
+          # (v0.1, v0.2, ...) get plain Release + stripped per CMakeLists.
+          if [[ "${tag}" == *-* ]]; then
+            build_type="RelWithDebInfo"
+            strip_files="OFF"
+          else
+            build_type="Release"
+            strip_files="ON"
+          fi
+          echo "build_type=${build_type}" >> "$GITHUB_OUTPUT"
+          echo "strip_files=${strip_files}" >> "$GITHUB_OUTPUT"
           echo "Release version: ${version}"
+          echo "Build type:      ${build_type}"
+          echo "Strip binaries:  ${strip_files}"
 
       - name: Install build dependencies
         run: |
@@ -55,7 +70,8 @@ jobs:
         # matches the pushed tag rather than overriding it.
         run: |
           cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=${{ steps.ver.outputs.build_type }} \
+            -DCPACK_STRIP_FILES=${{ steps.ver.outputs.strip_files }} \
             -DQIFTOP_BUILD_TESTS=ON \
             -DQIFTOP_AUTO_PACKAGE=OFF
 
@@ -99,10 +115,14 @@ jobs:
       - name: lintian
         working-directory: build
         # See ci.yml packaging-qa job for the rationale on suppressed tags.
-        # This is the release-gating copy: a true error here blocks publish.
+        # `unstripped-binary-or-object` is suppressed here (vs. ci.yml)
+        # because pre-release tags build RelWithDebInfo + CPACK_STRIP_FILES=OFF
+        # on purpose, to keep crash backtraces debuggable for early testers.
+        # Final tags strip via CMakeLists default, so the suppression is a
+        # no-op there.
         run: |
           lintian --fail-on error --suppress-tags \
-            no-manual-page,no-changelog,changelog-file-missing-in-native-package,no-copyright-file,extended-description-is-empty,helper-templates-in-copyright,maintainer-script-calls-systemctl \
+            no-manual-page,no-changelog,changelog-file-missing-in-native-package,no-copyright-file,extended-description-is-empty,helper-templates-in-copyright,maintainer-script-calls-systemctl,unstripped-binary-or-object \
             *.deb
 
       - name: Smoke install in clean ubuntu:24.04 container

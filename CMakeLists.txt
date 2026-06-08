@@ -145,7 +145,11 @@ set(CPACK_PACKAGE_HOMEPAGE_URL      "https://github.com/ebenali/qiftop")
 # Strip ELF binaries during packaging — lintian flags unstripped binaries
 # as an error, and stripped binaries are ~10× smaller on disk. Symbol
 # files for debugging are still available in the build/ tree.
-set(CPACK_STRIP_FILES               TRUE)
+# Overridable: pre-release tags (release.yml) set this to OFF so alpha/rc
+# .debs ship with full symbols for crash-report debuggability.
+if(NOT DEFINED CPACK_STRIP_FILES)
+    set(CPACK_STRIP_FILES TRUE)
+endif()
 set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_SOURCE_DIR}/LICENSE")
 set(CPACK_RESOURCE_FILE_README      "${CMAKE_SOURCE_DIR}/README.md")
 set(CPACK_PACKAGE_VERSION           "${PROJECT_VERSION}")
