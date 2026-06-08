@@ -14,12 +14,25 @@ namespace util {
 // privileged child spawned by PrivilegeEscalator.
 //
 // The parent constructs a HandoffServer, calls listen() to get a socket path,
-// and exports that path via the `QIFTOP_HANDOFF_SOCKET` environment variable
-// (the escalator forwards it to the child). The child connects through
+// and exports both the path and a fresh nonce via the
+// `QIFTOP_HANDOFF_SOCKET` and `QIFTOP_HANDOFF_NONCE` environment variables
+// (the escalator forwards them to the child). The child connects through
 // util::HandoffClient and the two processes exchange line-delimited messages.
+//
+// SECURITY: The socket is `0600` (`QLocalServer::UserAccessOption`) so only
+// the same uid can connect. That's not enough by itself: a hostile same-uid
+// process can win the race to connect before the legitimate root child does,
+// hijack the channel, and feed forged stats to the tray UI / swallow the
+// user's quit/pause clicks. To prevent that the protocol authenticates with
+// a per-session nonce: the very first message from the child MUST be
+// `HELLO\t<nonce>`; any mismatch (or any other verb before HELLO) results
+// in immediate disconnect without dispatch. The nonce is a fresh 256-bit
+// random hex string generated per `listen()` and is only readable by
+// processes that the parent explicitly forwards the env to.
 //
 // Wire protocol — one verb per line, optional tab-separated payload:
 //   child → parent:
+//     HELLO\t<nonce>        (MUST be first) authenticate this socket
 //     READY                 child has finished initialising
 //     STATS\t<json>         per-interface snapshot (see encodeStats())
 //     PAUSED\t{0|1}         child's current pause state
@@ -38,7 +51,8 @@ public:
     QString listen();
     [[nodiscard]] QString errorString() const { return m_lastError; }
     [[nodiscard]] QString socketPath()  const { return m_socketPath; }
-    [[nodiscard]] bool    hasChild()    const { return m_client != nullptr; }
+    [[nodiscard]] QString nonce()       const { return m_nonce; }
+    [[nodiscard]] bool    hasChild()    const { return m_client != nullptr && m_authenticated; }
 
     void sendShow();
     void sendPause(bool paused);
@@ -58,12 +72,15 @@ private slots:
 private:
     void send(const QByteArray &line);
     void dispatch(const QByteArray &line);
+    void rejectClient(const char *reason);
 
-    QLocalServer *m_server     = nullptr;
-    QLocalSocket *m_client     = nullptr;
+    QLocalServer *m_server         = nullptr;
+    QLocalSocket *m_client         = nullptr;
     QByteArray    m_readBuf;
     QString       m_socketPath;
+    QString       m_nonce;            // 64 hex chars, 256 bits of entropy
     QString       m_lastError;
+    bool          m_authenticated   = false;
 };
 
 // Encodes/decodes the wire format used between HandoffServer and

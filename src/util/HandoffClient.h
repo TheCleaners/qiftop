@@ -21,7 +21,11 @@ public:
     ~HandoffClient() override;
 
     // Establishes the connection synchronously (waits up to timeoutMs for
-    // QLocalSocket to enter Connected state). Returns false on failure.
+    // QLocalSocket to enter Connected state) and immediately sends the
+    // HELLO authentication line. The nonce is read from the
+    // `QIFTOP_HANDOFF_NONCE` environment variable, which the parent sets
+    // before spawning us via PrivilegeEscalator. Returns false on connect
+    // failure or missing/empty nonce.
     bool connectTo(const QString &socketPath, int timeoutMs = 2000);
 
     [[nodiscard]] bool isConnected() const;

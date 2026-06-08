@@ -24,6 +24,14 @@ bool HandoffClient::connectTo(const QString &socketPath, int timeoutMs)
     if (socketPath.isEmpty()) return false;
     if (m_sock) return m_sock->state() == QLocalSocket::ConnectedState;
 
+    const QByteArray nonce = qgetenv("QIFTOP_HANDOFF_NONCE");
+    if (nonce.isEmpty()) {
+        qCWarning(lcVerbose) << "handoff-client: QIFTOP_HANDOFF_NONCE not set; "
+                                "refusing to connect (would let any same-uid "
+                                "process spoof the parent's tray)";
+        return false;
+    }
+
     m_sock = new QLocalSocket(this);
     connect(m_sock, &QLocalSocket::readyRead,    this, &HandoffClient::handleReadyRead);
     connect(m_sock, &QLocalSocket::disconnected, this, &HandoffClient::handleDisconnected);
@@ -35,7 +43,15 @@ bool HandoffClient::connectTo(const QString &socketPath, int timeoutMs)
         m_sock = nullptr;
         return false;
     }
-    qCInfo(lcVerbose).noquote() << "handoff-client: connected to" << socketPath;
+    // Authenticate. The server discards every other byte until it sees this
+    // line; sending any data before this would just get us disconnected.
+    QByteArray hello = "HELLO\t";
+    hello += nonce;
+    hello += '\n';
+    m_sock->write(hello);
+    m_sock->flush();
+    qCInfo(lcVerbose).noquote() << "handoff-client: connected to" << socketPath
+                                << "(HELLO sent)";
     return true;
 }
 

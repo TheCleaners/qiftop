@@ -151,16 +151,20 @@ int main(int argc, char *argv[])
     connMonitor->start();
 
     // If launched by an unprivileged sibling that's waiting for us to come up,
-    // open the persistent IPC channel, send READY, and keep it alive so the
-    // sibling can act as our tray host (it sees stats; we obey SHOW/PAUSE/QUIT).
+    // open the persistent IPC channel, authenticate with the nonce the parent
+    // baked into our env, send READY, and keep it alive so the sibling can act
+    // as our tray host (it sees stats; we obey SHOW/PAUSE/QUIT).
     util::HandoffClient handoffClient;
     const QByteArray handoffPath = qgetenv("QIFTOP_HANDOFF_SOCKET");
     if (!handoffPath.isEmpty()) {
         qunsetenv("QIFTOP_HANDOFF_SOCKET"); // don't recurse into our own children
+        // Clear the nonce from env AFTER HandoffClient::connectTo() reads it,
+        // so it doesn't leak to any QProcess we later spawn.
         if (handoffClient.connectTo(QString::fromLocal8Bit(handoffPath))) {
             window.attachHandoffClient(&handoffClient);
             QTimer::singleShot(0, &handoffClient, &util::HandoffClient::sendReady);
         }
+        qunsetenv("QIFTOP_HANDOFF_NONCE");
     }
 
     return app.exec();

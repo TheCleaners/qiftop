@@ -57,12 +57,15 @@ QStringList sessionEnv()
         if (v.isEmpty()) continue;
         out << QStringLiteral("%1=%2").arg(k, v);
     }
-    // The handoff socket path is added explicitly. It's host-local to the
-    // user, abstract or under $XDG_RUNTIME_DIR, and the protocol authenticates
-    // separately (see HandoffServer).
+    // The handoff socket path and nonce are added explicitly. They're
+    // host-local to the user (abstract or under $XDG_RUNTIME_DIR); the
+    // protocol authenticates the connection via the nonce (see HandoffServer).
     const QString handoff = qEnvironmentVariable("QIFTOP_HANDOFF_SOCKET");
     if (!handoff.isEmpty())
         out << QStringLiteral("QIFTOP_HANDOFF_SOCKET=%1").arg(handoff);
+    const QString handoffNonce = qEnvironmentVariable("QIFTOP_HANDOFF_NONCE");
+    if (!handoffNonce.isEmpty())
+        out << QStringLiteral("QIFTOP_HANDOFF_NONCE=%1").arg(handoffNonce);
     return out;
 }
 

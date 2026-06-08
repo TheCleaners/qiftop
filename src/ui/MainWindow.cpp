@@ -941,6 +941,7 @@ void MainWindow::relaunchAsAdmin()
         handoff = nullptr;
     } else {
         qputenv("QIFTOP_HANDOFF_SOCKET", sockPath.toLocal8Bit());
+        qputenv("QIFTOP_HANDOFF_NONCE",  handoff->nonce().toLatin1());
         prepareProxyMode(handoff);
     }
 
@@ -963,6 +964,7 @@ void MainWindow::relaunchAsAdmin()
     QString used;
     const bool ok = esc.relaunch(self, tail, &used);
     qunsetenv("QIFTOP_HANDOFF_SOCKET");
+    qunsetenv("QIFTOP_HANDOFF_NONCE");
 
     if (ok) {
         m_connBannerLbl->setText(tr("Privileged instance launching via %1. "

@@ -8,10 +8,27 @@
 #include <QJsonObject>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QUuid>
 
 namespace util {
+
+namespace {
+// Generate 256 bits of cryptographic-grade randomness rendered as 64 hex
+// chars. QRandomGenerator::system() is the OS CSPRNG (getrandom / /dev/urandom
+// on Linux), which is what we want — we are NOT looking for reproducibility.
+QString makeNonce()
+{
+    quint32 words[8];
+    QRandomGenerator::system()->fillRange(words);
+    QString out;
+    out.reserve(64);
+    for (quint32 w : words)
+        out += QStringLiteral("%1").arg(w, 8, 16, QLatin1Char('0'));
+    return out;
+}
+} // namespace
 
 HandoffServer::HandoffServer(QObject *parent)
     : QObject(parent)
@@ -43,11 +60,14 @@ QString HandoffServer::listen()
     m_socketPath = QDir(dir).filePath(name);
     QFile::remove(m_socketPath);
 
+    m_nonce = makeNonce();
+
     m_server = new QLocalServer(this);
     m_server->setSocketOptions(QLocalServer::UserAccessOption);
     if (!m_server->listen(m_socketPath)) {
         m_lastError  = m_server->errorString();
         m_socketPath.clear();
+        m_nonce.clear();
         delete m_server;
         m_server = nullptr;
         return {};
@@ -56,7 +76,8 @@ QString HandoffServer::listen()
     connect(m_server, &QLocalServer::newConnection,
             this,     &HandoffServer::handleNewConnection);
 
-    qCInfo(lcVerbose).noquote() << "handoff: listening on" << m_socketPath;
+    qCInfo(lcVerbose).noquote() << "handoff: listening on" << m_socketPath
+                                << "(nonce: 64 hex chars)";
     return m_socketPath;
 }
 
@@ -72,23 +93,60 @@ void HandoffServer::handleNewConnection()
             continue;
         }
         m_client = sock;
+        m_authenticated = false;
         connect(sock, &QLocalSocket::readyRead,    this, &HandoffServer::handleReadyRead);
         connect(sock, &QLocalSocket::disconnected, this, &HandoffServer::handleClientDisconnected);
-        qCInfo(lcVerbose) << "handoff: child connected";
+        qCInfo(lcVerbose) << "handoff: peer connected (awaiting HELLO)";
         // Drain anything already buffered.
         if (sock->bytesAvailable() > 0)
             handleReadyRead();
     }
 }
 
+void HandoffServer::rejectClient(const char *reason)
+{
+    qCWarning(lcVerbose).noquote() << "handoff: rejecting peer:" << reason;
+    if (m_client) {
+        m_client->disconnectFromServer();
+        // handleClientDisconnected() will clean up.
+    }
+    m_readBuf.clear();
+}
+
 void HandoffServer::handleReadyRead()
 {
     if (!m_client) return;
     m_readBuf += m_client->readAll();
+    // Cap pre-auth buffer so a non-cooperative peer can't OOM us by sending
+    // a giant unterminated line before HELLO.
+    if (!m_authenticated && m_readBuf.size() > 1024) {
+        rejectClient("oversized pre-auth payload");
+        return;
+    }
     int nl;
     while ((nl = m_readBuf.indexOf('\n')) >= 0) {
         const QByteArray line = m_readBuf.left(nl);
         m_readBuf.remove(0, nl + 1);
+        if (!m_authenticated) {
+            // Very first line MUST be `HELLO\t<nonce>`. Anything else =
+            // hostile or buggy peer; disconnect without dispatch.
+            static constexpr char kHello[] = "HELLO\t";
+            if (!line.startsWith(kHello)) {
+                rejectClient("missing HELLO");
+                return;
+            }
+            const QByteArray gotNonce = line.mid(sizeof(kHello) - 1).trimmed();
+            // Constant-time-ish compare via QByteArray::operator==; not a
+            // real timing-channel concern here (single LAN socket, no
+            // remote attacker, no oracle) but cheap to do right.
+            if (gotNonce != m_nonce.toLatin1()) {
+                rejectClient("nonce mismatch");
+                return;
+            }
+            m_authenticated = true;
+            qCInfo(lcVerbose) << "handoff: child authenticated";
+            continue;
+        }
         dispatch(line);
     }
 }
@@ -100,6 +158,7 @@ void HandoffServer::handleClientDisconnected()
         m_client->deleteLater();
         m_client = nullptr;
     }
+    m_authenticated = false;
     m_readBuf.clear();
     emit childDisconnected();
 }
@@ -129,7 +188,8 @@ void HandoffServer::dispatch(const QByteArray &line)
 
 void HandoffServer::send(const QByteArray &line)
 {
-    if (!m_client) return;
+    // Refuse to send commands to an unauthenticated peer.
+    if (!m_client || !m_authenticated) return;
     m_client->write(line);
     m_client->write("\n");
     m_client->flush();
