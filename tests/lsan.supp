@@ -1,0 +1,35 @@
+# LeakSanitizer suppressions for qiftop tests.
+#
+# Format: `leak:<substring match against any frame in the leak's stack>`.
+# See https://github.com/google/sanitizers/wiki/AddressSanitizerLeakSanitizer
+#
+# Keep this file minimal — every entry hides real leaks. Only suppress
+# leaks that are:
+#   (a) in third-party code we can't fix, AND
+#   (b) one-shot (per-process, not per-iteration) statics that don't
+#       compound under load.
+
+# Qt6 keeps a number of process-lifetime statics for Qt's own bookkeeping
+# (event-loop globals, locale data, plugin metadata caches). These are
+# allocated once and never freed by design.
+leak:libQt6Core.so
+leak:libQt6DBus.so
+leak:libQt6Network.so
+
+# glibc keeps a per-thread arena allocated for the main thread and a few
+# locale / iconv caches.
+leak:__nss_database_lookup
+leak:__libc_alloc_buffer_allocate
+leak:_dl_init
+
+# dbus-1 maintains a per-process connection cache and several pre-allocated
+# message-pool slabs.
+leak:libdbus-1.so
+
+# glib/GTK pulled in transitively by Qt's QGnomePlatform / GTK theme bridge
+# (g_malloc statics for type registration, locale data, etc.). Only matters
+# for tests that touch QWidget; one-shot, not cumulative.
+leak:libglib-2.0.so
+leak:libgobject-2.0.so
+leak:g_malloc
+leak:g_type_register_static

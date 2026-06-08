@@ -11,6 +11,11 @@ human-readable summary for *shipping* releases.
 ## [Unreleased]
 
 ### Added
+- `QIFTOP_TESTS_SANITIZE` CMake option (`OFF` / `address` /
+  `undefined` / `address+undefined` / `thread` / `leak`). Applies
+  sanitizer flags per-test-target only, leaving production binaries
+  untouched. Ships with `tests/lsan.supp` to filter Qt/glib/dbus
+  one-shot statics. 16/16 tests pass under `address+undefined`.
 - `SECURITY.md` documenting the vulnerability-reporting process. The
   agent runs as root with `CAP_NET_ADMIN`; a private channel for
   security reports is now linked from the README.

@@ -366,6 +366,25 @@ Unit tests live under `tests/` and are built by default
   session bus and tear down by recorded PID. None exist yet; add under
   `tests/integration/` with its own `add_subdirectory()` guard.
 
+* **Sanitizers (`-DQIFTOP_TESTS_SANITIZE=…`)** — opt-in per build dir,
+  applied **only to test targets** so production binaries stay clean.
+  Accepted values: `OFF` (default), `address`, `undefined`,
+  `address+undefined` (recommended for CI), `thread`, `leak`.
+  ```sh
+  cmake -B build-san -DCMAKE_BUILD_TYPE=Debug \
+      -DQIFTOP_TESTS_SANITIZE=address+undefined
+  cmake --build build-san -j$(nproc)
+  ctest --test-dir build-san --output-on-failure
+  ```
+  Per-test env (set by `qiftop_add_test()` when sanitizers are on)
+  includes `abort_on_error=1`, `halt_on_error=1`, full symbolisation
+  and LSan stack traces. False-positive leaks from Qt/glib/dbus
+  one-shot statics are suppressed via `tests/lsan.supp` — if you add
+  a new third-party dependency that leaks at process exit, append a
+  narrow `leak:libfoo.so` entry there (never broaden existing ones).
+  `thread` is mutually exclusive with `address`; use a separate build
+  dir for each.
+
 ### 5.6 The "pure-logic header" extraction pattern
 
 When you find yourself wanting to unit-test a lambda or member function

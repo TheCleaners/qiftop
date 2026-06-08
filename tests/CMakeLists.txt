@@ -4,11 +4,74 @@
 
 find_package(Qt6 REQUIRED COMPONENTS Test Core Network DBus Widgets)
 
+# Sanitizer support for tests only (production builds stay clean).
+#
+# Accepted values:
+#   OFF              — no sanitizers (default)
+#   address          — AddressSanitizer
+#   undefined        — UndefinedBehaviorSanitizer
+#   address+undefined — both (recommended for CI; ~2× slower, finds more bugs)
+#   thread           — ThreadSanitizer (incompatible with address)
+#   leak             — LeakSanitizer standalone (subset of address)
+#
+# Use:   cmake -B build -DQIFTOP_TESTS_SANITIZE=address+undefined
+# Then:  ctest --test-dir build --output-on-failure
+#
+# Only GCC and Clang are supported. The sanitizers are applied per-test-target
+# (compile + link flags) so that production binaries (`qiftop`, `qiftop-agent`)
+# remain unaffected and any package built from the same tree is shippable.
+set(QIFTOP_TESTS_SANITIZE "OFF" CACHE STRING
+    "Sanitizers to enable for test targets (OFF, address, undefined, address+undefined, thread, leak)")
+set_property(CACHE QIFTOP_TESTS_SANITIZE PROPERTY STRINGS
+    OFF address undefined address+undefined thread leak)
+
+set(_qiftop_san_compile "")
+set(_qiftop_san_link "")
+if(NOT QIFTOP_TESTS_SANITIZE STREQUAL "OFF")
+    if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+        message(FATAL_ERROR
+            "QIFTOP_TESTS_SANITIZE requires GCC or Clang (got ${CMAKE_CXX_COMPILER_ID})")
+    endif()
+    set(_san_list "")
+    if(QIFTOP_TESTS_SANITIZE STREQUAL "address")
+        list(APPEND _san_list "address")
+    elseif(QIFTOP_TESTS_SANITIZE STREQUAL "undefined")
+        list(APPEND _san_list "undefined")
+    elseif(QIFTOP_TESTS_SANITIZE STREQUAL "address+undefined")
+        list(APPEND _san_list "address" "undefined")
+    elseif(QIFTOP_TESTS_SANITIZE STREQUAL "thread")
+        list(APPEND _san_list "thread")
+    elseif(QIFTOP_TESTS_SANITIZE STREQUAL "leak")
+        list(APPEND _san_list "leak")
+    else()
+        message(FATAL_ERROR
+            "Unknown QIFTOP_TESTS_SANITIZE value '${QIFTOP_TESTS_SANITIZE}' "
+            "(expected one of: OFF, address, undefined, address+undefined, thread, leak)")
+    endif()
+    string(REPLACE ";" "," _san_csv "${_san_list}")
+    # -fno-omit-frame-pointer keeps stack traces readable;
+    # -g ensures symbols even in Release builds.
+    set(_qiftop_san_compile -fsanitize=${_san_csv} -fno-omit-frame-pointer -g)
+    set(_qiftop_san_link    -fsanitize=${_san_csv})
+    message(STATUS "qiftop: test targets built with -fsanitize=${_san_csv}")
+endif()
+
 function(qiftop_add_test name)
     add_executable(${name} ${ARGN})
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(${name} PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+    if(_qiftop_san_compile)
+        target_compile_options(${name} PRIVATE ${_qiftop_san_compile})
+        target_link_options(${name}    PRIVATE ${_qiftop_san_link})
+    endif()
     add_test(NAME ${name} COMMAND ${name})
+    if(_qiftop_san_compile)
+        # Make sanitizer diagnostics useful in CI: full backtraces, treat
+        # leaks as errors, ASan needs detect_leaks=1 to actually run LSan.
+        set_tests_properties(${name} PROPERTIES
+            ENVIRONMENT
+                "ASAN_OPTIONS=detect_leaks=1:abort_on_error=1:symbolize=1:strict_string_checks=1:detect_stack_use_after_return=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/tests/lsan.supp:print_suppressions=0")
+    endif()
 endfunction()
 
 qiftop_add_test(test_direction        test_direction.cpp)
