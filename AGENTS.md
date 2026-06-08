@@ -552,3 +552,26 @@ existing how-to), update **both**:
   `Qt::Popup` stays open until the user clicks outside or hits
   Escape. Anchored under the line edit's right edge so it doesn't
   cover what the user is typing.
+* **2026-06-07** — GitHub Actions CI + release automation.
+  - `.github/workflows/ci.yml` — push/PR builds against a matrix of
+    ubuntu-22.04 + ubuntu-24.04 × Debug + Release. Ninja generator,
+    `QIFTOP_BUILD_TESTS=ON`, `QIFTOP_AUTO_PACKAGE=OFF` (the POST_BUILD
+    cpack hook is only useful for local dev). Tests run under
+    `dbus-run-session` with `QT_QPA_PLATFORM=offscreen` and a writable
+    `HOME` redirected to `$RUNNER_TEMP/home` so QSettings /
+    Autostart tests don't trample the runner user.
+  - `.github/workflows/release.yml` — triggered on `v*` tag push.
+    Verifies `project(qiftop VERSION ...)` base matches the tag (`v0.2-rc1`
+    → `0.2`), runs the full test suite as a smoke check, packages
+    `cpack -G DEB`, computes `SHA256SUMS`, and publishes a GitHub
+    Release via `softprops/action-gh-release@v2` with auto-generated
+    notes (`generate_release_notes: true`). Prerelease flag is
+    auto-set when the tag contains `-`. Permissions scoped to
+    `contents: write` only.
+  - `.github/release.yml` — category grouping config for the
+    auto-generated notes (Breaking / Features / Fixes / Packaging /
+    Docs / Maintenance / Other), with `dependencies` label and
+    `dependabot`/`github-actions` author commits excluded.
+  - HACKING.md §9 rewritten around the automated path; manual cpack
+    fallback documented for offline release cuts. README.md gained a
+    CI status badge.

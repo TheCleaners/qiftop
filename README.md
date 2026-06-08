@@ -1,5 +1,7 @@
 # qiftop
 
+[![CI](https://github.com/ebenali/qiftop/actions/workflows/ci.yml/badge.svg)](https://github.com/ebenali/qiftop/actions/workflows/ci.yml)
+
 Qt6 iftop-style network monitor for Linux.
 
 `qiftop` is a Qt 6 GUI that visualises per-interface byte/packet counters

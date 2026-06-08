@@ -1,0 +1,146 @@
+name: Release
+
+# Triggered when a version tag (v*) is pushed. Builds the .deb packages
+# on a clean Ubuntu runner and publishes them as assets on an
+# auto-generated GitHub Release with auto-generated release notes
+# (diff against the previous tag).
+#
+# To cut a release:
+#   git tag -a v0.2 -m "qiftop 0.2"
+#   git push origin v0.2
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required to create the release
+
+jobs:
+  build-deb:
+    name: Build .deb (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tags + full history so release notes diff works
+
+      - name: Derive version from tag
+        id: ver
+        run: |
+          # Strip leading 'v' from the tag (v0.2 -> 0.2).
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Release version: ${version}"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            libgl1-mesa-dev \
+            libnl-3-dev libnl-route-3-dev \
+            libnetfilter-conntrack-dev \
+            file fakeroot
+
+      - name: Configure
+        # The project() VERSION in CMakeLists.txt is the single source
+        # of truth for CPACK_PACKAGE_VERSION; we verify below that it
+        # matches the pushed tag rather than overriding it.
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQIFTOP_BUILD_TESTS=ON \
+            -DQIFTOP_AUTO_PACKAGE=OFF
+
+      - name: Verify project version matches tag
+        run: |
+          proj_ver=$(grep -E '^project\(qiftop VERSION' CMakeLists.txt \
+                     | sed -E 's/.*VERSION ([0-9][0-9.]*).*/\1/')
+          want="${{ steps.ver.outputs.version }}"
+          # Strip any prerelease suffix (-rc1, -beta) from the tag for
+          # the equality check; project() VERSION can't carry those.
+          want_base="${want%%-*}"
+          if [ "$proj_ver" != "$want_base" ]; then
+            echo "::error::CMakeLists.txt project() VERSION=$proj_ver does not match tag base $want_base"
+            echo "Bump project(qiftop VERSION ...) in CMakeLists.txt and re-tag."
+            exit 1
+          fi
+          echo "OK: project version $proj_ver matches tag $want"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test (smoke)
+        working-directory: build
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export HOME="${RUNNER_TEMP}/home"
+          mkdir -p "$HOME"
+          sudo apt-get install -y --no-install-recommends dbus-x11
+          dbus-run-session -- ctest --output-on-failure --no-tests=error
+
+      - name: Package (.deb)
+        working-directory: build
+        run: |
+          cpack -G DEB -V
+          ls -la *.deb
+
+      - name: Compute checksums
+        working-directory: build
+        run: |
+          sha256sum *.deb > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qiftop-debs-${{ steps.ver.outputs.version }}
+          path: |
+            build/*.deb
+            build/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build-deb
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qiftop-debs-${{ needs.build-deb.outputs.version }}
+          path: dist
+
+      - name: List assets
+        run: ls -la dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: qiftop ${{ needs.build-deb.outputs.version }}
+          draft: false
+          # Mark as prerelease automatically for tags like v0.2-rc1, v0.2-beta.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Auto-generated notes diff against the previous tag.
+          # Customizable via .github/release.yml if you want curated
+          # categories / excluded labels.
+          generate_release_notes: true
+          files: |
+            dist/*.deb
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

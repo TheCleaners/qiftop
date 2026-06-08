@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# Cancel in-progress runs for the same branch/PR when a new commit is pushed.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (${{ matrix.os }}, ${{ matrix.build_type }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04]
+        build_type: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            libgl1-mesa-dev \
+            libnl-3-dev libnl-route-3-dev \
+            libnetfilter-conntrack-dev \
+            dbus-x11
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DQIFTOP_BUILD_TESTS=ON \
+            -DQIFTOP_AUTO_PACKAGE=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        # Tests touch QSettings / autostart files; give them an HOME they
+        # can write to. dbus-run-session keeps QtTest helpers that touch
+        # the session bus happy.
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export HOME="${RUNNER_TEMP}/home"
+          mkdir -p "$HOME"
+          dbus-run-session -- ctest --output-on-failure --no-tests=error
