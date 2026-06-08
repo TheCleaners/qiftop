@@ -209,11 +209,11 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 
 ### 6.1 Tiers
 
-| Tier              | What                                                  | Privilege     | Where         |
-|-------------------|-------------------------------------------------------|---------------|---------------|
-| **unit**          | Pure logic, no I/O, no DBus, no kernel.               | none          | `tests/`      |
-| **integration**   | Spin up `qiftop-agent --session` + drive over DBus.   | none          | (not yet)     |
-| **end-to-end**    | Real system bus, real conntrack. Manual / CI runner.  | root          | (not yet)     |
+| Tier              | What                                                  | Privilege     | Where                                |
+|-------------------|-------------------------------------------------------|---------------|--------------------------------------|
+| **unit**          | Pure logic, no I/O, no DBus, no kernel.               | none          | `tests/`                             |
+| **integration**   | Spin up `qiftop-agent --session` + drive over DBus.   | none          | `tests/test_agent_integration.cpp`   |
+| **end-to-end**    | Real system bus, real conntrack. Manual / CI runner.  | root          | (not yet)                            |
 
 ### 6.2 What's currently covered
 
@@ -225,23 +225,22 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_filter`              | Filter mini-language parser + evaluator (every field/op)          |
 | `test_settings_migration`  | `Settings` legacy-key migration logic                             |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
+| `test_exporter`            | JSON quint64-as-string, qint64 numeric, CSV formula-injection     |
+| `test_idle`                | `IdleManager` cadence, hints, TTL, 64-cap, degrade, NameOwnerChanged |
+| `test_dns_cache`           | `QtDnsResolver` LRU bound, batch eviction, key dedup              |
+| `test_handoff_auth`        | `HandoffServer` nonce auth (HELLO + 256-bit), pre-auth size cap   |
+| `test_proxies`             | `ConnectionFilterProxy` + `InterfaceFilterProxy` visibility rules |
+| `test_agent_integration`   | Spawns real `qiftop-agent --session`, drives Version/Capabilities/GetInterfaces/SetDesiredIntervalMs end-to-end |
 
 ### 6.3 Gaps worth filling
 
 1. **`dbus::Types` round-trip** — `Connection` ↔ `ConnectionDto` ↔
    `QDBusArgument`. Pure marshalling; should be trivial to test.
-2. **`IdleManager` cadence** — uses `QElapsedTimer` + `QTimer`. Pattern:
-   inject fake monitors via the existing `NetworkMonitor` /
-   `ConnectionMonitor` abstract interfaces; exercise base cadence,
-   slow-down at 30s / pause at 60s, wake on `noteActivity()`, hint TTL,
-   `min()` across multiple hints, clamp at `minIntervalMs`.
-3. **`ConnectionFilterProxy` / `InterfaceFilterProxy` visibility** —
-   empty iface set, named ifaces, the empty-string sentinel for
-   unattributed flows, proto toggles, expression-filter wiring.
-4. **Integration** — spawn agent on a private session bus, assert
-   `GetInterfaces` returns non-empty within a 1s deadline, assert
-   `SetDesiredIntervalMs(250)` produces `StatsChanged` events at ≥3 Hz
-   for the next 2s.
+2. **`ConntrackMonitor::Worker` per-flow diff math** — once extracted
+   per §6.4 #3, the diff/accounting logic can be exercised without a
+   live conntrack handle.
+3. **End-to-end with a real conntrack table** — requires root; needs a
+   CI runner with `CAP_NET_ADMIN` or a privileged container.
 
 ### 6.4 Refactors that would unblock more testing
 

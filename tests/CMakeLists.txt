@@ -53,3 +53,17 @@ qiftop_add_test(test_proxies
     ${CMAKE_SOURCE_DIR}/src/ui/InterfaceFilterProxy.cpp
     ${CMAKE_SOURCE_DIR}/src/util/ConnectionFilter.cpp)
 target_link_libraries(test_proxies PRIVATE Qt6::Widgets)
+
+# Integration test: spawns the actual qiftop-agent binary against a session
+# bus and drives the live DBus contract end-to-end. Slow (~6 s; baseline +
+# fast windows + spawn/teardown per test method) so it's gated behind
+# QIFTOP_BUILD_INTEGRATION_TESTS=ON. CI enables it explicitly.
+option(QIFTOP_BUILD_INTEGRATION_TESTS
+       "Build integration tests (require a running session DBus)" ON)
+if(QIFTOP_BUILD_INTEGRATION_TESTS)
+    qiftop_add_test(test_agent_integration test_agent_integration.cpp)
+    target_link_libraries(test_agent_integration PRIVATE Qt6::DBus)
+    target_compile_definitions(test_agent_integration PRIVATE
+        "QIFTOP_AGENT_BINARY=\"$<TARGET_FILE:qiftop-agent>\"")
+    add_dependencies(test_agent_integration qiftop-agent)
+endif()
