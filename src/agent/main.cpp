@@ -207,6 +207,7 @@ int main(int argc, char *argv[])
 
     const auto idleCfg = loadIdleConfig(parser.value(configOpt));
     qiftop::agent::IdleManager idle(&netMonitor, &connMonitor, idleCfg);
+    idle.attachBus(bus); // drop hints immediately on peer disconnect
     ifaceSvc.setIdleManager(&idle);
     connSvc.setIdleManager(&idle);
 

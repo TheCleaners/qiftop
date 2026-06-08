@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDBusConnection>
 #include <QElapsedTimer>
 #include <QHash>
 #include <QObject>
@@ -23,6 +24,13 @@ namespace qiftop::agent {
 //
 // Any incoming method call resets the timer and immediately restores the
 // active interval. Process stays alive; only polling is paused.
+//
+// Emits cadenceChanged() on every effective interval transition so that
+// observers (and clients via a DBus mirror) can tell when the agent has
+// slowed down, sped up, or paused. Clients use this to notice that their
+// own SetDesiredIntervalMs heartbeat has slipped past hintTtlMs (e.g.
+// after a UI hang or suspend/resume) without inferring from missing
+// StatsChanged signals.
 class IdleManager : public QObject {
     Q_OBJECT
 
@@ -43,6 +51,18 @@ public:
                 Config cfg, QObject *parent = nullptr);
 
     [[nodiscard]] Config config() const { return m_cfg; }
+    [[nodiscard]] int    currentIntervalMs() const { return m_currentMs; }
+
+    // Subscribe to NameOwnerChanged on `bus` so hints from peers that
+    // disconnect are dropped immediately instead of lingering until TTL
+    // expiry. Safe to skip (e.g. in unit tests with no bus); TTL is the
+    // belt-and-braces fallback.
+    void attachBus(const QDBusConnection &bus);
+
+signals:
+    // Emitted whenever applyInterval() actually changes the polling rate.
+    // `ms <= 0` means polling is paused.
+    void cadenceChanged(int ms);
 
 public slots:
     // Call from every incoming DBus method handler.
@@ -55,10 +75,14 @@ public slots:
 
 private slots:
     void evaluate();
+    void onNameOwnerChanged(const QString &name,
+                            const QString &oldOwner,
+                            const QString &newOwner);
 
 private:
     int  effectiveActiveIntervalMs();
     void applyInterval(int ms);
+    [[nodiscard]] qint64 nowMs() const { return m_clock.elapsed(); }
 
     struct Hint { int ms; qint64 expiresAtMs; };
 
@@ -66,9 +90,10 @@ private:
     ConnectionMonitor   *m_conn     = nullptr;
     Config               m_cfg;
     QTimer              *m_timer    = nullptr;
-    QElapsedTimer        m_since;
-    int                  m_currentMs = -1;       // last applied interval
-    QHash<QString, Hint> m_hints;                // sender → hint
+    QElapsedTimer        m_since;                 // since last noteActivity
+    QElapsedTimer        m_clock;                 // monotonic clock for hint expiry
+    int                  m_currentMs = -1;        // last applied interval
+    QHash<QString, Hint> m_hints;                 // sender → hint
 };
 
 } // namespace qiftop::agent
