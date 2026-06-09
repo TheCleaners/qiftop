@@ -16,6 +16,7 @@
 //             | bytes_in | bytes_out | bytes
 //             | pkts_in  | pkts_out  | pkts
 //             | rate_in  | rate_out  | rate
+//             | pid | uid | comm | runtime | container | chain_has
 //
 // Semantics:
 //   "field:val"   string field: case-insensitive substring; numeric field: ==

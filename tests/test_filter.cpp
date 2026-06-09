@@ -215,6 +215,108 @@ private slots:
         QVERIFY2(res.error.isEmpty(), qPrintable(res.error));
         QVERIFY(res.expr != nullptr);
     }
+
+    // ---- v0.4 attribution fields --------------------------------------
+
+    void pidUidNumericFields()
+    {
+        Connection c = mkConn(L4Proto::Tcp, "10.0.0.5", 8080, "1.2.3.4", 443);
+        c.process.pid = 1234;
+        c.process.uid = 33;
+        Context ctx{c};
+
+        QVERIFY( matches(QStringLiteral("pid=1234"),  ctx));
+        QVERIFY(!matches(QStringLiteral("pid=9999"),  ctx));
+        QVERIFY( matches(QStringLiteral("pid>1000"),  ctx));
+        QVERIFY( matches(QStringLiteral("pid<=1234"), ctx));
+        QVERIFY( matches(QStringLiteral("uid=33"),    ctx));
+        QVERIFY( matches(QStringLiteral("uid!=0"),    ctx));
+    }
+
+    void commStringField()
+    {
+        Connection c = mkConn(L4Proto::Tcp, "10.0.0.5", 8080, "1.2.3.4", 443);
+        c.process.pid  = 1; // any non-zero so the row is "attributed"
+        c.process.comm = QStringLiteral("nginx");
+        Context ctx{c};
+
+        QVERIFY( matches(QStringLiteral("comm:ng"),     ctx));
+        QVERIFY( matches(QStringLiteral("comm=nginx"),  ctx));
+        QVERIFY( matches(QStringLiteral("comm~^ng"),    ctx));
+        QVERIFY(!matches(QStringLiteral("comm=apache"), ctx));
+    }
+
+    void runtimeField()
+    {
+        Connection c = mkConn(L4Proto::Tcp, "10.0.0.5", 8080, "1.2.3.4", 443);
+        c.container.runtime = QStringLiteral("docker");
+        c.container.id      = QStringLiteral("af85275074f5");
+        c.container.name    = QStringLiteral("web");
+        Context ctx{c};
+
+        QVERIFY( matches(QStringLiteral("runtime:docker"),  ctx));
+        QVERIFY( matches(QStringLiteral("runtime=DOCKER"),  ctx)); // case-insensitive
+        QVERIFY(!matches(QStringLiteral("runtime=podman"),  ctx));
+    }
+
+    void containerMatchesIdRuntimeOrName()
+    {
+        // `container` is the multi-haystack equivalent of `host` for the
+        // attribution columns: substring matches across runtime + id +
+        // name so the user types "container:web" without having to know
+        // whether they're matching a name or an id.
+        Connection c = mkConn(L4Proto::Tcp, "10.0.0.5", 8080, "1.2.3.4", 443);
+        c.container.runtime = QStringLiteral("docker");
+        c.container.id      = QStringLiteral("af85275074f5");
+        c.container.name    = QStringLiteral("web-frontend");
+        Context ctx{c};
+
+        QVERIFY( matches(QStringLiteral("container:web"),       ctx));
+        QVERIFY( matches(QStringLiteral("container:af85"),      ctx));
+        QVERIFY( matches(QStringLiteral("container:docker"),    ctx));
+        QVERIFY( matches(QStringLiteral("container=web-frontend"), ctx));
+        QVERIFY(!matches(QStringLiteral("container=missing"),   ctx));
+    }
+
+    void chainHasMatchesAnyAncestor()
+    {
+        // `chain_has` walks the OUTER→INNER nesting and matches if ANY
+        // entry's runtime / id / name substring-matches the value.
+        // Used for "show me everything that's somewhere under k8s".
+        Connection c = mkConn(L4Proto::Tcp, "10.0.0.5", 8080, "1.2.3.4", 443);
+        c.containerChain = {
+            qiftop::backend::ContainerInfo{
+                QStringLiteral("kubernetes"),
+                QStringLiteral("pod-uid-abc"), {}},
+            qiftop::backend::ContainerInfo{
+                QStringLiteral("containerd"),
+                QStringLiteral("cid12345678"),
+                QStringLiteral("workload")},
+        };
+        Context ctx{c};
+
+        QVERIFY( matches(QStringLiteral("chain_has:kubernetes"), ctx));
+        QVERIFY( matches(QStringLiteral("chain_has:containerd"), ctx));
+        QVERIFY( matches(QStringLiteral("chain_has:workload"),   ctx));
+        QVERIFY( matches(QStringLiteral("chain_has:cid123"),     ctx));
+        QVERIFY(!matches(QStringLiteral("chain_has:docker"),     ctx));
+    }
+
+    void attributionFieldsDefaultToEmpty()
+    {
+        // Unattributed flow (default Connection): nothing matches any of
+        // the new fields. Critically `pid=0` MUST match so "show me
+        // unattributed flows" works as a filter idiom.
+        Connection c = mkConn(L4Proto::Tcp, "10.0.0.5", 8080, "1.2.3.4", 443);
+        Context ctx{c};
+
+        QVERIFY( matches(QStringLiteral("pid=0"),         ctx));
+        QVERIFY(!matches(QStringLiteral("pid>0"),         ctx));
+        QVERIFY(!matches(QStringLiteral("comm:nginx"),    ctx));
+        QVERIFY(!matches(QStringLiteral("runtime:docker"),ctx));
+        QVERIFY(!matches(QStringLiteral("container:web"), ctx));
+        QVERIFY(!matches(QStringLiteral("chain_has:k8s"), ctx));
+    }
 };
 
 QTEST_MAIN(TestFilter)

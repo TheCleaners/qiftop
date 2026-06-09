@@ -121,7 +121,7 @@ Wire format is **native Qt marshalling, NOT JSON** (`a(yysqysqtttts)` for connec
 
 ## Filter expression mini-language
 
-The Connections view supports a filter mini-language implemented in `src/util/ConnectionFilter.{h,cpp}` (pure, no Qt model/view dep). Grammar: boolean (`and`/`or`/`not`, parens), string fields (`proto`, `src`, `dst`, `host`, `iface`, `family`, `direction`), numeric fields (`sport/dport/port`, `bytes_in/out/total`, `pkts_in/out/total`, `rate_in/out/total`), ops (`: = != ~ < <= > >=`), byte suffixes (`K/Ki/M/Mi/G/Gi/T/Ti`). Evaluated against a `qiftop::filter::Context` built from model roles. See `helpHtml()` for the user-facing syntax sheet.
+The Connections view supports a filter mini-language implemented in `src/util/ConnectionFilter.{h,cpp}` (pure, no Qt model/view dep). Grammar: boolean (`and`/`or`/`not`, parens), string fields (`proto`, `src`, `dst`, `host`, `iface`, `family`, `direction`, `comm`, `runtime`, `container`, `chain_has`), numeric fields (`sport/dport/port`, `bytes_in/out/total`, `pkts_in/out/total`, `rate_in/out/total`, `pid`, `uid`), ops (`: = != ~ < <= > >=`), byte suffixes (`K/Ki/M/Mi/G/Gi/T/Ti`). Multi-haystack fields (`host`, `container`, `chain_has`) split their value into multiple lines and use any-match for `:`/`=`/`~`, all-match for `!=`. Evaluated against a `qiftop::filter::Context` built from model roles. See `helpHtml()` for the user-facing syntax sheet.
 
 ## Dependencies
 
