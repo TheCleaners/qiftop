@@ -232,6 +232,27 @@ a `*.service` slice shouldn't be relabelled `systemd` just because
 some ancestor segment happens to look like a unit — the
 `kubepods`/`containerd` segments are more informative.
 
+### 5b. Naked k8s vs. k3d — chain shape as a regression assertion
+
+The chain shape is the cheapest *distinguishing* signal between
+"real" k8s and k8s-in-docker, and the test suite exercises both:
+
+| Flavour                  | Tier-1 fixture                                    | Tier-2 runner       | Expected chain (outer → inner) |
+|--------------------------|---------------------------------------------------|---------------------|-------------------------------|
+| Docker plain             | `docker_cgroupfs_v2.txt`                          | `run-docker.sh`     | `[docker]`                    |
+| k3d (k8s-in-docker)      | `k3d_in_docker.txt`                               | `run-k3d.sh`        | `[docker, kubernetes, containerd]` (depth 3) |
+| Naked k8s, cgroupfs      | `k8s_naked_cgroupfs.txt`                          | `run-k8s.sh` (k0s)  | `[kubernetes, containerd]` (depth 2, **no `docker`**) |
+| Naked k8s, systemd       | `k8s_naked_systemd.txt`                           | `run-k8s.sh` (k0s)  | `[kubernetes, containerd]` (depth 2, **no `docker`**) |
+
+The Tier-2 `run-k8s.sh` includes a `grep -q '"runtime":"docker"'`
+post-check on the probe's JSON output that MUST fail — catching any
+future change to `classifyPathChain` that hallucinates a phantom
+docker wrapper around naked containerd pods. The k0s runner uses
+`k0s install controller --single`, started lazily by the runner so
+`vagrant up` stays fast for developers only iterating on the docker
+runner. (See AGENTS.md §6.5a for the cross-runner ordering gotcha
+that this k0s install creates on shared VMs.)
+
 ---
 
 ## 6. Data source #3 — cross-namespace netns scanning

@@ -84,49 +84,14 @@ jobs:
       - name: run attribution probe against podman
         run: sudo --preserve-env=PATH ctest --test-dir build -R attribution_podman --output-on-failure -V
 
-  attribution-k3d:
-    name: attribution / k3d / ubuntu-24.04
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: install build deps + kubectl + k3d
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config \
-            qt6-base-dev libqt6dbus6 \
-            libnl-3-dev libnl-route-3-dev libnetfilter-conntrack-dev \
-            iproute2 curl ca-certificates
-          # kubectl — pinned to match the k3s shipped with k3d below.
-          KUBECTL_VER=v1.30.4
-          curl -sSLo /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
-          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
-          # k3d.
-          K3D_VER=v5.7.4
-          curl -sSL "https://github.com/k3d-io/k3d/releases/download/${K3D_VER}/k3d-linux-amd64" \
-            | sudo install -m 0755 /dev/stdin /usr/local/bin/k3d
-          # Pre-pull the k3s image so cluster create doesn't burn 90s.
-          docker pull rancher/k3s:v1.30.4-k3s1
-          docker pull alpine:3.20
-
-      - name: verify k3d + docker
-        run: |
-          docker info
-          k3d version
-          kubectl version --client
-
-      - name: configure
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DQIFTOP_BUILD_TESTS=ON \
-            -DQIFTOP_BUILD_INTEGRATION_TESTS=OFF \
-            -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON
-
-      - name: build probe
-        run: cmake --build build --target qiftop-attribution-probe -j
-
-      - name: run attribution probe against k3d
-        run: sudo --preserve-env=PATH ctest --test-dir build -R attribution_k3d --output-on-failure -V
+  # NOTE: attribution_k3d is deliberately NOT a CI job.
+  #   - Cold k3d cluster bring-up is ~30s on a fresh GHA runner.
+  #   - The runner needs docker + kubectl + k3d + a 200MB k3s image
+  #     pull; total job wall-time is 3-4 minutes vs ~30s for docker/podman.
+  #   - The chain shape it exercises (docker → kubernetes → containerd)
+  #     is unit-tested in tests/test_cgroup_parse.cpp::k3sPodInDockerPrefersInnermost
+  #     and ::k8sCgroupfsDriverK3dShape — the value of the integration
+  #     test is end-to-end via NetnsScanner, not regex coverage.
+  #   - Run locally inside the Vagrant VM via
+  #     `scripts/local-integration.sh --runtime k3d` whenever the
+  #     classifier or NetnsScanner changes.

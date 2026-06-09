@@ -38,11 +38,11 @@ qiftop_apply_attribution_defs(qiftop-attribution-probe)
 # Register a ctest entry per runtime, all labelled "attribution-integration".
 # Each runner script knows how to bring up its runtime, drive the probe,
 # and tear down. Exit 77 = ctest SKIP (runtime missing or unhealthy).
-foreach(runtime docker podman k3d)
-    # k3d needs more time: cold cluster bring-up (~30s) + pod schedule
+foreach(runtime docker podman k3d k8s)
+    # k3d / k8s need more time: cold cluster bring-up (~30s) + pod schedule
     # (~10s) + flow observation. docker/podman are <15s end-to-end.
     set(_to 90)
-    if(runtime STREQUAL "k3d")
+    if(runtime STREQUAL "k3d" OR runtime STREQUAL "k8s")
         set(_to 180)
     endif()
     add_test(

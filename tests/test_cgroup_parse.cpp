@@ -221,6 +221,42 @@ private slots:
         QCOMPARE(chain[2].id, QStringLiteral("847e0a2e4c8b"));
     }
 
+    void k8sNakedCgroupfsDriver()
+    {
+        // Naked k8s (k0s/kubeadm/kubelet directly on host) with the
+        // cgroupfs driver: same kubepods/pod/<64hex> shape as k3d's
+        // INNER segments but WITHOUT the docker wrapper. Chain must
+        // be depth 2 (kubernetes → containerd), never 3.
+        const QString cid64(64, QLatin1Char('c'));
+        const auto path = QStringLiteral(
+            "/kubepods/besteffort/poddeadbeef-1234-5678-9abc-def012345678"
+            "/%1").arg(cid64);
+        const auto chain = qiftop::backend::cgroup::classifyPathChain(path);
+        QCOMPARE(chain.size(), 2);
+        QCOMPARE(chain[0].runtime, QStringLiteral("kubernetes"));
+        QCOMPARE(chain[0].id, QStringLiteral("deadbeef-123"));
+        QCOMPARE(chain[1].runtime, QStringLiteral("containerd"));
+        QCOMPARE(chain[1].id, QString(12, QLatin1Char('c')));
+    }
+
+    void k8sNakedSystemdDriver()
+    {
+        // Naked k8s with the systemd cgroup driver (kubelet
+        // --cgroup-driver=systemd): kubepods.slice + cri-containerd
+        // scope leaf, no docker wrapper. Chain depth 2.
+        const QString cid64(64, QLatin1Char('c'));
+        const auto path = QStringLiteral(
+            "/kubepods.slice/kubepods-besteffort.slice"
+            "/kubepods-besteffort-poddeadbeef_1234_5678_9abc_def012345678.slice"
+            "/cri-containerd-%1.scope").arg(cid64);
+        const auto chain = qiftop::backend::cgroup::classifyPathChain(path);
+        QCOMPARE(chain.size(), 2);
+        QCOMPARE(chain[0].runtime, QStringLiteral("kubernetes"));
+        QVERIFY(chain[0].id.startsWith(QStringLiteral("deadbeef")));
+        QCOMPARE(chain[1].runtime, QStringLiteral("containerd"));
+        QCOMPARE(chain[1].id, QString(12, QLatin1Char('c')));
+    }
+
     void kubepodsFallbackWhenNoRuntimeScope()
     {
         // If the leaf isn't a recognised runtime scope but the path

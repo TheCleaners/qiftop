@@ -83,7 +83,7 @@ if [[ -z $RUNTIME ]]; then
     CTEST_FILTER='attribution_'
 else
     case "$RUNTIME" in
-        docker|podman|k3d) CTEST_FILTER="attribution_${RUNTIME}\$" ;;
+        docker|podman|k3d|k8s) CTEST_FILTER="attribution_${RUNTIME}\$" ;;
         *) echo "unknown runtime: $RUNTIME" >&2; exit 2 ;;
     esac
 fi

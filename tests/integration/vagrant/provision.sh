@@ -42,6 +42,30 @@ if ! command -v k3d >/dev/null 2>&1 || \
     chmod +x /usr/local/bin/k3d
 fi
 
+echo "==> install k0s (single-binary 'naked' k8s — runs directly on the VM,"
+echo "    NOT inside a docker container like k3d. Exercises the cgroup path"
+echo "    shape we'd see on a real production k8s node.)"
+K0S_VERSION="v1.30.4+k0s.0"
+if ! command -v k0s >/dev/null 2>&1 || \
+   [[ "$(k0s version 2>/dev/null)" != "$K0S_VERSION" ]]; then
+    # k0s ships a curl|sh installer; we run their pinned binary directly
+    # for reproducibility.
+    curl -fsSL "https://github.com/k0sproject/k0s/releases/download/${K0S_VERSION}/k0s-${K0S_VERSION}-amd64" \
+        -o /usr/local/bin/k0s
+    chmod +x /usr/local/bin/k0s
+fi
+
+# Install k0s as a systemd service if it isn't already. --single =
+# all-in-one controller+worker on one node, no etcd cluster, perfect
+# for an integration runner. Idempotent: 'k0s install' refuses to
+# overwrite an existing unit, so we suppress that one specific error.
+if [[ ! -f /etc/systemd/system/k0scontroller.service ]]; then
+    k0s install controller --single
+fi
+# Start it lazily — the test runner is what cares whether it's up.
+# Starting at provision time would extend `vagrant up` by another
+# ~20s for every developer, even those running only docker tests.
+
 echo "==> NOPASSWD sudo for the vagrant user (override host sudoers timeout)"
 # Vagrant boxes already ship this, but be explicit so a re-provision on
 # a customized box can't silently regress and reintroduce password prompts

@@ -38,15 +38,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$RUNTIME" in
-    docker|podman|k3d) ;;
+    docker|podman|k3d|k8s) ;;
     crio)
-        echo "runtime '$RUNTIME' planned but not yet implemented; supported: docker, podman, k3d" >&2
+        echo "runtime '$RUNTIME' planned but not yet implemented; supported: docker, podman, k3d, k8s" >&2
         exit 2 ;;
     *) echo "unknown runtime '$RUNTIME'" >&2; exit 2 ;;
 esac
 
-if ! command -v "$RUNTIME" >/dev/null 2>&1; then
-    echo "$RUNTIME not in PATH" >&2; exit 2
+# `k8s` is satisfied by `k0s` on the host; the binary on PATH check below
+# uses the runner-side tool name, so map and skip the host check for it.
+HOST_TOOL="$RUNTIME"
+if [[ "$RUNTIME" == "k8s" ]]; then HOST_TOOL="k0s"; fi
+if ! command -v "$HOST_TOOL" >/dev/null 2>&1; then
+    echo "$HOST_TOOL not in PATH" >&2; exit 2
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -409,6 +409,8 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_cgroup_real_fixtures` | Data-driven: 13 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, host scopes). Adding a runtime = drop a fixture + add one table row. |
 | `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |
 | `attribution_podman` (Tier-2) | Sibling of `attribution_docker` using rootful podman + netavark; exercises the `libpod-<id>.scope` cgroup hierarchy that the docker path never produces. SKIPs cleanly on hosts where rootful podman can't start a container (e.g. logind rlimit-delegation quirks). |
+| `attribution_k3d` (Tier-2) | k3s-in-docker (k3d). Exercises the **nested** container chain (`docker → kubernetes → containerd`, depth 3) — the leaf-wins segment-walk has to land on the innermost containerd CID, not on the outer k3s node container. Local-only (Vagrant); not in CI (cold k3d image pull is ~3–4 min, the chain shape is already pinned by Tier-1 fixtures). |
+| `attribution_k8s` (Tier-2) | "Naked" k8s via **k0s --single** (single-binary, no docker wrapper). Distinguishing assertion vs. k3d: chain depth is exactly 2 (`kubernetes → containerd`) and the JSON MUST NOT contain `"runtime":"docker"`. Catches phantom-wrapper bugs in `classifyPathChain`. Local-only (Vagrant). |
 
 ### 6.3 Gaps worth filling
 
@@ -417,11 +419,13 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
    live conntrack handle.
 2. **End-to-end with a real conntrack table** — requires root; needs a
    CI runner with `CAP_NET_ADMIN` or a privileged container.
-3. **Tier-2 attribution: more runtimes.** Docker and rootful podman
-   runners shipped (`tests/integration/attribution/runners/`); both run
-   in CI on push-to-main / dispatch / release. k3d (k8s) and cri-o
-   runners still pending — the probe binary contract is reusable, only
-   the bring-up scripts differ.
+3. **Tier-2 attribution: more runtimes.** Docker + rootful podman + k3d +
+   naked k8s (k0s) runners shipped (`tests/integration/attribution/runners/`).
+   Only docker + podman run in CI on push-to-main / dispatch / release —
+   k3d/k8s are local-only via the Vagrant harness (cold bring-up is
+   several minutes; the chain shapes are pinned by Tier-1 unit fixtures).
+   cri-o runner still pending — the probe binary contract is reusable,
+   only the bring-up script differs.
 
 ### 6.3a Validating against real-world container runtimes
 
@@ -503,6 +507,35 @@ containerised pending availability of a native ubuntu-26.04 GitHub
 Actions runner image. `HOME` is redirected to
 `$RUNNER_TEMP/home` so QSettings/Autostart tests don't trample the
 runner user. See docs/HACKING.md §5.5 for the test-writing conventions.
+
+`.github/workflows/integration.yml` runs the Tier-2 attribution
+runners (docker + podman only) on push-to-main / dispatch / release.
+k3d and k8s runners exist but only run locally via the Vagrant
+harness — cold bring-up is 3–4 min each and the chain shapes are
+already pinned by Tier-1 unit fixtures (`k3dInDockerCgroupfs`,
+`k8sNakedCgroupfsDriver`, `k8sNakedSystemdDriver` etc.).
+
+### 6.5a Vagrant runner ordering (local Tier-2)
+
+The Vagrant VM at `tests/integration/vagrant/` is the supported home
+for the heavyweight runners (k3d, naked k8s). One sharp edge to
+remember when iterating:
+
+* **k0s bundles kube-router**, which inserts persistent rules into
+  the host's `INPUT` (`KUBE-FIREWALL`, `KUBE-ROUTER-INPUT`) and
+  `FORWARD` chains and leaves zombie veth devices on `cni-podman0` /
+  `docker0`. These survive `systemctl stop k0scontroller`.
+* Symptom: `attribution_podman` fails with `ss did not observe an
+  inbound flow on :18081` even though `podman run ... alpine` works
+  for trivial cases — packets from the container never reach the
+  host bridge because kube-router has hijacked forwarding.
+* ctest orders the runners by test number: 23 docker → 24 podman →
+  25 k3d → 26 k8s, so a single cold-boot run is fine. If you re-run
+  podman after k8s/k3d started on the same boot, **`vagrant reload
+  --no-provision` first** (or destroy + recreate). Cheaper than
+  fighting the rules. Don't be tempted to flush iptables manually —
+  netavark's chain references go stale and you'll spend an hour
+  debugging zombie veths.
 
 ---
 
