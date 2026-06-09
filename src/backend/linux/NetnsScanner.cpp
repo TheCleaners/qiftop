@@ -153,7 +153,26 @@ private slots:
             if (!ino || *ino == m_anchorInode) continue;
             if (!seen.insert(*ino).second) continue;
             netnses.emplace_back(*ino, pid);
-            if (int(netnses.size()) >= kMaxNetnsesPerTick) break;
+            if (int(netnses.size()) >= kMaxNetnsesPerTick) {
+                // High-density Kubernetes worker nodes routinely run
+                // 100-250 pods per host; the per-tick cap protects the
+                // agent against pathological 1000+ container hosts but
+                // ALSO silently drops attribution for everything past
+                // the cap. Warn once per process lifetime so the
+                // condition is visible in journalctl instead of
+                // manifesting as "some container flows show up as
+                // (host)" in the UI with no obvious cause.
+                if (!m_warnedNetnsCap) {
+                    qWarning("NetnsScanner: per-tick netns cap of %d hit "
+                             "(at least one more netns was skipped). "
+                             "Container-side flows in those namespaces "
+                             "will report as host until the cap is "
+                             "raised in NetnsScanner.cpp.",
+                             kMaxNetnsesPerTick);
+                    m_warnedNetnsCap = true;
+                }
+                break;
+            }
         }
         ::closedir(procDir);
 
@@ -306,6 +325,7 @@ private:
     QTimer             *m_timer       = nullptr;
     int                 m_anchorFd    = -1;
     quint64             m_anchorInode = 0;
+    bool                m_warnedNetnsCap = false;
 };
 
 // ===========================================================================
