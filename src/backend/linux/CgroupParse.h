@@ -78,9 +78,20 @@ namespace qiftop::backend::cgroup {
         QStringLiteral("cri-containerd-([0-9a-f]{64})\\.scope"));
     if (const auto m = rxCriContainerd.match(path); m.hasMatch())
         return ContainerInfo{QStringLiteral("containerd"), m.captured(1).left(12), {}};
+
+    // --- CRI-O ------------------------------------------------------------
+    // Real path:  /kubepods.slice/.../crio-<64hex>.scope
+    static const QRegularExpression rxCrio(
+        QStringLiteral("(?:^|/)crio-([0-9a-f]{64})\\.scope"));
+    if (const auto m = rxCrio.match(path); m.hasMatch())
+        return ContainerInfo{QStringLiteral("cri-o"), m.captured(1).left(12), {}};
+
     // kubepods slice without a runtime-specific marker: still useful to label.
+    // Real pod UIDs use underscores in the systemd slice name
+    // (kubepods-burstable-pod665b0949_7b83_11ea_bc55_42010a8002b0.slice),
+    // hence the underscore in the character class.
     static const QRegularExpression rxKubepods(
-        QStringLiteral("kubepods[./].*?/([0-9a-f]{32,64})"));
+        QStringLiteral("kubepods[./].*?pod([0-9a-f_]{32,72})"));
     if (const auto m = rxKubepods.match(path); m.hasMatch())
         return ContainerInfo{QStringLiteral("kubernetes"), m.captured(1).left(12), {}};
 
@@ -90,7 +101,16 @@ namespace qiftop::backend::cgroup {
     if (const auto m = rxPodman.match(path); m.hasMatch())
         return ContainerInfo{QStringLiteral("podman"), m.captured(1).left(12), {}};
 
-    // --- LXC / LXD --------------------------------------------------------
+    // --- LXD (systemd-managed) -------------------------------------------
+    // Real path:  /system.slice/lxd-<name>.service/lxc.payload
+    // Match the lxd-NAME.service segment; tested before plain systemd
+    // unit fallback so LXD wins over generic "unit:lxd-foo.service".
+    static const QRegularExpression rxLxd(
+        QStringLiteral("/lxd-([^/\\s.]+)\\.service"));
+    if (const auto m = rxLxd.match(path); m.hasMatch())
+        return ContainerInfo{QStringLiteral("lxd"), m.captured(1), {}};
+
+    // --- LXC --------------------------------------------------------------
     static const QRegularExpression rxLxc(
         QStringLiteral("/lxc(?:\\.payload)?[./]([^/\\s]+)"));
     if (const auto m = rxLxc.match(path); m.hasMatch())

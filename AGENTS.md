@@ -405,6 +405,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_units`               | `util::formatBytes` / `formatByteRate` IEC unit boundaries + precision |
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp |
+| `test_cgroup_real_fixtures` | Data-driven: 13 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, host scopes). Adding a runtime = drop a fixture + add one table row. |
 
 ### 6.3 Gaps worth filling
 
@@ -413,6 +414,57 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
    live conntrack handle.
 2. **End-to-end with a real conntrack table** — requires root; needs a
    CI runner with `CAP_NET_ADMIN` or a privileged container.
+3. **Tier-2 attribution integration harness** — spin up real Docker /
+   Podman / k3d containers, drive `createProcessResolver` against
+   actual flows, verify pid + container attribution end-to-end. Should
+   live under `tests/integration/attribution/` and be gated by
+   `QIFTOP_BUILD_INTEGRATION_TESTS=ON` so unit-test runs stay fast.
+   Tier 1 (real `/proc/<pid>/cgroup` fixtures from upstream sources)
+   is shipped in `test_cgroup_real_fixtures`.
+
+### 6.3a Validating against real-world container runtimes
+
+The attribution layer's correctness depends on regex patterns matching
+the EXACT paths emitted by each container runtime — and those formats
+change between runtime versions, between cgroup drivers (cgroupfs vs.
+systemd), and between cgroup v1 vs. v2. Untested regex drift means
+silent attribution loss for users running that runtime.
+
+**Tiered validation policy:**
+
+1. **Tier 1 — real /proc fixtures** (`tests/fixtures/cgroup_real/` +
+   `test_cgroup_real_fixtures`). Every supported runtime + driver
+   combination MUST have at least one fixture sourced from authoritative
+   upstream documentation or issue trackers, NOT from this developer's
+   imagination. When adding or modifying a regex in `CgroupParse.h`:
+     a. Find a real path example in the runtime's upstream docs (e.g.
+        docs.docker.com, kubernetes.io, github.com/containers/podman,
+        github.com/cri-o/cri-o, github.com/canonical/lxd).
+     b. Drop it into `tests/fixtures/cgroup_real/<runtime>.txt`
+        verbatim (as the file would appear in /proc).
+     c. Add one row to the `classify_data()` data table.
+     d. Run the test — RED first (proves the fixture really exercises
+        the new regex), then green.
+
+2. **Tier 2 — live container harness** (not yet built; see §6.3 #3).
+   Bring up real Docker + Podman + k3d containers, generate flows
+   into them, assert the resolver chain returns the expected
+   `(pid, container_runtime, container_id, container_name)`.
+
+3. **Tier 3 — CI matrix.** Once Tier 2 exists, run it in GitHub Actions
+   on every push, matrixed across `docker:latest` / `podman` / `k3d`
+   / `cri-o` so upstream cgroup-path changes break a PR check, not a
+   user.
+
+When in doubt about a real-world cgroup path: consult the runtime's
+upstream documentation directly. Recent successful sources used to
+build the Tier 1 fixtures:
+- docs.docker.com (cgroup drivers, runmetrics)
+- kubernetes.io/docs/tasks/administer-cluster/kubelet-cgroup-driver/
+- github.com/cri-o/cri-o/blob/main/docs/cgroup.md
+- github.com/containers/podman/blob/main/docs/tutorials/rootless_cgroup_v2.md
+- github.com/containerd/containerd/blob/main/docs/ops.md
+- kernel.org cgroup-v2.html
 
 ### 6.4 Refactors that would unblock more testing
 

@@ -149,6 +149,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_test(test_cgroup_parse
         test_cgroup_parse.cpp)
 
+    qiftop_add_test(test_cgroup_real_fixtures
+        test_cgroup_real_fixtures.cpp)
+    target_compile_definitions(test_cgroup_real_fixtures PRIVATE
+        QIFTOP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cgroup_real")
+
     qiftop_add_test(test_proc_snapshot
         test_proc_snapshot.cpp)
 endif()
