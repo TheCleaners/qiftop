@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-22.04]
+        os: [ubuntu-24.04, ubuntu-26.04]
         build_type: [Debug, Release]
 
     steps:
@@ -146,3 +146,50 @@ jobs:
             # nft conntrack shim should be present:
             test -f /usr/share/qiftop/qiftop-conntrack.nft
           '
+
+  fedora-build-and-test:
+    name: Build & test (fedora:44, ${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:44
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          dnf -y install \
+            cmake ninja-build gcc-c++ pkgconf-pkg-config \
+            qt6-qtbase-devel qt6-qtbase-private-devel \
+            mesa-libGL-devel \
+            libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
+            dbus-daemon dbus-tools \
+            shadow-utils
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.build_type }}" = "Debug" ]; then
+            SAN="-DQIFTOP_TESTS_SANITIZE=address+undefined"
+          else
+            SAN="-DQIFTOP_TESTS_SANITIZE=OFF"
+          fi
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DQIFTOP_BUILD_TESTS=ON \
+            -DQIFTOP_AUTO_PACKAGE=OFF \
+            $SAN
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export HOME="${RUNNER_TEMP:-/tmp}/home"
+          mkdir -p "$HOME"
+          dbus-run-session -- ctest --output-on-failure --no-tests=error

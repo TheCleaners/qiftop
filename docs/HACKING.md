@@ -669,8 +669,9 @@ Before opening / merging:
 CI is wired up in `.github/workflows/`:
 
 * **`ci.yml`** — runs on every push / PR to `master`/`main`. Matrix of
-  Ubuntu 22.04 + 24.04, Debug + Release. Builds with Ninja, runs
-  `ctest` under `dbus-run-session` with `QT_QPA_PLATFORM=offscreen`.
+  Ubuntu 24.04 + Ubuntu 26.04 + Fedora 44 (containerised), Debug +
+  Release. Builds with Ninja, runs `ctest` under `dbus-run-session`
+  with `QT_QPA_PLATFORM=offscreen`.
 * **`release.yml`** — triggered on `v*` tag push. Builds .debs on a
   clean ubuntu-24.04 runner, verifies the tag matches
   `project(qiftop VERSION ...)`, computes SHA256SUMS, and publishes a
