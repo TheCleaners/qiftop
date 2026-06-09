@@ -5,6 +5,7 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  workflow_dispatch:
 
 # Default to the minimum: read-only access to repository contents. CI doesn't
 # write to issues, PRs, releases, packages, or anything else — the Release
