@@ -160,8 +160,9 @@ private slots:
         // 2) For each non-host netns, dump sock_diag + walk /proc-in-ns.
         QHash<QByteArray, quint64>                          mergedKey;
         QHash<quint64, NetnsScanner::PidStamp>              mergedInode;
+        QHash<qint32, quint64>                              mergedPid;
         for (const auto &[nsIno, repPid] : netnses) {
-            scanOneNetns(nsIno, repPid, mergedKey, mergedInode);
+            scanOneNetns(nsIno, repPid, mergedKey, mergedInode, mergedPid);
         }
 
         // 3) Publish atomically.
@@ -169,6 +170,7 @@ private slots:
             std::lock_guard lk(m_owner->m_mu);
             m_owner->m_keyToInode  = std::move(mergedKey);
             m_owner->m_inodeToPid  = std::move(mergedInode);
+            m_owner->m_pidToStartTime = std::move(mergedPid);
         }
         qCInfo(lcVerbose) << "NetnsScanner: refreshed across" << netnses.size()
                           << "non-host netns(es)";
@@ -177,7 +179,8 @@ private slots:
 private:
     void scanOneNetns(quint64 nsIno, long repPid,
                       QHash<QByteArray, quint64>             &outKey,
-                      QHash<quint64, NetnsScanner::PidStamp> &outInode)
+                      QHash<quint64, NetnsScanner::PidStamp> &outInode,
+                      QHash<qint32, quint64>                 &outPid)
     {
         char nsPath[96];
         std::snprintf(nsPath, sizeof(nsPath), "/proc/%ld/ns/net", repPid);
@@ -234,6 +237,7 @@ private:
                  it != nsInodeToPid.constEnd(); ++it)
             {
                 outInode.insert(it.key(), it.value());
+                outPid.insert(it.value().pid, it.value().startTime);
             }
         }
 
@@ -319,9 +323,13 @@ NetnsScanner::~NetnsScanner()
         }
         m_thread->quit();
         m_thread->wait(2000);
+        // QThread::finished -> deleteLater would enqueue after the worker
+        // event loop stops; delete explicitly once the netns worker thread is
+        // stopped (AGENTS.md §8a lifecycle guidance).
+        delete m_worker;
+        m_worker = nullptr;
         delete m_thread;
         m_thread = nullptr;
-        m_worker = nullptr;  // owned by thread
     }
 }
 
@@ -347,8 +355,6 @@ bool NetnsScanner::initialize()
     m_worker->setStop(&m_stop);
     QObject::connect(m_thread, &QThread::started,
                      m_worker, &NetnsScannerWorker::start);
-    QObject::connect(m_thread, &QThread::finished,
-                     m_worker, &QObject::deleteLater);
     m_thread->start();
 
     m_ready = true;
@@ -362,14 +368,13 @@ QStringList NetnsScanner::capabilities() const
     return { QStringLiteral("netns-scan") };
 }
 
-std::optional<ProcessInfo>
-NetnsScanner::resolveFlow(const Connection &flow)
+qint32 NetnsScanner::resolvePid(const Connection &flow)
 {
-    if (!m_ready) return std::nullopt;
+    if (!m_ready) return 0;
     const quint8 proto = (flow.proto == L4Proto::Tcp) ? quint8{IPPROTO_TCP}
                        : (flow.proto == L4Proto::Udp ? quint8{IPPROTO_UDP}
                                                      : quint8{0});
-    if (proto == 0) return std::nullopt;
+    if (proto == 0) return 0;
 
     const QByteArray key = sockdiag::makeFlowKey(
         proto,
@@ -381,16 +386,33 @@ NetnsScanner::resolveFlow(const Connection &flow)
     {
         std::lock_guard lk(m_mu);
         auto itSock = m_keyToInode.constFind(key);
-        if (itSock == m_keyToInode.constEnd()) return std::nullopt;
+        if (itSock == m_keyToInode.constEnd()) return 0;
         auto itPid = m_inodeToPid.constFind(*itSock);
-        if (itPid == m_inodeToPid.constEnd()) return std::nullopt;
+        if (itPid == m_inodeToPid.constEnd()) return 0;
         pid       = itPid->pid;
         startTime = itPid->startTime;
     }
 
     // PID-reuse guard. See AGENTS.md §8a rule 2.
     const auto stNow = procsnap::pidStartTime(pid);
-    if (!stNow.has_value() || *stNow != startTime) return std::nullopt;
+    if (!stNow.has_value() || *stNow != startTime) return 0;
+
+    return pid;
+}
+
+std::optional<ProcessInfo> NetnsScanner::enrichPid(qint32 pid)
+{
+    if (!m_ready || pid <= 0) return std::nullopt;
+
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_pidToStartTime.constFind(pid);
+        if (it == m_pidToStartTime.constEnd()) return std::nullopt;
+
+        // PID-reuse guard. See AGENTS.md §8a rule 2.
+        const auto stNow = procsnap::pidStartTime(pid);
+        if (!stNow.has_value() || *stNow != it.value()) return std::nullopt;
+    }
 
     ProcessInfo info;
     info.pid = pid;
