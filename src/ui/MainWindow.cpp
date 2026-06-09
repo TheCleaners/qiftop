@@ -57,6 +57,7 @@
 #include <QToolTip>
 #include <QVBoxLayout>
 
+#include <functional>
 #include <memory>
 
 MainWindow::MainWindow(Settings          *settings,
@@ -1493,23 +1494,25 @@ void MainWindow::setBackendInfo(bool usingAgent,
     m_usingAgent   = usingAgent;
     m_agentVersion = version;
     m_agentCaps    = caps;
-    if (!m_statusBackend) return;
-    if (usingAgent) {
-        const QString shown = version.isEmpty() ? tr("(legacy)") : version;
-        m_statusBackend->setText(tr("agent %1").arg(shown));
-        const QString tip = caps.isEmpty()
-            ? tr("Connected to qiftop-agent over DBus. No capability tokens reported.")
-            : tr("Connected to qiftop-agent over DBus.\nCapabilities: %1")
-                  .arg(caps.join(QStringLiteral(", ")));
-        m_statusBackend->setToolTip(tip);
-    } else {
-        m_statusBackend->setText(tr("in-process"));
-        m_statusBackend->setToolTip(tr("qiftop-agent unavailable; using the "
-                                       "in-process Netlink/conntrack backend. "
-                                       "Some flows may be hidden without CAP_NET_ADMIN."));
+    if (m_statusBackend) {
+        if (usingAgent) {
+            const QString shown = version.isEmpty() ? tr("(legacy)") : version;
+            m_statusBackend->setText(tr("agent %1").arg(shown));
+            const QString tip = caps.isEmpty()
+                ? tr("Connected to qiftop-agent over DBus. No capability tokens reported.")
+                : tr("Connected to qiftop-agent over DBus.\nCapabilities: %1")
+                      .arg(caps.join(QStringLiteral(", ")));
+            m_statusBackend->setToolTip(tip);
+        } else {
+            m_statusBackend->setText(tr("in-process"));
+            m_statusBackend->setToolTip(tr("qiftop-agent unavailable; using the "
+                                           "in-process Netlink/conntrack backend. "
+                                           "Some flows may be hidden without CAP_NET_ADMIN."));
+        }
+        // Reset any cadence-degradation tint left over from a previous state.
+        m_statusBackend->setStyleSheet(QString());
     }
-    // Reset any cadence-degradation tint left over from a previous state.
-    m_statusBackend->setStyleSheet(QString());
+    applySettingsToUi();
 }
 
 void MainWindow::notifyAgentCadence(int intervalMs)
@@ -1892,8 +1895,11 @@ namespace {
 // (the per-view "default visible" calculation may differ — pass in
 // alwaysHidden for columns whose visibility is governed by other
 // settings, e.g. the RxMax/TxMax gauge columns).
+using HeaderToggleInterceptor = std::function<bool(int col, bool checked)>;
+
 void populateHeaderMenu(QMenu *menu, QHeaderView *header,
-                        const QSet<int> &alwaysHidden = {})
+                        const QSet<int> &alwaysHidden = {},
+                        HeaderToggleInterceptor toggleInterceptor = {})
 {
     QAbstractItemModel *m = header->model();
     if (!m) return;
@@ -1911,19 +1917,28 @@ void populateHeaderMenu(QMenu *menu, QHeaderView *header,
         QAction *act = menu->addAction(label.isEmpty()
             ? QStringLiteral("Column %1").arg(i + 1) : label);
         act->setCheckable(true);
+        act->setData(i);
         act->setChecked(!header->isSectionHidden(i));
         if (act->isChecked() && visibleCount <= 1)
             act->setEnabled(false);  // refuse to hide the last visible column
         QObject::connect(act, &QAction::toggled, header,
-            [header, i](bool checked) { header->setSectionHidden(i, !checked); });
+            [header, i, toggleInterceptor](bool checked) {
+                if (toggleInterceptor && toggleInterceptor(i, checked))
+                    return;
+                header->setSectionHidden(i, !checked);
+            });
     }
 
     menu->addSeparator();
     QAction *resetAct = menu->addAction(QObject::tr("Reset columns to defaults"));
     QObject::connect(resetAct, &QAction::triggered, header,
-        [header, cols, alwaysHidden] {
-            for (int i = 0; i < cols; ++i)
-                header->setSectionHidden(i, alwaysHidden.contains(i));
+        [header, cols, alwaysHidden, toggleInterceptor] {
+            for (int i = 0; i < cols; ++i) {
+                const bool checked = !alwaysHidden.contains(i);
+                if (toggleInterceptor && toggleInterceptor(i, checked))
+                    continue;
+                header->setSectionHidden(i, !checked);
+            }
             // Also restore the original logical order. Walk visual->
             // logical and move each into its logical slot.
             for (int logical = 0; logical < cols; ++logical) {
@@ -1945,14 +1960,30 @@ void MainWindow::showNetHeaderMenu(const QPoint &pos)
 
 void MainWindow::showConnHeaderMenu(const QPoint &pos)
 {
-    // RxMax/TxMax visibility is governed by the throughput-gauge toggle
-    // in applySettingsToUi(); pin them as "default hidden" so Reset does
-    // the same thing.
+    const int processCol = static_cast<int>(ConnectionModel::Column::Process);
+    const int containerCol = static_cast<int>(ConnectionModel::Column::Container);
+
+    // RxMax/TxMax and attribution visibility are governed by settings in
+    // applySettingsToUi(); pin them as "default hidden" so Reset does the
+    // same thing.
     const QSet<int> alwaysHidden{
         static_cast<int>(ConnectionModel::Column::RxMax),
         static_cast<int>(ConnectionModel::Column::TxMax),
+        processCol,
+        containerCol,
     };
     QMenu menu(this);
-    populateHeaderMenu(&menu, m_connView->header(), alwaysHidden);
+    populateHeaderMenu(&menu, m_connView->header(), alwaysHidden,
+        [this, processCol, containerCol](int col, bool checked) {
+            if (col == processCol) {
+                m_settings->setShowProcessColumn(checked);
+                return true;
+            }
+            if (col == containerCol) {
+                m_settings->setShowContainerColumn(checked);
+                return true;
+            }
+            return false;
+        });
     menu.exec(m_connView->header()->viewport()->mapToGlobal(pos));
 }
