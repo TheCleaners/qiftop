@@ -71,8 +71,10 @@ inline constexpr int kMaxContainerChainDepth = 16;
 //   containerd / k8s  "cri-containerd-<64hex>.scope", "kubepods/.../<hex>"
 //   podman            "libpod-<64hex>.scope"
 //   lxc / lxd         "/lxc/<name>", "lxc.payload.<name>/"
-//   systemd           "*.service" / "*.slice" outside of /user.slice and /system.slice
-//                     (kept distinct from host so the UI can show e.g. "unit:nginx.service")
+//   systemd           "*.service" / "*.slice" outside of /user.slice
+//                     (kept distinct from host so the UI can show e.g. "unit:nginx.service";
+//                     /user.slice is explicitly excluded so a desktop's user@<uid>.service
+//                     and its app children are NOT misclassified as systemd units)
 [[nodiscard]] inline QList<ContainerInfo> classifyPathChain(const QString &path)
 {
     QList<ContainerInfo> chain;
@@ -228,7 +230,17 @@ inline constexpr int kMaxContainerChainDepth = 16;
     // matched. A pod whose pause container lives in a *.service slice
     // shouldn't be relabelled as "unit:..." — the kubepods/containerd
     // segments are more informative.
-    if (chain.isEmpty()) {
+    //
+    // ALSO skip the entire /user.slice hierarchy: paths like
+    // /user.slice/user-1000.slice/user@1000.service belong to the
+    // desktop user's per-user systemd manager. Treating
+    // user@<uid>.service as a container would mis-label every browser
+    // tab, every helper process, every Wayland client on a desktop
+    // host. User-session apps should appear as "(host)" — they are
+    // host processes from the agent's perspective, owned by uid<n>.
+    // (System-managed services under /system.slice/foo.service stay
+    // eligible — that's the operationally interesting case.)
+    if (chain.isEmpty() && !segments.contains(QLatin1String("user.slice"))) {
         static const QRegularExpression rxSystemdUnit(
             QStringLiteral("^([A-Za-z0-9@_.\\-]+\\.(?:service|socket|mount))$"));
         for (auto it = segments.crbegin(); it != segments.crend(); ++it) {

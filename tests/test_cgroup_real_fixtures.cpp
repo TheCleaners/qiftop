@@ -59,6 +59,14 @@ private slots:
         QTest::newRow("host_init_scope")           << "host_init_scope.txt"           << ""           << "";
         QTest::newRow("host_user_session")         << "host_user_session.txt"         << ""           << "";
         QTest::newRow("host_systemd_service")      << "host_systemd_service.txt"      << "systemd"    << "unit:nginx.s";
+        // RUNTIMES-H2 audit regression: user@<uid>.service is the
+        // per-user systemd manager scope; misclassifying it as a
+        // systemd-unit container would relabel every Wayland helper,
+        // browser tab, and desktop service on every Linux desktop.
+        // The /user.slice guard in classifyPathChain ensures this
+        // (and any deeper user-managed app) stays "(host)".
+        QTest::newRow("host_user_systemd_manager") << "host_user_systemd_manager.txt" << ""           << "";
+        QTest::newRow("host_user_app_service")     << "host_user_app_service.txt"     << ""           << "";
     }
 
     void classify()
