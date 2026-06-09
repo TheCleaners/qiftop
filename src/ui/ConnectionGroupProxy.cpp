@@ -286,6 +286,8 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         case Col::TxTotal: return util::formatBytes(txBytes);
         case Col::RxMax:   return QStringLiteral("—");
         case Col::TxMax:   return QStringLiteral("—");
+        case Col::Process: return QStringLiteral("—");
+        case Col::Container: return QStringLiteral("—");
         case Col::ColumnCount: break;
         }
         return {};
@@ -300,6 +302,8 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         case Col::TxTotal: return static_cast<qulonglong>(txBytes);
         case Col::RxMax:   return 0.0;
         case Col::TxMax:   return 0.0;
+        case Col::Process: return QString();
+        case Col::Container: return QString();
         case Col::ColumnCount: break;
         }
     }

@@ -78,6 +78,7 @@ add_executable(qiftop
     src/ui/ConnectionGroupProxy.cpp
     src/ui/ConnectionFlowDelegate.cpp
     src/ui/RowGaugeDelegate.cpp
+    src/ui/ConnectionAttributionDelegate.cpp
     src/ui/SettingsDialog.cpp
     src/ui/TrayManager.cpp
     src/util/Autostart.cpp

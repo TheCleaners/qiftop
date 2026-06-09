@@ -26,6 +26,8 @@ public:
         TxTotal,
         RxMax,        // adaptive reference (window-max or CMA) — see setThroughput*
         TxMax,
+        Process,      // comm + pid (v0.2 attribution; hidden by default)
+        Container,    // runtime:name + chain breadcrumb (v0.2 attribution; hidden by default)
         ColumnCount,
     };
 
@@ -46,6 +48,12 @@ public:
         TxRateRole,           // double bytes/s (smoothed)
         HostnameLocalRole,    // QString (resolved local hostname, may be empty)
         HostnameRemoteRole,   // QString (resolved remote hostname, may be empty)
+        ProcessPidRole,       // qint32: process.pid (0 if unattributed)
+        ProcessCommRole,      // QString: process.comm
+        ContainerRuntimeRole, // QString: container.runtime (e.g. "docker")
+        ContainerIdRole,      // QString: container.id (12-char shortform safe)
+        ContainerNameRole,    // QString: container.name (display name)
+        ContainerChainRole,   // QStringList: "runtime:name" per ancestry layer
     };
 
     // Adaptive throughput tracking modes (mirror Settings::ThroughputMaxMode).

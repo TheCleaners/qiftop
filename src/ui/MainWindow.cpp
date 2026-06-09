@@ -47,6 +47,7 @@
 #include <QComboBox>
 
 #include "ui/ConnectionGroupProxy.h"
+#include "ui/ConnectionAttributionDelegate.h"
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -224,12 +225,30 @@ void MainWindow::setupUi()
     // throughput gauge background before chaining to the standard styled
     // item rendering. Owned by the view (parent).
     m_connView->setItemDelegate(new RowGaugeDelegate(m_connView, m_connView));
+    // Process + Container columns get a richer delegate that paints
+    // a small grey pid badge / chain-depth chevron next to the
+    // primary text. It inherits from RowGaugeDelegate so the
+    // throughput gauge still works underneath.
+    auto *attribDelegate = new ConnectionAttributionDelegate(m_connView, m_connView);
+    m_connView->setItemDelegateForColumn(
+        static_cast<int>(ConnectionModel::Column::Process), attribDelegate);
+    m_connView->setItemDelegateForColumn(
+        static_cast<int>(ConnectionModel::Column::Container), attribDelegate);
     // Max columns are only meaningful with the gauge enabled; hide by
     // default and (un)hide in applySettingsToUi() based on the setting.
     m_connView->setColumnHidden(
         static_cast<int>(ConnectionModel::Column::RxMax), true);
     m_connView->setColumnHidden(
         static_cast<int>(ConnectionModel::Column::TxMax), true);
+    // Attribution columns are hidden by default — they only make sense
+    // when the agent advertises the matching wire-attribution tokens,
+    // and the Settings > Display sub-section (s5-settings) lets the
+    // user enable them. Until then they're available through the
+    // header right-click menu.
+    m_connView->setColumnHidden(
+        static_cast<int>(ConnectionModel::Column::Process), true);
+    m_connView->setColumnHidden(
+        static_cast<int>(ConnectionModel::Column::Container), true);
     m_connView->sortByColumn(static_cast<int>(ConnectionModel::Column::RxRate),
                              Qt::DescendingOrder);
     m_connView->setContextMenuPolicy(Qt::CustomContextMenu);

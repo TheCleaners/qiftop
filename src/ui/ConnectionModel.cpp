@@ -323,6 +323,26 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
             const double v = txReference(row);
             return v > 0.0 ? util::formatByteRate(v) : QStringLiteral("—");
         }
+        case Column::Process:
+            if (c.process.pid > 0) {
+                const QString name = c.process.comm.isEmpty()
+                                         ? QStringLiteral("pid %1").arg(c.process.pid)
+                                         : c.process.comm;
+                return QStringLiteral("%1  [%2]").arg(name).arg(c.process.pid);
+            }
+            return QStringLiteral("—");
+        case Column::Container: {
+            const auto &ci = c.container;
+            if (ci.runtime.isEmpty() && ci.name.isEmpty() && ci.id.isEmpty())
+                return QStringLiteral("(host)");
+            const QString display = !ci.name.isEmpty() ? ci.name : ci.id.left(12);
+            const QString primary = ci.runtime.isEmpty()
+                                        ? display
+                                        : QStringLiteral("%1:%2").arg(ci.runtime, display);
+            if (c.containerChain.size() >= 2)
+                return QStringLiteral("%1  ▸").arg(primary);
+            return primary;
+        }
         case Column::ColumnCount: break;
         }
         return {};
@@ -337,6 +357,16 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
         case Column::TxTotal: return static_cast<qulonglong>(c.txBytes);
         case Column::RxMax:   return rxReference(row);
         case Column::TxMax:   return txReference(row);
+        case Column::Process: return static_cast<qulonglong>(c.process.pid);
+        case Column::Container: {
+            // Sort key: prefer name, fall back to id; never empty so
+            // (host) rows clump together at the top/bottom rather than
+            // scattering.
+            const auto &ci = c.container;
+            if (!ci.name.isEmpty()) return ci.name;
+            if (!ci.id.isEmpty())   return ci.id;
+            return QStringLiteral("\u0001(host)"); // sort to one end
+        }
         case Column::ColumnCount: break;
         }
         return {};
@@ -369,6 +399,61 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
     case HostnameRemoteRole:
         return (m_resolveEnabled && m_resolver) ? m_resolver->cachedName(c.remote.address)
                                                 : QString();
+    case ProcessPidRole:
+        return c.process.pid;
+    case ProcessCommRole:
+        return c.process.comm;
+    case ContainerRuntimeRole:
+        return c.container.runtime;
+    case ContainerIdRole:
+        return c.container.id;
+    case ContainerNameRole:
+        return c.container.name;
+    case ContainerChainRole: {
+        QStringList out;
+        out.reserve(c.containerChain.size());
+        for (const auto &ci : c.containerChain) {
+            const QString display = !ci.name.isEmpty() ? ci.name : ci.id.left(12);
+            out << (ci.runtime.isEmpty()
+                        ? display
+                        : QStringLiteral("%1:%2").arg(ci.runtime, display));
+        }
+        return out;
+    }
+
+    case Qt::ToolTipRole: {
+        switch (col) {
+        case Column::Process:
+            if (c.process.pid <= 0) return QStringLiteral("Unattributed flow");
+            return QStringLiteral("pid: %1\ncomm: %2\nuid: %3\n\nRight-click → Details for cmdline / exe / cwd")
+                .arg(c.process.pid)
+                .arg(c.process.comm.isEmpty() ? QStringLiteral("?")
+                                              : c.process.comm)
+                .arg(c.process.uid);
+        case Column::Container: {
+            if (c.container.runtime.isEmpty() && c.container.id.isEmpty()
+                && c.container.name.isEmpty()) {
+                return QStringLiteral("Host process (no container)");
+            }
+            QString s = QStringLiteral("runtime: %1\nid: %2\nname: %3")
+                .arg(c.container.runtime.isEmpty() ? QStringLiteral("?") : c.container.runtime,
+                     c.container.id.isEmpty()      ? QStringLiteral("?") : c.container.id,
+                     c.container.name.isEmpty()    ? QStringLiteral("?") : c.container.name);
+            if (c.containerChain.size() >= 2) {
+                s += QStringLiteral("\n\nNesting (outer → inner):");
+                for (const auto &ci : c.containerChain) {
+                    const QString disp = !ci.name.isEmpty() ? ci.name
+                                                            : ci.id.left(12);
+                    s += QStringLiteral("\n  • %1:%2")
+                             .arg(ci.runtime.isEmpty() ? QStringLiteral("?") : ci.runtime,
+                                  disp);
+                }
+            }
+            return s;
+        }
+        default: return {};
+        }
+    }
 
     case GaugeFractionRole: {
         if (!m_gaugeEnabled)
@@ -468,6 +553,8 @@ QVariant ConnectionModel::headerData(int section, Qt::Orientation orientation, i
     case Column::TxTotal: return tr("TX total");
     case Column::RxMax:   return tr("Max RX");
     case Column::TxMax:   return tr("Max TX");
+    case Column::Process: return tr("Process");
+    case Column::Container: return tr("Container");
     case Column::ColumnCount: break;
     }
     return {};
@@ -491,6 +578,12 @@ QStringList ConnectionModel::exportHeaders() const
         QStringLiteral("txBytesPerSec"),
         QStringLiteral("rxBytesPerSecRef"),
         QStringLiteral("txBytesPerSecRef"),
+        QStringLiteral("pid"),
+        QStringLiteral("uid"),
+        QStringLiteral("comm"),
+        QStringLiteral("containerRuntime"),
+        QStringLiteral("containerId"),
+        QStringLiteral("containerName"),
     };
 }
 
@@ -524,6 +617,12 @@ QVariantList ConnectionModel::exportRow(int row) const
         r.txRate,
         rxReference(r),
         txReference(r),
+        c.process.pid,
+        c.process.uid,
+        c.process.comm,
+        c.container.runtime,
+        c.container.id,
+        c.container.name,
     };
 }
 
