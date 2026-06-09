@@ -1,0 +1,85 @@
+name: integration
+
+# Tier-2 attribution integration tests. Spins up real container runtimes
+# (currently: docker) and runs qiftop-attribution-probe against them.
+#
+# Deliberately NOT triggered on pull_request or feature-branch push — it's
+# slow and the runners shell out to docker. Triggered ONLY on:
+#   - push to main
+#   - manual workflow_dispatch
+#   - release publication
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  attribution-docker:
+    name: attribution / docker / ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            qt6-base-dev libqt6dbus6 \
+            libnl-3-dev libnl-route-3-dev libnetfilter-conntrack-dev \
+            iproute2
+
+      - name: verify docker is present
+        run: docker info
+
+      - name: configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DQIFTOP_BUILD_TESTS=ON \
+            -DQIFTOP_BUILD_INTEGRATION_TESTS=OFF \
+            -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON
+
+      - name: build probe
+        run: cmake --build build --target qiftop-attribution-probe -j
+
+      - name: run attribution probe against docker
+        run: sudo --preserve-env=PATH ctest --test-dir build -R attribution_docker --output-on-failure -V
+
+  attribution-podman:
+    name: attribution / podman / ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install build deps + podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            qt6-base-dev libqt6dbus6 \
+            libnl-3-dev libnl-route-3-dev libnetfilter-conntrack-dev \
+            iproute2 \
+            podman netavark
+
+      - name: verify podman is present (rootful)
+        run: sudo podman info
+
+      - name: configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DQIFTOP_BUILD_TESTS=ON \
+            -DQIFTOP_BUILD_INTEGRATION_TESTS=OFF \
+            -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON
+
+      - name: build probe
+        run: cmake --build build --target qiftop-attribution-probe -j
+
+      - name: run attribution probe against podman
+        run: sudo --preserve-env=PATH ctest --test-dir build -R attribution_podman --output-on-failure -V
