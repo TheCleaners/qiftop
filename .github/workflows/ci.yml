@@ -28,7 +28,7 @@ jobs:
         build_type: [Debug, Release]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build dependencies
         run: |
@@ -92,7 +92,7 @@ jobs:
           - image: "fedora:44"
             family: fedora
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build dependencies (debian family)
         if: matrix.family == 'debian'
@@ -149,7 +149,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-and-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build + QA dependencies
         run: |
