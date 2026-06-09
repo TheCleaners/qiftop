@@ -133,6 +133,145 @@ private slots:
         QVERIFY(info.has_value());
         QCOMPARE(info->runtime, QStringLiteral("docker"));
     }
+
+    // ---- nested-container leaf-wins discipline --------------------------
+
+    void k3sPodInDockerPrefersInnermost()
+    {
+        // The k3d "k3s-in-docker" case that prompted this rule: the
+        // outer cgroup is a plain docker container; nested inside is a
+        // kubepods slice with a cri-containerd-<id>.scope leaf for the
+        // pod's container. We MUST report containerd / the inner CID,
+        // not docker / the outer one — otherwise the UI shows the k3d
+        // node as the owner of every pod's traffic.
+        const QString outer64(64, QLatin1Char('a'));  // outer docker id
+        const QString inner64(64, QLatin1Char('b'));  // inner containerd id
+        const QString path = QStringLiteral(
+            "/system.slice/docker-%1.scope"
+            "/kubepods.slice/kubepods-besteffort.slice"
+            "/kubepods-besteffort-pod665b0949_7b83_11ea_bc55_42010a8002b0.slice"
+            "/cri-containerd-%2.scope").arg(outer64, inner64);
+        const auto info = classifyPath(path);
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("containerd"));
+        QCOMPARE(info->id, QString(12, QLatin1Char('b')));
+
+        // Full chain: outer docker → kubepods pod → inner containerd.
+        const auto chain = qiftop::backend::cgroup::classifyPathChain(path);
+        QCOMPARE(chain.size(), 3);
+        QCOMPARE(chain[0].runtime, QStringLiteral("docker"));
+        QCOMPARE(chain[0].id, QString(12, QLatin1Char('a')));
+        QCOMPARE(chain[1].runtime, QStringLiteral("kubernetes"));
+        QVERIFY(chain[1].id.startsWith(QStringLiteral("665b0949")));
+        QCOMPARE(chain[2].runtime, QStringLiteral("containerd"));
+        QCOMPARE(chain[2].id, QString(12, QLatin1Char('b')));
+    }
+
+    void dockerInDockerPrefersInnermost()
+    {
+        // Plain dind with systemd driver inside the inner daemon too:
+        // both segments are docker-<id>.scope. Inner wins.
+        const QString outer64(64, QLatin1Char('a'));
+        const QString inner64(64, QLatin1Char('b'));
+        const auto info = classifyPath(QStringLiteral(
+            "/system.slice/docker-%1.scope/docker-%2.scope")
+                .arg(outer64, inner64));
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("docker"));
+        QCOMPARE(info->id, QString(12, QLatin1Char('b')));
+    }
+
+    void k8sCrioPodInDockerPrefersInnermost()
+    {
+        const QString outer64(64, QLatin1Char('1'));
+        const QString inner64(64, QLatin1Char('2'));
+        const auto info = classifyPath(QStringLiteral(
+            "/system.slice/docker-%1.scope"
+            "/kubepods.slice/kubepods-pod00000000_0000_0000_0000_000000000000.slice"
+            "/crio-%2.scope").arg(outer64, inner64));
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("cri-o"));
+        QCOMPARE(info->id, QString(12, QLatin1Char('2')));
+    }
+
+    void k8sCgroupfsDriverK3dShape()
+    {
+        // The actual cgroup path observed inside a k3d v5.7 cluster
+        // (verified live in the test VM): cgroupfs driver, so the
+        // inner kubepods tree has no .slice/.scope suffixes and the
+        // containerd leaf is a naked 64-hex segment.
+        const auto path = QStringLiteral(
+            "/system.slice/docker-f7690a04877e9ce57ee23958cd1a7bac"
+            "94f8606fbebed43f84ef478f851970f0.scope"
+            "/kubepods/besteffort/podf53c3981-8232-4261-ba57-7b0f5f4ea3ec"
+            "/847e0a2e4c8b4cf757f5ad34b870ad65d61b10fcb02da448dba0f831b8b23aeb");
+        const auto info = classifyPath(path);
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("containerd"));
+        QCOMPARE(info->id, QStringLiteral("847e0a2e4c8b"));
+
+        // Chain: docker (k3d node) → kubernetes (pod) → containerd (leaf).
+        const auto chain = qiftop::backend::cgroup::classifyPathChain(path);
+        QCOMPARE(chain.size(), 3);
+        QCOMPARE(chain[0].runtime, QStringLiteral("docker"));
+        QCOMPARE(chain[0].id, QStringLiteral("f7690a04877e"));
+        QCOMPARE(chain[1].runtime, QStringLiteral("kubernetes"));
+        QCOMPARE(chain[1].id, QStringLiteral("f53c3981-823"));
+        QCOMPARE(chain[2].runtime, QStringLiteral("containerd"));
+        QCOMPARE(chain[2].id, QStringLiteral("847e0a2e4c8b"));
+    }
+
+    void kubepodsFallbackWhenNoRuntimeScope()
+    {
+        // If the leaf isn't a recognised runtime scope but the path
+        // contains a pod slice, label as kubernetes with the pod UID.
+        const auto info = classifyPath(QStringLiteral(
+            "/kubepods.slice/kubepods-burstable.slice"
+            "/kubepods-burstable-pod665b0949_7b83_11ea_bc55_42010a8002b0.slice"));
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("kubernetes"));
+        QVERIFY(info->id.startsWith(QStringLiteral("665b0949")));
+    }
+
+    // ---- classifyPathChain depth bound ----------------------------------
+
+    void chainCapsAtMaxDepth()
+    {
+        using qiftop::backend::cgroup::classifyPathChain;
+        using qiftop::backend::cgroup::kMaxContainerChainDepth;
+
+        // Build a synthetic path with way more nested docker scopes than
+        // the cap allows. The chain must come back length == cap and
+        // contain the INNERMOST entries. Each id is keyed by `i` in
+        // the LEADING 12 hex chars (left-aligned) so `.left(12)` short
+        // ids differ between segments.
+        QString path;
+        constexpr int kSegments = kMaxContainerChainDepth + 5;
+        for (int i = 0; i < kSegments; ++i) {
+            const QString id =
+                QStringLiteral("%1").arg(i, 12, 16, QLatin1Char('0'))
+                + QString(52, QLatin1Char('0'));   // pad rhs to 64 chars
+            path += QStringLiteral("/docker-%1.scope").arg(id);
+        }
+        // A qWarning is expected; allow it through unhindered.
+        const auto chain = classifyPathChain(path);
+        QCOMPARE(chain.size(), kMaxContainerChainDepth);
+        // First kept entry corresponds to segment index `5` (outermost
+        // 5 dropped: kSegments - kMax == 5).
+        QCOMPARE(chain.first().id,
+                 QStringLiteral("%1").arg(5, 12, 16, QLatin1Char('0')));
+        // Last entry must be the leaf-most scope.
+        QCOMPARE(chain.last().id,
+                 QStringLiteral("%1").arg(kSegments - 1, 12, 16, QLatin1Char('0')));
+    }
+
+    void chainEmptyForHostScopes()
+    {
+        using qiftop::backend::cgroup::classifyPathChain;
+        QVERIFY(classifyPathChain(QStringLiteral("/")).isEmpty());
+        QVERIFY(classifyPathChain(QStringLiteral("/init.scope")).isEmpty());
+        QVERIFY(classifyPathChain(QString()).isEmpty());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestCgroupParse)

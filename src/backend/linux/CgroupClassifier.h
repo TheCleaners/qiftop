@@ -44,12 +44,15 @@ public:
     [[nodiscard]] std::optional<ContainerInfo>
         resolveContainerForPid(qint32 pid) override;
 
+    [[nodiscard]] QList<ContainerInfo>
+        resolveContainerChainForPid(qint32 pid) override;
+
 private:
     bool                              m_ready = false;
     std::mutex                        m_mu;
     QElapsedTimer                     m_clock;
     struct CacheEntry {
-        std::optional<ContainerInfo> info;
+        QList<ContainerInfo>         chain;      // outer → inner; empty == host
         qint64                       ts;
         quint64                      startTime;  // pid identity guard
     };

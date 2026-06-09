@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QString>
 #include <QStringList>
 
@@ -97,6 +98,28 @@ public:
     // attribution is disabled.
     [[nodiscard]] virtual std::optional<ContainerInfo>
         resolveContainerForPid(qint32 pid) = 0;
+
+    // Look up the FULL container nesting chain for a PID, ordered
+    // OUTERMOST → INNERMOST. For a pod running in a k3d node this
+    // returns e.g. [docker:k3d-node, kubernetes:pod, containerd:workload];
+    // for a plain docker container it returns [docker:id]; for a host
+    // process it returns an empty list.
+    //
+    // Default implementation: wrap `resolveContainerForPid` into a
+    // single-element list (i.e. "I only know the innermost"). Override
+    // when the underlying data source can see the whole chain (the
+    // cgroup classifier does, since /proc/<pid>/cgroup carries the
+    // full path).
+    //
+    // Resolvers that override this MUST advertise the
+    // `container-chain` capability token; consumers branch on token
+    // presence, not on Qt version or vtable shape.
+    [[nodiscard]] virtual QList<ContainerInfo>
+        resolveContainerChainForPid(qint32 pid)
+    {
+        if (auto ci = resolveContainerForPid(pid)) return { *ci };
+        return {};
+    }
 };
 
 } // namespace qiftop::backend

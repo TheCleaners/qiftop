@@ -189,6 +189,49 @@ These cgroup paths mean **the host**, not a container:
 `classifyPath` returns `nullopt` for them. Anything else gets a label
 (possibly just `unit:foo.service`).
 
+### 5a. Nested containers — leaf wins, chain is preserved
+
+What we learned bringing up the **k3d** (k3s-in-docker) integration
+test: a single cgroup path can encode several container scopes
+*at once*, and matching "first regex anywhere" returns the wrong one.
+
+A real k3d pod's `/proc/<pid>/cgroup` reads (one line, wrapped for
+legibility):
+
+```
+0::/system.slice/docker-503bd...scope                 ← k3d node container
+   /kubepods.slice/kubepods-besteffort.slice
+   /kubepods-besteffort-pod665b...slice               ← pod slice
+   /cri-containerd-cd32fa6a7e74...scope               ← the actual workload
+```
+
+Two rules fall out of this:
+
+1. **Classify per segment, leaf wins.** The classifier splits the path
+   on `/` and walks the segments. For "single answer" callers
+   (`classifyPath` / `resolveContainerForPid`) the **innermost**
+   classified segment is returned — that's the actual container the
+   process is running in. The k3d node wrapper is interesting context,
+   but `nc` inside the pod is owned by `containerd:cd32fa6a7e74`, not
+   `docker:503bd477c49a`.
+2. **Keep the full chain available.** `classifyPathChain` returns the
+   whole OUTER→INNER list so consumers that *do* care about nesting
+   (ops dashboards, "show me which k3d node this pod is on") get it
+   for free. The resolver interface exposes the same via
+   `ProcessResolver::resolveContainerChainForPid`; capability token
+   `container-chain` advertises that the resolver actually populates
+   more than one entry. The chain is depth-capped at
+   `kMaxContainerChainDepth` (16) with a `qWarning` on truncation —
+   real paths don't get within sight of this even in deeply-nested
+   k8s-on-podman-on-LXD setups.
+
+Practical edge case: the **systemd-unit fallback** (e.g.
+`unit:nginx.service`) is only emitted when nothing container-shaped
+matched anywhere in the path. A pod whose pause container lives under
+a `*.service` slice shouldn't be relabelled `systemd` just because
+some ancestor segment happens to look like a unit — the
+`kubepods`/`containerd` segments are more informative.
+
 ---
 
 ## 6. Data source #3 — cross-namespace netns scanning

@@ -61,6 +61,20 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] QList<ContainerInfo>
+        resolveContainerChainForPid(qint32 pid) override
+    {
+        // First child that returns a non-empty chain wins. We avoid
+        // the base-class default (which would fall back to single
+        // resolveContainerForPid) so children advertising the
+        // `container-chain` capability get to provide the real chain.
+        for (auto &c : m_children) {
+            auto chain = c->resolveContainerChainForPid(pid);
+            if (!chain.isEmpty()) return chain;
+        }
+        return {};
+    }
+
 private:
     std::vector<std::unique_ptr<ProcessResolver>> m_children;
 };

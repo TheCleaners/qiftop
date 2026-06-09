@@ -38,7 +38,13 @@ qiftop_apply_attribution_defs(qiftop-attribution-probe)
 # Register a ctest entry per runtime, all labelled "attribution-integration".
 # Each runner script knows how to bring up its runtime, drive the probe,
 # and tear down. Exit 77 = ctest SKIP (runtime missing or unhealthy).
-foreach(runtime docker podman)
+foreach(runtime docker podman k3d)
+    # k3d needs more time: cold cluster bring-up (~30s) + pod schedule
+    # (~10s) + flow observation. docker/podman are <15s end-to-end.
+    set(_to 90)
+    if(runtime STREQUAL "k3d")
+        set(_to 180)
+    endif()
     add_test(
         NAME    attribution_${runtime}
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/runners/run-${runtime}.sh
@@ -46,7 +52,7 @@ foreach(runtime docker podman)
     set_tests_properties(attribution_${runtime} PROPERTIES
         LABELS "attribution-integration"
         ENVIRONMENT "QIFTOP_PROBE_BIN=$<TARGET_FILE:qiftop-attribution-probe>"
-        TIMEOUT 90
+        TIMEOUT ${_to}
         SKIP_RETURN_CODE 77
     )
 endforeach()

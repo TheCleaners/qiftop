@@ -116,6 +116,16 @@ int main(int argc, char **argv)
         QStringLiteral("expected container runtime name"), QStringLiteral("name")));
     p.addOption(QCommandLineOption(QStringLiteral("expect-container-id-prefix"),
         QStringLiteral("expected container ID prefix (hex)"), QStringLiteral("hex")));
+    p.addOption(QCommandLineOption(QStringLiteral("expect-chain-min-depth"),
+        QStringLiteral("require the container chain to have at least N entries "
+                       "(verifies nested attribution found the wrappers, not "
+                       "just the leaf)"),
+        QStringLiteral("n")));
+    p.addOption(QCommandLineOption(QStringLiteral("expect-chain-contains"),
+        QStringLiteral("require the container chain to contain at least one "
+                       "entry with this runtime (comma-separated list = any-of). "
+                       "Pass multiple --expect-chain-contains for AND semantics."),
+        QStringLiteral("runtime")));
     p.addOption(QCommandLineOption(QStringLiteral("timeout-ms"),
         QStringLiteral("attribution timeout in ms"), QStringLiteral("ms"),
         QStringLiteral("8000")));
@@ -165,16 +175,22 @@ int main(int argc, char **argv)
     t.start();
     std::optional<qiftop::backend::ProcessInfo>   proc;
     std::optional<qiftop::backend::ContainerInfo> ctr;
+    QList<qiftop::backend::ContainerInfo>         chain;
     const bool wantContainer =
         p.isSet(QStringLiteral("expect-container-runtime")) ||
-        p.isSet(QStringLiteral("expect-container-id-prefix"));
+        p.isSet(QStringLiteral("expect-container-id-prefix")) ||
+        p.isSet(QStringLiteral("expect-chain-min-depth")) ||
+        p.isSet(QStringLiteral("expect-chain-contains"));
 
     while (t.elapsed() < timeoutMs) {
         proc = resolver->resolveFlow(flow);
         if (proc) {
-            ctr = resolver->resolveContainerForPid(proc->pid);
+            chain = resolver->resolveContainerChainForPid(proc->pid);
+            ctr   = chain.isEmpty()
+                  ? std::optional<qiftop::backend::ContainerInfo>{}
+                  : std::optional<qiftop::backend::ContainerInfo>{chain.last()};
         }
-        if (proc && (ctr || !wantContainer)) break;
+        if (proc && (!chain.isEmpty() || !wantContainer)) break;
         QThread::msleep(pollMs);
     }
 
@@ -205,6 +221,17 @@ int main(int argc, char **argv)
             {QStringLiteral("name"),    ctr->name},
         });
     }
+    if (!chain.isEmpty()) {
+        QJsonArray chainJson;
+        for (const auto &entry : chain) {
+            chainJson.append(QJsonObject{
+                {QStringLiteral("runtime"), entry.runtime},
+                {QStringLiteral("id"),      entry.id},
+                {QStringLiteral("name"),    entry.name},
+            });
+        }
+        result.insert(QStringLiteral("container_chain"), chainJson);
+    }
 
     QStringList failures;
     if (p.isSet(QStringLiteral("expect-pid"))) {
@@ -218,11 +245,16 @@ int main(int argc, char **argv)
             failures << QStringLiteral("comm: expected '%1' got '%2'").arg(want, proc->comm);
     }
     if (p.isSet(QStringLiteral("expect-container-runtime"))) {
-        const QString want = p.value(QStringLiteral("expect-container-runtime"));
+        const QString raw = p.value(QStringLiteral("expect-container-runtime"));
+        // Comma-separated list of acceptable runtimes; required because
+        // nested setups (e.g. k3d = k3s-in-docker) can plausibly label
+        // the inner workload as either 'containerd' or 'kubernetes'
+        // depending on which cgroup driver k3s ended up using.
+        const QStringList wants = raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
         if (!ctr)
-            failures << QStringLiteral("container.runtime: expected '%1' but no container info").arg(want);
-        else if (ctr->runtime != want)
-            failures << QStringLiteral("container.runtime: expected '%1' got '%2'").arg(want, ctr->runtime);
+            failures << QStringLiteral("container.runtime: expected one of '%1' but no container info").arg(raw);
+        else if (!wants.contains(ctr->runtime))
+            failures << QStringLiteral("container.runtime: expected one of '%1' got '%2'").arg(raw, ctr->runtime);
     }
     if (p.isSet(QStringLiteral("expect-container-id-prefix"))) {
         const QString want = p.value(QStringLiteral("expect-container-id-prefix"));
@@ -230,6 +262,34 @@ int main(int argc, char **argv)
             failures << QStringLiteral("container.id: expected prefix '%1' but no container info").arg(want);
         else if (!ctr->id.startsWith(want))
             failures << QStringLiteral("container.id: expected prefix '%1' got '%2'").arg(want, ctr->id);
+    }
+    if (p.isSet(QStringLiteral("expect-chain-min-depth"))) {
+        bool ok = false;
+        const int want = p.value(QStringLiteral("expect-chain-min-depth")).toInt(&ok);
+        if (!ok || want < 1) {
+            failures << QStringLiteral("expect-chain-min-depth: not a positive integer");
+        } else if (chain.size() < want) {
+            failures << QStringLiteral("chain depth: expected ≥%1 got %2")
+                            .arg(want).arg(chain.size());
+        }
+    }
+    // Multiple --expect-chain-contains values combine with AND; each
+    // value is itself a comma-separated any-of list. This lets a single
+    // invocation assert "the chain has a docker wrapper AND a containerd
+    // workload AND something kubernetes-ish (or containerd-ish)".
+    for (const auto &raw : p.values(QStringLiteral("expect-chain-contains"))) {
+        const QStringList wants = raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        bool found = false;
+        for (const auto &entry : chain) {
+            if (wants.contains(entry.runtime)) { found = true; break; }
+        }
+        if (!found) {
+            QStringList got;
+            got.reserve(chain.size());
+            for (const auto &entry : chain) got << entry.runtime;
+            failures << QStringLiteral("chain: missing any-of '%1' (chain = [%2])")
+                            .arg(raw, got.join(QLatin1Char(',')));
+        }
     }
 
     if (!failures.isEmpty()) {

@@ -224,6 +224,7 @@ older agents. Tokens currently emitted:
 | `tcp-state`           | `ConnectionDto.tcpState` populated for TCP flows.           |
 | `process-attribution` | Resolver chain provides per-flow PID / comm / uid (Linux `SockDiagResolver`). UI-visible once `ConnectionDtoV2` lands. |
 | `container-attribution` | Resolver chain provides per-PID container runtime + id + name (Linux `CgroupClassifier`). |
+| `container-chain`     | Resolver chain exposes the full OUTER→INNER container nesting via `ProcessResolver::resolveContainerChainForPid` (Linux `CgroupClassifier`). Single-attribution consumers can ignore this and keep calling `resolveContainerForPid`. |
 | `netns-scan`          | Resolver chain dumps sock_diag in every non-host network namespace (Linux `NetnsScanner`, requires `CAP_SYS_ADMIN`). |
 
 Add a token here when shipping a new optional behaviour; **never remove

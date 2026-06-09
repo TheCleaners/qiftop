@@ -38,9 +38,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$RUNTIME" in
-    docker|podman) ;;
-    k3d|crio)
-        echo "runtime '$RUNTIME' planned but not yet implemented; supported: docker, podman" >&2
+    docker|podman|k3d) ;;
+    crio)
+        echo "runtime '$RUNTIME' planned but not yet implemented; supported: docker, podman, k3d" >&2
         exit 2 ;;
     *) echo "unknown runtime '$RUNTIME'" >&2; exit 2 ;;
 esac

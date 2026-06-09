@@ -20,6 +20,28 @@ apt-get install -y --no-install-recommends \
 echo "==> ensure vagrant user can run docker without sudo"
 usermod -aG docker vagrant || true
 
+echo "==> install kubectl + k3d (for k8s attribution runner)"
+# kubectl: pinned to a recent stable. Apt has it as 'kubectl' in
+# ubuntu's universe but the version is ancient — pull from the
+# official binary release.
+KUBECTL_VERSION="v1.30.4"
+if ! command -v kubectl >/dev/null 2>&1 || \
+   [[ "$(kubectl version --client -o json 2>/dev/null | grep -o '"gitVersion":"[^"]*"' | head -1)" != *"$KUBECTL_VERSION"* ]]; then
+    curl -fsSL -o /usr/local/bin/kubectl \
+        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+    chmod +x /usr/local/bin/kubectl
+fi
+
+# k3d: spins up k3s clusters as docker containers. Tiny (~50MB), fast
+# (~20s cold), and shipped as a single static binary.
+K3D_VERSION="v5.7.4"
+if ! command -v k3d >/dev/null 2>&1 || \
+   [[ "$(k3d version 2>/dev/null | head -1)" != *"$K3D_VERSION"* ]]; then
+    curl -fsSL "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64" \
+        -o /usr/local/bin/k3d
+    chmod +x /usr/local/bin/k3d
+fi
+
 echo "==> NOPASSWD sudo for the vagrant user (override host sudoers timeout)"
 # Vagrant boxes already ship this, but be explicit so a re-provision on
 # a customized box can't silently regress and reintroduce password prompts
@@ -34,6 +56,9 @@ chmod 0440 /etc/sudoers.d/90-vagrant-nopasswd
 echo "==> pre-pull alpine image so the first test run isn't dominated by pull time"
 docker pull alpine:3.20 || true
 podman pull docker.io/library/alpine:3.20 || true
+
+echo "==> pre-pull k3s image so the first k3d cluster create isn't dominated by it"
+docker pull rancher/k3s:v1.30.4-k3s1 || true
 
 echo "==> conntrack module: ensure it's loaded for the ConntrackMonitor tests"
 modprobe nf_conntrack || true

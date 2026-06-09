@@ -83,3 +83,50 @@ jobs:
 
       - name: run attribution probe against podman
         run: sudo --preserve-env=PATH ctest --test-dir build -R attribution_podman --output-on-failure -V
+
+  attribution-k3d:
+    name: attribution / k3d / ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install build deps + kubectl + k3d
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            qt6-base-dev libqt6dbus6 \
+            libnl-3-dev libnl-route-3-dev libnetfilter-conntrack-dev \
+            iproute2 curl ca-certificates
+          # kubectl — pinned to match the k3s shipped with k3d below.
+          KUBECTL_VER=v1.30.4
+          curl -sSLo /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VER}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+          # k3d.
+          K3D_VER=v5.7.4
+          curl -sSL "https://github.com/k3d-io/k3d/releases/download/${K3D_VER}/k3d-linux-amd64" \
+            | sudo install -m 0755 /dev/stdin /usr/local/bin/k3d
+          # Pre-pull the k3s image so cluster create doesn't burn 90s.
+          docker pull rancher/k3s:v1.30.4-k3s1
+          docker pull alpine:3.20
+
+      - name: verify k3d + docker
+        run: |
+          docker info
+          k3d version
+          kubectl version --client
+
+      - name: configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DQIFTOP_BUILD_TESTS=ON \
+            -DQIFTOP_BUILD_INTEGRATION_TESTS=OFF \
+            -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON
+
+      - name: build probe
+        run: cmake --build build --target qiftop-attribution-probe -j
+
+      - name: run attribution probe against k3d
+        run: sudo --preserve-env=PATH ctest --test-dir build -R attribution_k3d --output-on-failure -V
