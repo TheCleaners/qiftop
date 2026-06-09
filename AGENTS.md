@@ -664,9 +664,17 @@ remember when iterating:
   agent. `applySettingsToUi()` is the single point where the
   user-pref AND the wire-token are AND-ed together to (un)hide each
   column — never `setColumnHidden()` either column outside that
-  helper. The header right-click menu can still summon them
-  manually (advanced/debug use); doing so without the token just
-  shows "—" / "(host)" in every row.
+  helper. The header right-click menu's Process / Container entries
+  are routed through `Settings::setShowProcessColumn` /
+  `setShowContainerColumn` (the menu interceptor at
+  `MainWindow::showConnHeaderMenu`), so toggling them updates the
+  persisted setting AND triggers `applySettingsToUi()` — the AND-gate
+  still applies. Without the wire token a header-menu toggle persists
+  the user's preference but the column remains hidden until a
+  capable agent is detected; the checkbox in the menu reflects the
+  ACTUAL visibility (it stays unchecked), not the persisted setting.
+  Pinned end-to-end by
+  `test_mainwindow_smoke::processColumnHiddenWithoutWireCapability`.
 * **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
   uses an **allowlist** (`sessionEnv()`) when forwarding environment
   variables into the privileged child, not a denylist. The root child runs
