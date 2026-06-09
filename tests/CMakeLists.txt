@@ -171,3 +171,12 @@ if(QIFTOP_BUILD_INTEGRATION_TESTS)
         "QIFTOP_AGENT_BINARY=\"$<TARGET_FILE:qiftop-agent>\"")
     add_dependencies(test_agent_integration qiftop-agent)
 endif()
+
+# Tier-2 attribution integration harness. OFF by default — requires root,
+# CAP_NET_ADMIN+CAP_SYS_ADMIN, and a working container runtime. Enable
+# explicitly via scripts/integration-test.sh or the integration.yml CI.
+option(QIFTOP_BUILD_ATTRIBUTION_INTEGRATION
+       "Build per-runtime attribution integration tests (requires docker/podman/k3d/crio at runtime)" OFF)
+if(QIFTOP_BUILD_ATTRIBUTION_INTEGRATION)
+    add_subdirectory(integration/attribution)
+endif()

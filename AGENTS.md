@@ -406,6 +406,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp |
 | `test_cgroup_real_fixtures` | Data-driven: 13 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, host scopes). Adding a runtime = drop a fixture + add one table row. |
+| `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |
 
 ### 6.3 Gaps worth filling
 
@@ -414,13 +415,10 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
    live conntrack handle.
 2. **End-to-end with a real conntrack table** — requires root; needs a
    CI runner with `CAP_NET_ADMIN` or a privileged container.
-3. **Tier-2 attribution integration harness** — spin up real Docker /
-   Podman / k3d containers, drive `createProcessResolver` against
-   actual flows, verify pid + container attribution end-to-end. Should
-   live under `tests/integration/attribution/` and be gated by
-   `QIFTOP_BUILD_INTEGRATION_TESTS=ON` so unit-test runs stay fast.
-   Tier 1 (real `/proc/<pid>/cgroup` fixtures from upstream sources)
-   is shipped in `test_cgroup_real_fixtures`.
+3. **Tier-2 attribution: more runtimes.** Docker runner is shipped
+   (`tests/integration/attribution/runners/run-docker.sh`). Podman,
+   k3d/k8s, and cri-o still need their own runners — the probe binary
+   contract is reusable, only the bring-up scripts differ.
 
 ### 6.3a Validating against real-world container runtimes
 
@@ -446,10 +444,17 @@ silent attribution loss for users running that runtime.
      d. Run the test — RED first (proves the fixture really exercises
         the new regex), then green.
 
-2. **Tier 2 — live container harness** (not yet built; see §6.3 #3).
-   Bring up real Docker + Podman + k3d containers, generate flows
-   into them, assert the resolver chain returns the expected
-   `(pid, container_runtime, container_id, container_name)`.
+2. **Tier 2 — live container harness** (`tests/integration/attribution/`,
+   gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON`). The
+   `qiftop-attribution-probe` binary wraps the production resolver
+   factory and exposes a CLI for "given this 4-tuple, expect this
+   runtime + this CID prefix". Per-runtime runner scripts under
+   `runners/` bring up a real container, generate a flow, then drive
+   the probe. Currently shipped: `run-docker.sh` (container→host
+   outbound, exercises NetnsScanner). Not on default ctest, not on
+   PR CI — only on push-to-main / release / workflow_dispatch via
+   `.github/workflows/integration.yml`. Dev-box driver:
+   `scripts/integration-test.sh --runtime docker`.
 
 3. **Tier 3 — CI matrix.** Once Tier 2 exists, run it in GitHub Actions
    on every push, matrixed across `docker:latest` / `podman` / `k3d`
