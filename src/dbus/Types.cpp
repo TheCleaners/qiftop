@@ -90,6 +90,25 @@ void registerTypes()
     qDBusRegisterMetaType<ContainerInfoDtoList>();
     qDBusRegisterMetaType<ConnectionDto>();
     qDBusRegisterMetaType<ConnectionDtoList>();
+    qDBusRegisterMetaType<ProcessDetailsDto>();
+}
+
+QDBusArgument &operator<<(QDBusArgument &a, const ProcessDetailsDto &p)
+{
+    a.beginStructure();
+    a << p.pid << p.uid << p.comm << p.exe << p.cmdline << p.cwd
+      << p.startTimeJiffies;
+    a.endStructure();
+    return a;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &a, ProcessDetailsDto &p)
+{
+    a.beginStructure();
+    a >> p.pid >> p.uid >> p.comm >> p.exe >> p.cmdline >> p.cwd
+      >> p.startTimeJiffies;
+    a.endStructure();
+    return a;
 }
 
 InterfaceStatsDto toDto(const InterfaceStats &s)

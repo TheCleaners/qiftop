@@ -53,6 +53,14 @@ public slots:
     // See InterfacesService::SetDesiredIntervalMs for semantics.
     void SetDesiredIntervalMs(uint intervalMs);
 
+    // On-demand process details fetch (capability: on-demand-process-details).
+    // Returns a struct with pid=0 when the PID is gone or unreadable —
+    // never throws. Cheap (a handful of /proc reads); intended for UI
+    // affordances (Copy cmdline, expand process row, etc.) and is NOT
+    // called per-tick. Clients should cache by (pid, startTimeJiffies)
+    // to survive PID reuse within one boot.
+    dbus::ProcessDetailsDto GetProcessDetails(uint pid);
+
 signals:
     // See InterfacesService::StatsChanged for the meaning of `monotonicMs`.
     Q_SCRIPTABLE void ConnectionsChanged(qulonglong monotonicMs,

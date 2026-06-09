@@ -15,7 +15,7 @@ namespace {
 // and gate optional feature use. Breaking wire changes still require a
 // NetworkAgent2 interface (AGENTS.md §8); this is the *additive* contract
 // version.
-constexpr auto kAgentVersion = "0.4";
+constexpr auto kAgentVersion = "0.5";
 } // namespace
 
 InterfacesService::InterfacesService(NetworkMonitor *monitor, QObject *parent)
@@ -65,6 +65,7 @@ QStringList InterfacesService::capabilities() const
         QStringLiteral("oper-state"),        // InterfaceStatsDto carries IF_OPER_* per RFC 2863
         QStringLiteral("link-errors"),       // InterfaceStatsDto carries rx/tx errors + drops
         QStringLiteral("tcp-state"),         // ConnectionDto carries conntrack TCP state (TcpState enum)
+        QStringLiteral("on-demand-process-details"), // Connections.GetProcessDetails(pid) RPC available
     };
     if (m_resolver) {
         // Merge resolver tokens (process-attribution, container-attribution,

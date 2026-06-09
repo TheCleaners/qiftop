@@ -4,12 +4,17 @@
 #include <QDBusMessage>
 
 #include <algorithm>
+#include <limits>
 
 #include "IdleManager.h"
 #include "Attribution.h"
 #include "backend/ConnectionMonitor.h"
 #include "backend/PlatformInfo.h"
 #include "util/ConnectionHeuristics.h"
+
+#ifdef BACKEND_LINUX
+#include "backend/linux/ProcDetails.h"
+#endif
 
 namespace qiftop::agent {
 
@@ -61,12 +66,33 @@ void ConnectionsService::SetDesiredIntervalMs(uint intervalMs)
 {
     if (!m_idle) return;
     const QString sender = calledFromDBus() ? message().service() : QString();
-    // Only count this call as activity if the hint was actually accepted.
-    // Otherwise a rejected peer (hint table full, empty sender) could keep
-    // the agent out of idle by hammering this method even though we did
-    // no real work.
+    // See ConnectionsService::SetDesiredIntervalMs — only count accepted
+    // hints as activity (see commit message for rationale).
     if (m_idle->setClientHint(sender, static_cast<int>(intervalMs)))
         m_idle->noteActivity();
+}
+
+dbus::ProcessDetailsDto ConnectionsService::GetProcessDetails(uint pid)
+{
+    if (m_idle) m_idle->noteActivity();
+    dbus::ProcessDetailsDto out;
+    if (pid == 0 || pid > quint32(std::numeric_limits<qint32>::max()))
+        return out;
+
+#ifdef BACKEND_LINUX
+    const auto d = backend::linux_::readProcessDetails(static_cast<qint32>(pid));
+    if (!d.valid) return out;
+    out.pid              = quint32(d.pid);
+    out.uid              = d.uid;
+    out.comm             = d.comm;
+    out.exe              = d.exe;
+    out.cmdline          = d.cmdline;
+    out.cwd              = d.cwd;
+    out.startTimeJiffies = d.startTimeJiffies;
+#else
+    Q_UNUSED(pid);
+#endif
+    return out;
 }
 
 void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)

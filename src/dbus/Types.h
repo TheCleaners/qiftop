@@ -104,12 +104,32 @@ struct ConnectionDto {
 };
 using ConnectionDtoList = QList<ConnectionDto>;
 
+// On-demand process details (v0.4): the expensive enrichment that is
+// deliberately NOT shipped in the bulk ConnectionsChanged signal.
+// Clients fetch this per-PID via GetProcessDetails(pid) when the user
+// expands a row or opens a context-menu action. Cache key on the
+// client side is (pid, startTimeJiffies) — startTime monotonically
+// distinguishes PID reuse on a single boot.
+struct ProcessDetailsDto {
+    quint32 pid               = 0;   // 0 ⇒ process not reachable
+    quint32 uid               = 0;
+    QString comm;
+    QString exe;
+    QString cmdline;
+    QString cwd;
+    quint64 startTimeJiffies  = 0;
+
+    friend bool operator==(const ProcessDetailsDto &, const ProcessDetailsDto &) = default;
+};
+
 QDBusArgument &operator<<(QDBusArgument &a, const InterfaceStatsDto &s);
 const QDBusArgument &operator>>(const QDBusArgument &a, InterfaceStatsDto &s);
 QDBusArgument &operator<<(QDBusArgument &a, const ContainerInfoDto &c);
 const QDBusArgument &operator>>(const QDBusArgument &a, ContainerInfoDto &c);
 QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c);
 const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c);
+QDBusArgument &operator<<(QDBusArgument &a, const ProcessDetailsDto &p);
+const QDBusArgument &operator>>(const QDBusArgument &a, ProcessDetailsDto &p);
 
 void registerTypes();
 
@@ -131,3 +151,4 @@ Q_DECLARE_METATYPE(qiftop::dbus::ContainerInfoDto)
 Q_DECLARE_METATYPE(qiftop::dbus::ContainerInfoDtoList)
 Q_DECLARE_METATYPE(qiftop::dbus::ConnectionDto)
 Q_DECLARE_METATYPE(qiftop::dbus::ConnectionDtoList)
+Q_DECLARE_METATYPE(qiftop::dbus::ProcessDetailsDto)

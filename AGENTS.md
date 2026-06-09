@@ -133,7 +133,7 @@ Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 | Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
 |----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
 | `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged(t, a(...))`, `CadenceChanged(u)`         | `Version: s`, `Capabilities: as` |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uussssτ)`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
 
 Both data signals carry a leading `quint64 monotonicMs` (a
 `QElapsedTimer`-based, agent-process-local monotonic millisecond
@@ -216,7 +216,7 @@ Per-field notes:
 
 ### Contract version & capabilities
 
-`Version` is a free-form string (currently `"0.4"`) bumped only for
+`Version` is a free-form string (currently `"0.5"`) bumped only for
 *additive* changes to the agent surface that clients may care about.
 **Breaking** changes (DTO signature, method removal/rename) still require
 a fresh `org.qiftop.NetworkAgent2` interface per §8.
@@ -228,11 +228,14 @@ a fresh `org.qiftop.NetworkAgent2` interface per §8.
 > arg to both data signals. The 0.3 → 0.4 bump (v0.2 attribution work)
 > appended 7 fields to `ConnectionDto` (`pid, uid, comm,
 > containerRuntime, containerId, containerName, containerChain`) for
-> bulk process + container attribution. Since only pre-release alphas
-> existed in those windows we reshaped in place rather than branching
-> `NetworkAgent2`. Older alpha clients failing to unmarshal fall back
-> cleanly to the in-process backend via the existing probe. Post-v0.1
-> stable release, breaking changes MUST go through `NetworkAgent2`.
+> bulk process + container attribution. The 0.4 → 0.5 bump added the
+> on-demand `Connections.GetProcessDetails(pid)` RPC for fetching
+> `exe`/`cmdline`/`cwd`/`startTime` lazily — additive (no DTO
+> change). Since only pre-release alphas existed in those windows we
+> reshaped in place rather than branching `NetworkAgent2`. Older
+> alpha clients failing to unmarshal fall back cleanly to the
+> in-process backend via the existing probe. Post-v0.1 stable
+> release, breaking changes MUST go through `NetworkAgent2`.
 
 `Capabilities` is a `QStringList` of dash-separated lowercase tokens.
 Clients gate optional behaviour on token presence — never on a Version
@@ -260,6 +263,7 @@ older agents. Tokens currently emitted:
 | `process-attribution-wire` | `ConnectionDto` carries `pid`, `uid`, `comm` populated server-side. Implies the agent has a `process-attribution`-capable resolver wired. Mirror token so non-resolver-aware clients gate UI on this rather than poking attribution fields blindly. |
 | `container-attribution-wire` | `ConnectionDto` carries `containerRuntime`, `containerId`, `containerName` populated server-side. Implies `container-attribution` resolver capability. |
 | `container-chain-wire` | `ConnectionDto.containerChain` is populated when applicable. Strict superset of `container-attribution-wire`: a flow with no nesting still yields a single-entry chain. Advertised together with `container-attribution-wire`. |
+| `on-demand-process-details` | `Connections.GetProcessDetails(pid u) → (pid u, uid u, comm s, exe s, cmdline s, cwd s, startTimeJiffies t)` RPC is available. Returns an all-zero struct (pid=0) on unknown / disappeared PID, never a DBus error. Cache key for clients is `(pid, startTimeJiffies)` — startTime distinguishes PID reuse within one boot. Advertised unconditionally on Linux; non-Linux backends return empty. |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.
@@ -354,6 +358,17 @@ open:
   conntrack table — every flow on the host, including other users'
   source ports and peer IPs. `/proc/net/nf_conntrack` is root-only on
   most distros; the agent must not demote that.
+* **`GetProcessDetails` exposure tradeoff.** The on-demand RPC returns
+  `comm`/`exe`/`cmdline`/`cwd` for any reachable PID. `/proc/<pid>/exe`
+  and `/proc/<pid>/cwd` symlinks are normally mode-0700 (readable
+  only by the process owner and root), and `/proc/<pid>/cmdline` is
+  world-readable but can leak credentials passed on the command line.
+  The root agent reads these and ships them to any netdev-group caller.
+  We accept this as trust-equivalent on top of the existing bulk
+  pid/uid/comm exposure in `GetConnections` — netdev membership is
+  already a "network admin" capability. Distros that want a stricter
+  gate should narrow `GetProcessDetails` in the bus policy file rather
+  than disabling the whole interface.
 
 `dist/debian/postinst` ensures the `netdev` group exists and, when
 installed via `sudo apt install` / `pkexec`, automatically adds the
@@ -441,6 +456,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults. |
 | `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
+| `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
 | `test_filter`              | Filter mini-language parser + evaluator. v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. |
 | `test_cgroup_real_fixtures` | Data-driven: 16 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host scopes). Adding a runtime = drop a fixture + add one table row. |
 | `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |

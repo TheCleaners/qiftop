@@ -10,6 +10,7 @@ add_library(backend_linux STATIC
     SockDiagResolver.cpp
     CgroupClassifier.cpp
     NetnsScanner.cpp
+    ProcDetails.cpp
 )
 
 target_include_directories(backend_linux

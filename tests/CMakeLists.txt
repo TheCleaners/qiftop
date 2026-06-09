@@ -160,6 +160,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     qiftop_add_test(test_proc_snapshot
         test_proc_snapshot.cpp)
+
+    qiftop_add_test(test_proc_details
+        test_proc_details.cpp
+        ${CMAKE_SOURCE_DIR}/src/backend/linux/ProcDetails.cpp)
 endif()
 
 # Integration test: spawns the actual qiftop-agent binary against a session
