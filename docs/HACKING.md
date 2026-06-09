@@ -668,10 +668,14 @@ Before opening / merging:
 
 CI is wired up in `.github/workflows/`:
 
-* **`ci.yml`** — runs on every push / PR to `master`/`main`. Matrix of
-  Ubuntu 24.04 + Ubuntu 26.04 + Fedora 44 (containerised), Debug +
-  Release. Builds with Ninja, runs `ctest` under `dbus-run-session`
-  with `QT_QPA_PLATFORM=offscreen`.
+* **`ci.yml`** — runs on every push / PR to `master`/`main`. Native
+  ubuntu-24.04 runner × Debug + Release, plus a containerised matrix
+  for `ubuntu:26.04` and `fedora:44` (× Debug + Release). The
+  containerised slot for 26.04 is a temporary measure until GitHub
+  Actions publishes a native `ubuntu-26.04` runner image — swap it
+  back to a `runs-on:` entry as soon as that's available. Builds with
+  Ninja, runs `ctest` under `dbus-run-session` with
+  `QT_QPA_PLATFORM=offscreen`.
 * **`release.yml`** — triggered on `v*` tag push. Builds .debs on a
   clean ubuntu-24.04 runner, verifies the tag matches
   `project(qiftop VERSION ...)`, computes SHA256SUMS, and publishes a

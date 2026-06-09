@@ -494,8 +494,10 @@ build the Tier 1 fixtures:
 
 `.github/workflows/ci.yml` runs the full test suite under
 `dbus-run-session` with `QT_QPA_PLATFORM=offscreen` on a matrix of
-ubuntu-24.04 + ubuntu-26.04 × Debug + Release, plus a containerised
-fedora:44 job. `HOME` is redirected to
+native ubuntu-24.04 × Debug + Release, plus a containerised matrix
+(ubuntu:26.04 + fedora:44) × Debug + Release. The 26.04 slot is
+containerised pending availability of a native ubuntu-26.04 GitHub
+Actions runner image. `HOME` is redirected to
 `$RUNNER_TEMP/home` so QSettings/Autostart tests don't trample the
 runner user. See docs/HACKING.md §5.5 for the test-writing conventions.
 
