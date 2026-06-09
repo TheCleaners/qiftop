@@ -457,16 +457,29 @@ silent attribution loss for users running that runtime.
    factory and exposes a CLI for "given this 4-tuple, expect this
    runtime + this CID prefix". Per-runtime runner scripts under
    `runners/` bring up a real container, generate a flow, then drive
-   the probe. Currently shipped: `run-docker.sh` (container→host
-   outbound, exercises NetnsScanner). Not on default ctest, not on
-   PR CI — only on push-to-main / release / workflow_dispatch via
-   `.github/workflows/integration.yml`. Dev-box driver:
-   `scripts/integration-test.sh --runtime docker`.
+   the probe. Currently shipped: `run-docker.sh`, `run-podman.sh`
+   (CI), `run-k3d.sh`, `run-k8s.sh` (local-only via Vagrant). Not on
+   default ctest. Dev-box driver: `scripts/integration-test.sh
+   --runtime docker`.
+
+   **Tier-2 is opportunistic, not mandatory.** Tier-1 fixtures
+   protect against regex drift (the high-frequency failure mode);
+   Tier-2 mostly re-verifies the NetnsScanner setns(2) plumbing
+   that's already generic across every Linux-netns runtime. Add a
+   new Tier-2 runner only when the runtime has a GENUINELY-NOVEL
+   cgroup/netns shape that the existing runners don't exercise
+   (k3d's nested chain qualified; cri-o didn't; nspawn didn't once
+   we confirmed the resolver was already name-id safe). See
+   docs/ATTRIBUTION.md §5e for the longer rationale. The cost
+   ceiling: each new Tier-2 runner adds at least one bridge to the
+   test VM and cross-runner state pollution risk grows
+   superlinearly (see §6.5a for the k0s/podman case study).
 
 3. **Tier 3 — CI matrix.** Once Tier 2 exists, run it in GitHub Actions
-   on every push, matrixed across `docker:latest` / `podman` / `k3d`
-   / `cri-o` so upstream cgroup-path changes break a PR check, not a
-   user.
+   on every push, matrixed across `docker:latest` / `podman` so
+   upstream cgroup-path changes break a PR check, not a user.
+   Heavyweight runners (k3d, k8s) stay local-only (cold bring-up
+   3-4 min each); their chain shapes are pinned by Tier-1 fixtures.
 
 When in doubt about a real-world cgroup path: consult the runtime's
 upstream documentation directly. Recent successful sources used to

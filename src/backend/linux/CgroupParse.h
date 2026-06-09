@@ -141,6 +141,14 @@ inline constexpr int kMaxContainerChainDepth = 16;
     // separately because they aren't single-segment patterns. The
     // cgroupfs-driver bare-hex containerd leaf needs CONTEXT (parent
     // segment must be a pod) so it's also handled below, not here.
+    //
+    // ID truncation rule: hex-ID runtimes (docker, containerd, cri-o,
+    // podman, k8s pod) `.left(12)` to match what `docker ps` etc.
+    // display. Name-ID runtimes (lxd, lxc, nspawn) keep the FULL
+    // captured name — truncating a human-chosen name would destroy
+    // information, not summarise it. When adding a new classifier
+    // branch, decide which family it belongs to before reflexively
+    // copying `.left(12)`. See docs/ATTRIBUTION.md §5c.
     auto classifySegment = [](const QString &seg) -> std::optional<ContainerInfo> {
         if (const auto m = rxCriContainerd.match(seg); m.hasMatch())
             return ContainerInfo{QStringLiteral("containerd"), m.captured(1).left(12), {}};

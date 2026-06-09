@@ -336,6 +336,24 @@ Unit tests live under `tests/` and are built by default
      tests.
   3. `cmake --build build && (cd build && ctest --output-on-failure)`.
 
+* **TDD it whenever practical.** For the cgroup classifier work
+  (steps 3 + Tier-1 fixtures + nspawn), the rhythm was: write the
+  fixture/test FIRST → confirm it fails for the *expected reason* →
+  add the regex → confirm green. This protects against the failure
+  mode where you write a test that passes trivially because the new
+  code path was never actually exercised.
+
+* **Fixture-hex-length trap.** Cgroup regexes are anchored to
+  EXACTLY `{64}` hex chars. Test fixtures that build a 64-hex CID
+  by concatenating short tokens (`"abc123" + "def456" + ...`) are
+  easy to get wrong — once we shipped a fixture with 88 chars
+  pretending to be 64. Always use `QString(64, QLatin1Char('c'))`
+  for predictable length; reach for concatenation only when the
+  test specifically needs distinguishing prefixes (e.g. the
+  chain-depth test in `test_cgroup_parse.cpp::chainCapsAtMaxDepth`
+  uses `%1` + zero-padding to keep IDs distinct yet exactly 64
+  chars).
+
 * **What's worth testing here:** pure helpers — the heuristics in
   `src/util/ConnectionHeuristics.h`, `Settings` migration on the
   `QSettings` ini path, `Exporter` formatting, anything in `util/`

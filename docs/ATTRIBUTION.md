@@ -254,6 +254,73 @@ docker wrapper around naked containerd pods. The k0s runner uses
 runner. (See AGENTS.md §6.5a for the cross-runner ordering gotcha
 that this k0s install creates on shared VMs.)
 
+### 5c. Hex-ID runtimes vs. name-ID runtimes
+
+Not all "container IDs" are the same shape. Two distinct families:
+
+* **Content-addressable / hex** — docker, podman, containerd-via-k8s,
+  cri-o. ID is a sha256-derived 64-hex string in the cgroup path;
+  CLI tools (`docker ps`, `podman ps`, `crictl ps`) show the first
+  12 chars. CgroupParse calls `m.captured(1).left(12)` so the value
+  we ship matches what a sysadmin would paste.
+* **Human-name** — lxd, lxc, systemd-nspawn. ID is a name the user
+  chose (`alpine`, `myguest`, `debian`). CgroupParse captures the
+  full name; **never apply `.left(12)`** — it would truncate
+  meaningful identifiers (`a-long-machine-na...` is worse than
+  useless).
+
+When adding a new runtime classifier, decide which family it belongs
+to BEFORE writing the regex. The wire DTO (`ConnectionDto.containerId`)
+is untyped string for both; the cosmetic-vs-truncate decision lives
+entirely in CgroupParse. Downstream code makes no length/hex
+assumptions (verified via grep `id.left` / `id.length`).
+
+### 5d. Chain-shape "MUST NOT contain X" as a regression assertion
+
+The Tier-2 runner suite exploits a useful property of nested-runtime
+chains: each runtime combination has a CHARACTERISTIC SHAPE that
+differs from neighbouring combinations:
+
+|                        | Depth | Has `docker`? | Has `kubernetes`? |
+|------------------------|-------|---------------|-------------------|
+| Plain docker           | 1     | yes           | no                |
+| Plain podman           | 1     | no            | no                |
+| Naked k8s (k0s)        | 2     | **no**        | yes               |
+| k3s-in-docker (k3d)    | 3     | **yes**       | yes               |
+
+The "MUST NOT" rows are as informative as the "MUST" rows. If
+`classifyPathChain` ever starts hallucinating a `docker` wrapper
+around naked containerd pods (e.g. because some future regex grows
+a false-positive match on `kubepods.slice`), the unit-test chain
+length check will go from 2 → 3 and the `grep -q '"runtime":"docker"'`
+in `run-k8s.sh` will succeed when it must fail. Cheap regression
+trap; reuse the pattern when adding any new nested-runtime
+classifier.
+
+### 5e. Why we stopped adding Tier-2 runners after the fourth
+
+Empirical observation from bringing up docker → podman → k3d → k8s
+runners: each new Tier-2 runtime is a steeply diminishing-returns
+investment.
+
+* The **regex-drift risk** is what Tier-1 fixtures protect against,
+  and a Tier-1 fixture takes ~10 minutes (drop a path-shape under
+  `tests/fixtures/cgroup_real/`, add one row to the data table).
+* The **NetnsScanner-walks-into-the-container-netns** code path is
+  generic across every runtime that uses Linux network namespaces
+  (i.e. all of them); docker already exercises it end-to-end. Adding
+  a 5th runner mostly re-proves the same setns(2) plumbing.
+* Each new Tier-2 runner adds **at least one bridge** to the test
+  VM (`docker0`, `cni-podman0`, `kube-bridge`, ...) and the
+  cross-runner state pollution risk grows superlinearly (k0s'
+  kube-router rules break podman; see AGENTS.md §6.5a).
+
+So our rule: **Tier-1 is mandatory, Tier-2 is opportunistic.** Add
+Tier-2 only when a runtime has a genuinely-novel cgroup or netns
+shape (k3d's nested chain qualified; cri-o didn't; nspawn might
+have if not for `id.left(12)` being already correct). cri-o and
+nspawn live happily at Tier-1.
+
 ---
 
 ## 6. Data source #3 — cross-namespace netns scanning
