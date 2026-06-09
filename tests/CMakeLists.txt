@@ -156,6 +156,19 @@ qiftop_add_test(test_attribution
 qiftop_add_test(test_composite_resolver
     test_composite_resolver.cpp)
 
+# Widget-level smoke test. Links against the full qiftop_ui static
+# library so MainWindow, all delegates, all proxies, and the real
+# Settings code path are exercised end-to-end. Uses Fake monitors
+# (tests/fakes/FakeMonitors.h) to feed canned snapshots through the
+# same signal edges the production backends do. Runs offscreen
+# under QT_QPA_PLATFORM=offscreen so CI doesn't need a display.
+qiftop_add_test(test_mainwindow_smoke
+    test_mainwindow_smoke.cpp
+    fakes/FakeMonitors.h)
+target_link_libraries(test_mainwindow_smoke PRIVATE qiftop_ui Qt6::Widgets)
+target_include_directories(test_mainwindow_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests)
+
 qiftop_add_test(test_group_proxy
     test_group_proxy.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/ConnectionGroupProxy.cpp)

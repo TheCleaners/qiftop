@@ -157,6 +157,7 @@ void MainWindow::setupUi()
     m_netProxy->setSortRole(NetworkModel::SortRole);
 
     m_netView = new QTableView;
+    m_netView->setObjectName(QStringLiteral("netView"));
     m_netView->setModel(m_netProxy);
     m_netView->setSortingEnabled(true);
     m_netView->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -202,6 +203,7 @@ void MainWindow::setupUi()
     m_connGroupProxy->setSourceModel(m_connProxy);
 
     m_connView = new QTreeView;
+    m_connView->setObjectName(QStringLiteral("connView"));
     m_connView->setModel(m_connGroupProxy);
     m_connView->setSortingEnabled(true);
     m_connView->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -523,6 +525,7 @@ void MainWindow::setupMenuAndToolbar()
     auto *viewModeLabel  = new QLabel(tr("View:"), viewModeBox);
     viewModeLabel->setForegroundRole(QPalette::WindowText);
     m_connViewModeCombo  = new QComboBox(viewModeBox);
+    m_connViewModeCombo->setObjectName(QStringLiteral("connViewModeCombo"));
     m_connViewModeCombo->addItem(tr("Flat"),
                                  static_cast<int>(Settings::ConnectionViewMode::Flat));
     m_connViewModeCombo->addItem(tr("by Interface"),
@@ -571,6 +574,7 @@ void MainWindow::setupMenuAndToolbar()
     auto *filterLabel     = new QLabel(tr("Filter:"), filterBox);
     filterLabel->setForegroundRole(QPalette::WindowText);
     m_connFilterEdit      = new QLineEdit(filterBox);
+    m_connFilterEdit->setObjectName(QStringLiteral("connFilterEdit"));
     m_connFilterEdit->setClearButtonEnabled(true);
     m_connFilterEdit->setPlaceholderText(
         tr("e.g.  proto:tcp and dport=443"));

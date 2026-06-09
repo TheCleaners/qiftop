@@ -58,8 +58,12 @@ target_include_directories(qiftop_dbus PUBLIC src)
 target_link_libraries(qiftop_dbus PUBLIC Qt6::Core Qt6::Network Qt6::DBus)
 
 # --- Client (qiftop) --------------------------------------------------------
-add_executable(qiftop
-    src/main.cpp
+# qiftop_ui is a static library carrying every translation unit of the GUI
+# client EXCEPT main.cpp. Both the qiftop executable and the widget-level
+# smoke tests (tests/test_mainwindow_smoke.cpp) link against it so the
+# tests exercise the real production widget tree, models, and proxies —
+# not stand-in lookalikes.
+add_library(qiftop_ui STATIC
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
     src/backend/PlatformInfo.cpp
@@ -89,20 +93,23 @@ add_executable(qiftop
     src/util/Logging.cpp
     src/util/PrivilegeEscalator.cpp
 )
+target_include_directories(qiftop_ui PUBLIC src)
+target_link_libraries(qiftop_ui PUBLIC
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::DBus qiftop_dbus)
 
-target_include_directories(qiftop PRIVATE src)
+add_executable(qiftop src/main.cpp)
+target_link_libraries(qiftop PRIVATE qiftop_ui)
 
 # Platform backend selection (shared between client and agent)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_subdirectory(src/backend/linux)
-    target_link_libraries(qiftop PRIVATE backend_linux)
-    target_compile_definitions(qiftop PRIVATE BACKEND_LINUX)
+    target_link_libraries(qiftop_ui PUBLIC backend_linux)
+    target_compile_definitions(qiftop_ui PUBLIC BACKEND_LINUX)
 else()
     message(FATAL_ERROR "No backend available for platform: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-target_link_libraries(qiftop PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::DBus qiftop_dbus)
-qiftop_apply_attribution_defs(qiftop)
+qiftop_apply_attribution_defs(qiftop_ui)
 
 # --- Privileged agent (qiftop-agent) ----------------------------------------
 add_executable(qiftop-agent
