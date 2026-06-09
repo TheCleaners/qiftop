@@ -84,11 +84,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        image: ["ubuntu:26.04", "fedora:44"]
         build_type: [Debug, Release]
         include:
-          - image: ubuntu:26.04
+          - image: "ubuntu:26.04"
             family: debian
-          - image: fedora:44
+          - image: "fedora:44"
             family: fedora
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +116,7 @@ jobs:
             mesa-libGL-devel \
             libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
             dbus-daemon dbus-tools \
+            libasan libubsan \
             shadow-utils
 
       - name: Configure
