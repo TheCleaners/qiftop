@@ -109,6 +109,7 @@ add_executable(qiftop-agent
     src/agent/Config.cpp
     src/agent/InterfacesService.cpp
     src/agent/ConnectionsService.cpp
+    src/agent/Attribution.cpp
     src/agent/IdleManager.cpp
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp

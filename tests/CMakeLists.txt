@@ -143,6 +143,10 @@ qiftop_add_test(test_resolver_factory
     ${CMAKE_SOURCE_DIR}/src/backend/ProcessResolverFactory.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
 
+qiftop_add_test(test_attribution
+    test_attribution.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/Attribution.cpp)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_test(test_sockdiag_parse
         test_sockdiag_parse.cpp)

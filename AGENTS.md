@@ -32,6 +32,7 @@ src/
 │   ├── main.cpp              # config load, bus name, wires services + IdleManager
 │   ├── InterfacesService.{h,cpp}
 │   ├── ConnectionsService.{h,cpp}
+│   ├── Attribution.{h,cpp}  # pure helper: enrich Connection list via ProcessResolver
 │   └── IdleManager.{h,cpp}   # adaptive polling cadence + per-client hints
 ├── backend/                  # backend interfaces + platform impls
 │   ├── NetworkMonitor.{h,cpp}      # abstract: per-interface stats
@@ -438,7 +439,8 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_agent_integration`   | Spawns real `qiftop-agent --session`, drives Version/Capabilities/GetInterfaces/SetDesiredIntervalMs end-to-end |
 | `test_units`               | `util::formatBytes` / `formatByteRate` IEC unit boundaries + precision |
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
-| `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp |
+| `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults. |
+| `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
 | `test_cgroup_real_fixtures` | Data-driven: 16 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host scopes). Adding a runtime = drop a fixture + add one table row. |
 | `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |
 | `attribution_podman` (Tier-2) | Sibling of `attribution_docker` using rootful podman + netavark; exercises the `libpod-<id>.scope` cgroup hierarchy that the docker path never produces. SKIPs cleanly on hosts where rootful podman can't start a container (e.g. logind rlimit-delegation quirks). |

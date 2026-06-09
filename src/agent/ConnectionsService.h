@@ -7,6 +7,8 @@
 
 class ConnectionMonitor;
 
+namespace qiftop::backend { class ProcessResolver; }
+
 namespace qiftop::agent {
 
 class IdleManager;
@@ -26,6 +28,24 @@ public:
     [[nodiscard]] bool accountingEnabled() const { return m_accountingEnabled; }
 
     void setIdleManager(IdleManager *idle) { m_idle = idle; }
+
+    // Wire in the resolver used to enrich each emitted snapshot with
+    // process + container attribution. Optional: when null, attribution
+    // fields on the wire stay zero/empty (capability tokens
+    // `process-attribution-wire` / `container-attribution-wire` are
+    // gated by InterfacesService on the resolver's own capability
+    // tokens, so they won't be advertised either).
+    //
+    // `wantContainerChain` should mirror whether the resolver
+    // advertises `container-chain`; passing true with a resolver that
+    // doesn't implement the chain just yields single-entry chains
+    // (default base-class behaviour wraps resolveContainerForPid).
+    void setProcessResolver(backend::ProcessResolver *resolver,
+                            bool wantContainerChain = false)
+    {
+        m_resolver = resolver;
+        m_wantContainerChain = wantContainerChain;
+    }
 
 public slots:
     dbus::ConnectionDtoList GetConnections();
@@ -48,6 +68,8 @@ private slots:
 private:
     ConnectionMonitor       *m_monitor = nullptr;
     IdleManager             *m_idle    = nullptr;
+    backend::ProcessResolver*m_resolver= nullptr;
+    bool                     m_wantContainerChain = false;
     dbus::ConnectionDtoList  m_last;
     bool                     m_accountingEnabled = true;
     QElapsedTimer            m_clock;       // started in ctor; drives snapshot timestamps

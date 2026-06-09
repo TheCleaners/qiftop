@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "IdleManager.h"
+#include "Attribution.h"
 #include "backend/ConnectionMonitor.h"
 #include "backend/PlatformInfo.h"
 #include "util/ConnectionHeuristics.h"
@@ -102,6 +103,12 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
             c, ctx.localAddrs, ctx.loopbackAddrs,
             ctx.ephemeralLow, ctx.ephemeralHigh);
     }
+
+    // Populate process + container attribution from the wired resolver.
+    // No-op when resolver is null or returns nothing useful. PID/comm
+    // memoised internally so a single container hosting many flows
+    // costs O(unique-pids), not O(flows). See agent::attributeFlows.
+    attributeFlows(kept, m_resolver, AttributionOptions{m_wantContainerChain});
 
     m_last = dbus::toDtos(kept);
     emit ConnectionsChanged(static_cast<qulonglong>(m_clock.elapsed()), m_last);
