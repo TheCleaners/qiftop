@@ -105,6 +105,33 @@ private slots:
         QCOMPARE(info->id,      QStringLiteral("cafebabe0011"));
     }
 
+    // RUNTIMES-M3: Podman with `--cgroup-manager cgroupfs` (older
+    // cgroup-v1 hosts, or explicit config). Path segment is
+    // `libpod-<64hex>` WITHOUT `.scope`. Pre-fix this collided with the
+    // unanchored rxKubepodsPod and showed up as
+    // {kubernetes, "-<63hex>"}, both wrong.
+    void podmanLibpodCgroupfs()
+    {
+        const auto info = classifyPath(QStringLiteral(
+            "/machine.slice/libpod-cafebabe00112233445566778899001122334455667788990011223344556677"));
+        QVERIFY2(info.has_value(),
+                 "libpod-<hex> without .scope must classify as podman");
+        QCOMPARE(info->runtime, QStringLiteral("podman"));
+        QCOMPARE(info->id,      QStringLiteral("cafebabe0011"));
+    }
+
+    // Also pin the BARE form (no parent slice — possible on rootless
+    // setups under /user.slice/... before the /user.slice exclusion
+    // guard kicks in, or on minimal cgroup hierarchies).
+    void podmanLibpodCgroupfsBare()
+    {
+        const auto info = classifyPath(QStringLiteral(
+            "/libpod-cafebabe00112233445566778899001122334455667788990011223344556677"));
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("podman"));
+        QCOMPARE(info->id,      QStringLiteral("cafebabe0011"));
+    }
+
     void lxcPayload()
     {
         const auto info = classifyPath(QStringLiteral("/lxc.payload.myguest/init.scope"));

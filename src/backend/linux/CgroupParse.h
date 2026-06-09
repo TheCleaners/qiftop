@@ -99,6 +99,15 @@ inline constexpr int kMaxContainerChainDepth = 16;
         QStringLiteral("^docker-([0-9a-f]{64})\\.scope$"));
     static const QRegularExpression rxPodman(
         QStringLiteral("^libpod-([0-9a-f]{64})\\.scope$"));
+    // Podman cgroupfs cgroup manager (older cgroup-v1 hosts and any
+    // host explicitly configured with `--cgroup-manager cgroupfs`):
+    // the per-container segment is `libpod-<64hex>` WITHOUT a `.scope`
+    // suffix. Without this branch the unanchored rxKubepodsPod below
+    // matches `pod-<63hex>` inside `libpod-<64hex>` at offset 3 and
+    // mis-classifies the flow as `kubernetes` with a garbled id. Must
+    // be checked BEFORE rxKubepodsPod for that reason.
+    static const QRegularExpression rxPodmanCgfs(
+        QStringLiteral("^libpod-([0-9a-f]{64})$"));
     static const QRegularExpression rxLxd(
         QStringLiteral("^lxd-([^/\\s.]+)\\.service$"));
     // systemd-nspawn: containers registered via systemd-machined live
@@ -159,6 +168,8 @@ inline constexpr int kMaxContainerChainDepth = 16;
         if (const auto m = rxDockerScope.match(seg); m.hasMatch())
             return ContainerInfo{QStringLiteral("docker"), m.captured(1).left(12), {}};
         if (const auto m = rxPodman.match(seg); m.hasMatch())
+            return ContainerInfo{QStringLiteral("podman"), m.captured(1).left(12), {}};
+        if (const auto m = rxPodmanCgfs.match(seg); m.hasMatch())
             return ContainerInfo{QStringLiteral("podman"), m.captured(1).left(12), {}};
         if (const auto m = rxLxd.match(seg); m.hasMatch())
             return ContainerInfo{QStringLiteral("lxd"), m.captured(1), {}};

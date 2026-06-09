@@ -46,6 +46,11 @@ private slots:
         QTest::newRow("k8s_crio_besteffort")       << "k8s_crio_besteffort.txt"       << "cri-o"      << "f2b6e0560f1e";
         QTest::newRow("podman_rootless_v2")        << "podman_rootless_v2.txt"        << "podman"     << "abcdef012345";
         QTest::newRow("podman_rootful_v2")         << "podman_rootful_v2.txt"         << "podman"     << "abcdef012345";
+        // RUNTIMES-M3: cgroupfs cgroup manager omits the `.scope`
+        // suffix. Pre-fix this fixture would classify as
+        // {kubernetes, "-<63hex>"} via the unanchored rxKubepodsPod
+        // matching `pod-<hex>` inside `libpod-<hex>`.
+        QTest::newRow("podman_rootful_cgroupfs")   << "podman_rootful_cgroupfs.txt"   << "podman"     << "cafebabe0011";
         QTest::newRow("lxd_systemd")               << "lxd_systemd.txt"               << "lxd"        << "testcontaine";
         QTest::newRow("lxc_payload")               << "lxc_payload.txt"               << "lxc"        << "myguest";
         // systemd-nspawn: machinectl-registered (the modern default), both
