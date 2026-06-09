@@ -85,6 +85,7 @@ struct SockDiagResolver::Impl {
     QHash<qint32, quint64>      pidToStartTime;
     qint64                      lastProcWalkMs = -1;
     bool                        ready = false;
+    bool                        warnedAboutEacces = false;
 
     // ----- netlink helpers (delegate to sockdiag:: free functions) ---------
 
@@ -125,6 +126,16 @@ struct SockDiagResolver::Impl {
         DIR *procDir = ::opendir("/proc");
         if (!procDir) return;
         std::vector<char> linkBuf(256);
+        // Track readlink EACCES so we can warn ONCE per process lifetime
+        // if /proc/<pid>/fd is unreadable across the board (typical
+        // cause: agent has uid=0 but no CAP_SYS_PTRACE, so
+        // ptrace_may_access() rejects readlink on every non-root
+        // process's fd symlinks → inodeToPid stays empty → every flow
+        // reports pid=0 even though process-attribution capability is
+        // advertised. Silent until now; one warning is enough — the
+        // condition is steady-state, not a once-per-tick race).
+        int readlinkOk = 0;
+        int readlinkEacces = 0;
         while (auto *de = ::readdir(procDir)) {
             const char *name = de->d_name;
             if (name[0] < '0' || name[0] > '9') continue;
@@ -144,7 +155,11 @@ struct SockDiagResolver::Impl {
                 for (;;) {
                     const ssize_t n = ::readlink(linkPath, linkBuf.data(),
                                                  linkBuf.size());
-                    if (n < 0) break;
+                    if (n < 0) {
+                        if (errno == EACCES) ++readlinkEacces;
+                        break;
+                    }
+                    ++readlinkOk;
                     if (static_cast<size_t>(n) < linkBuf.size()) {
                         const QString target = QString::fromUtf8(linkBuf.data(),
                                                                  int(n));
@@ -166,6 +181,18 @@ struct SockDiagResolver::Impl {
             ::closedir(fdDir);
         }
         ::closedir(procDir);
+        if (!warnedAboutEacces && readlinkOk == 0 && readlinkEacces > 0) {
+            qWarning("SockDiagResolver: every /proc/<pid>/fd readlink failed "
+                     "with EACCES (%d attempts). Process attribution will "
+                     "report pid=0 for every flow. Most likely cause: the "
+                     "agent has uid=0 but the systemd unit's "
+                     "CapabilityBoundingSet excludes CAP_SYS_PTRACE — "
+                     "ptrace_may_access() requires either matching uid "
+                     "or CAP_SYS_PTRACE to follow /proc/<pid>/fd/N symlinks "
+                     "for other users' processes.",
+                     readlinkEacces);
+            warnedAboutEacces = true;
+        }
         qCInfo(lcVerbose) << "SockDiagResolver: /proc walk refreshed,"
                           << inodeToPid.size() << "socket fds";
     }

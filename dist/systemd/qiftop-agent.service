@@ -15,10 +15,35 @@ ExecStart=/usr/bin/qiftop-agent
 ExecStartPre=-/usr/sbin/nft -f /usr/share/qiftop/qiftop-conntrack.nft
 ExecStopPost=-/usr/sbin/nft delete table inet qiftop
 User=root
-# Drop everything we don't need; we only require CAP_NET_ADMIN so we can
-# enable nf_conntrack_acct and read conntrack via netlink.
-CapabilityBoundingSet=CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
+# Capabilities the agent actually needs:
+#   CAP_NET_ADMIN       — open libnetfilter_conntrack, enable nf_conntrack_acct,
+#                         issue NETLINK_SOCK_DIAG dumps.
+#   CAP_SYS_PTRACE      — read /proc/<pid>/fd/* symlinks for processes owned
+#                         by other users. Without this, refreshProcWalk in
+#                         SockDiagResolver silently sees EACCES on every
+#                         non-root pid (root uid does NOT bypass
+#                         ptrace_may_access()), the inode→pid map stays
+#                         empty, and every flow reports pid=0 in the wire DTO
+#                         even though `process-attribution-wire` is advertised.
+#                         Also required to read /proc/<pid>/exe + /proc/<pid>/cwd
+#                         symlinks served by the on-demand GetProcessDetails RPC.
+#   CAP_DAC_READ_SEARCH — bypass DAC permission checks on /proc/<pid>/fd
+#                         directories (mode 0500, owned by the process owner).
+#                         A uid=0 process whose CapEff has been restricted via
+#                         CapabilityBoundingSet does NOT automatically bypass
+#                         DAC any more, so opendir("/proc/<other-uid-pid>/fd")
+#                         returns EACCES without this cap. Symptom is the
+#                         same as missing CAP_SYS_PTRACE: process attribution
+#                         silently sees only its own-uid pids.
+#   CAP_SYS_ADMIN       — needed by NetnsScanner's setns(2) into container
+#                         network namespaces so flows held by container-side
+#                         sockets attribute correctly. Without it, NetnsScanner
+#                         fails to initialize and the netns-scan capability
+#                         token is not advertised — process attribution still
+#                         works for host-netns flows, just not for flows whose
+#                         socket lives in a container netns.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SYS_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
