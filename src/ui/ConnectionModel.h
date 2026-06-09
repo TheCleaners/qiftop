@@ -85,6 +85,12 @@ public:
     // the model diff, so toggling it only takes effect on the next update.
     void setUdpAggregateByPeer(bool v)  { m_udpAggregateByPeer = v; }
 
+    // When false, the Container column's tooltip stops listing the
+    // OUTER→INNER nesting breakdown (one-line summary only). Gated in
+    // the UI by the agent's container-chain-wire capability; with no
+    // chain data the breakdown wouldn't render anyway.
+    void setShowContainerChainInTooltip(bool v) { m_showContainerChainInTooltip = v; }
+
     // When true, the entire row gets a faint background tint based on
     // its inferred direction (green = outbound, red = inbound). Unknown
     // direction = no tint. Repaints all rows on change.
@@ -216,6 +222,7 @@ private:
     bool         m_udpAggregateByPeer  = true;
     bool         m_tintRowByDirection  = false;
     bool         m_aliasIfaceAddrsAsLocalhost = true;
+    bool         m_showContainerChainInTooltip = true;
     bool         m_gaugeEnabled        = false;
     ThroughputMaxMode m_maxMode        = ThroughputMaxMode::Windowed;
     int          m_windowMs            = 30'000;

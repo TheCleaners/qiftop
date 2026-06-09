@@ -646,6 +646,21 @@ remember when iterating:
   `m_connGroupProxy->isGroupIndex(view)`. Adding a new grouping mode
   = extend the `Settings::ConnectionViewMode` enum + `groupKeyFor()`
   + `groupLabelFor()`; the rest is automatic.
+* **Process / Container columns are capability-gated, not always-on.**
+  `Column::Process` and `Column::Container` are hidden by default; the
+  Settings dialog's "Process & Container Attribution" sub-section
+  (Display tab) advertises three toggles — `Settings::showProcessColumn`
+  / `showContainerColumn` / `showContainerChainInTooltip` — each
+  enabled only when the agent advertises the matching wire token
+  (`process-attribution-wire` / `container-attribution-wire` /
+  `container-chain-wire`). The values persist regardless so they take
+  effect when the user later runs against an attribution-capable
+  agent. `applySettingsToUi()` is the single point where the
+  user-pref AND the wire-token are AND-ed together to (un)hide each
+  column — never `setColumnHidden()` either column outside that
+  helper. The header right-click menu can still summon them
+  manually (advanced/debug use); doing so without the token just
+  shows "—" / "(host)" in every row.
 * **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
   uses an **allowlist** (`sessionEnv()`) when forwarding environment
   variables into the privileged child, not a denylist. The root child runs

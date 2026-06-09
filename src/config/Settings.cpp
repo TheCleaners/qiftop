@@ -27,6 +27,9 @@ constexpr auto kRateSmoothingSecsLegacy   = "display/rateSmoothingSecs"; // pre-
 constexpr auto kShowStatusInTitle         = "display/showStatusInTitle";
 constexpr auto kConnectionFilterExpr      = "connections/filterExpr";
 constexpr auto kConnectionViewMode        = "connections/viewMode";
+constexpr auto kShowProcessColumn         = "connections/showProcessColumn";
+constexpr auto kShowContainerColumn       = "connections/showContainerColumn";
+constexpr auto kShowContainerChainInTooltip = "connections/showContainerChainInTooltip";
 } // namespace
 
 Settings::Settings(QObject *parent)
@@ -90,6 +93,10 @@ void Settings::load()
         if (mode >= 0 && mode <= static_cast<int>(ConnectionViewMode::ByProcess))
             m_connViewMode = static_cast<ConnectionViewMode>(mode);
     }
+    m_showProcessColumn   = m_store.value(kShowProcessColumn,   m_showProcessColumn).toBool();
+    m_showContainerColumn = m_store.value(kShowContainerColumn, m_showContainerColumn).toBool();
+    m_showContainerChainInTooltip = m_store.value(kShowContainerChainInTooltip,
+                                                  m_showContainerChainInTooltip).toBool();
 }
 
 void Settings::store(const char *key, const QVariant &value)
@@ -306,5 +313,29 @@ void Settings::setConnectionViewMode(ConnectionViewMode m)
     if (m == m_connViewMode) return;
     m_connViewMode = m;
     store(kConnectionViewMode, static_cast<int>(m));
+    emit changed();
+}
+
+void Settings::setShowProcessColumn(bool v)
+{
+    if (v == m_showProcessColumn) return;
+    m_showProcessColumn = v;
+    store(kShowProcessColumn, v);
+    emit changed();
+}
+
+void Settings::setShowContainerColumn(bool v)
+{
+    if (v == m_showContainerColumn) return;
+    m_showContainerColumn = v;
+    store(kShowContainerColumn, v);
+    emit changed();
+}
+
+void Settings::setShowContainerChainInTooltip(bool v)
+{
+    if (v == m_showContainerChainInTooltip) return;
+    m_showContainerChainInTooltip = v;
+    store(kShowContainerChainInTooltip, v);
     emit changed();
 }

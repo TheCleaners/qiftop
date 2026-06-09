@@ -14,13 +14,16 @@ class SettingsDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit SettingsDialog(Settings *settings, QWidget *parent = nullptr);
+    explicit SettingsDialog(Settings *settings,
+                            const QStringList &agentCapabilities = {},
+                            QWidget *parent = nullptr);
 
 private slots:
     void apply();
 
 private:
     Settings *m_settings;
+    QStringList m_agentCaps;
 
     QSpinBox  *m_pollIntervalSpin = nullptr;
     QSpinBox  *m_staleRetentionSpin = nullptr;
@@ -42,4 +45,7 @@ private:
     QSpinBox  *m_throughputWindowSpin = nullptr;
     QDoubleSpinBox *m_rateSmoothingSpin = nullptr;
     QCheckBox *m_showStatusInTitleBox = nullptr;
+    QCheckBox *m_showProcessColumnBox   = nullptr;
+    QCheckBox *m_showContainerColumnBox = nullptr;
+    QCheckBox *m_showChainInTooltipBox  = nullptr;
 };

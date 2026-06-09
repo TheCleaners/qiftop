@@ -74,6 +74,16 @@ public:
         ByProcess = 3,
     };
     [[nodiscard]] ConnectionViewMode connectionViewMode() const { return m_connViewMode; }
+    // Process / Container attribution column visibility. Gated in the
+    // Settings dialog by the agent's process-attribution-wire /
+    // container-attribution-wire capability tokens, but the values
+    // persist regardless so they survive switching backends. The
+    // "show chain in tooltip" toggle is independent — it controls
+    // whether the Container column's tooltip lists the full
+    // OUTER→INNER nesting (container-chain-wire token).
+    [[nodiscard]] bool showProcessColumn() const   { return m_showProcessColumn; }
+    [[nodiscard]] bool showContainerColumn() const { return m_showContainerColumn; }
+    [[nodiscard]] bool showContainerChainInTooltip() const { return m_showContainerChainInTooltip; }
     [[nodiscard]] int  throughputWindowSecs() const          { return m_throughputWindowSecs; }
     // EMA time constant (milliseconds) for smoothing per-connection
     // instantaneous rx/tx rates. 0 = no smoothing (raw per-tick deltas).
@@ -130,6 +140,9 @@ public:
     void setStartOnLogin(bool v);
     void setConnectionFilterExpr(const QString &expr);
     void setConnectionViewMode(ConnectionViewMode m);
+    void setShowProcessColumn(bool v);
+    void setShowContainerColumn(bool v);
+    void setShowContainerChainInTooltip(bool v);
 
 signals:
     void changed();
@@ -163,4 +176,7 @@ private:
     bool m_showStatusInTitle             = false;
     QString m_connFilterExpr;
     ConnectionViewMode m_connViewMode    = ConnectionViewMode::Flat;
+    bool m_showProcessColumn             = false;
+    bool m_showContainerColumn           = false;
+    bool m_showContainerChainInTooltip   = true;
 };

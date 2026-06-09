@@ -671,6 +671,22 @@ void MainWindow::applySettingsToUi()
             static_cast<int>(ConnectionModel::Column::RxMax), !showMax);
         m_connView->setColumnHidden(
             static_cast<int>(ConnectionModel::Column::TxMax), !showMax);
+        // Attribution columns: visibility driven by Settings, but only
+        // when the connected agent actually carries the matching wire
+        // tokens. Without them the columns would just render "—" /
+        // "(host)" everywhere, which is misleading rather than helpful.
+        const bool procWire = m_agentCaps.contains(
+            QStringLiteral("process-attribution-wire"));
+        const bool contWire = m_agentCaps.contains(
+            QStringLiteral("container-attribution-wire"));
+        m_connView->setColumnHidden(
+            static_cast<int>(ConnectionModel::Column::Process),
+            !(procWire && m_settings->showProcessColumn()));
+        m_connView->setColumnHidden(
+            static_cast<int>(ConnectionModel::Column::Container),
+            !(contWire && m_settings->showContainerColumn()));
+        m_connModel->setShowContainerChainInTooltip(
+            m_settings->showContainerChainInTooltip());
     }
     if (m_connView && m_connGroupProxy) {
         // Apply the persisted view mode to the group proxy and adjust
@@ -1073,7 +1089,7 @@ void MainWindow::togglePaused(bool paused)
 
 void MainWindow::openSettingsDialog()
 {
-    SettingsDialog dlg(m_settings, this);
+    SettingsDialog dlg(m_settings, m_agentCaps, this);
     dlg.exec();
 }
 
@@ -1731,6 +1747,117 @@ void MainWindow::showConnectionContextMenu(const QPoint &pos)
                         [this, capturePos] { filterByConnectionRow(capturePos, /*exclude=*/false); });
                 connect(exclude, &QAction::triggered, this,
                         [this, capturePos] { filterByConnectionRow(capturePos, /*exclude=*/true);  });
+            }
+
+            // ---- Attribution section ------------------------------------
+            // Pull the structured attribution fields directly off the
+            // model's per-row roles so we don't depend on the (possibly
+            // hidden) Process / Container columns being visible.
+            const QModelIndex anchor = m_connModel->index(row, 0);
+            const qint32 pid = m_connModel
+                ->data(anchor, ConnectionModel::ProcessPidRole).toInt();
+            const QString comm = m_connModel
+                ->data(anchor, ConnectionModel::ProcessCommRole).toString();
+            const QString cRuntime = m_connModel
+                ->data(anchor, ConnectionModel::ContainerRuntimeRole).toString();
+            const QString cId   = m_connModel
+                ->data(anchor, ConnectionModel::ContainerIdRole).toString();
+            const QString cName = m_connModel
+                ->data(anchor, ConnectionModel::ContainerNameRole).toString();
+
+            const bool hasProcess   = pid > 0 || !comm.isEmpty();
+            const bool hasContainer = !cRuntime.isEmpty()
+                                      || !cId.isEmpty() || !cName.isEmpty();
+
+            // Quote a value for the filter mini-language. The parser
+            // treats double-quoted strings as one token, so this is safe
+            // for names with spaces / colons / parens. Backslash-escape
+            // any embedded quotes.
+            const auto quoteForFilter = [](const QString &raw) {
+                QString s = raw;
+                s.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+                s.replace(QLatin1Char('"'),  QStringLiteral("\\\""));
+                return QStringLiteral("\"%1\"").arg(s);
+            };
+            const auto setFilter = [this](const QString &clause) {
+                if (!m_connFilterEdit) return;
+                m_connFilterEdit->setText(clause);
+                m_connFilterEdit->setFocus(Qt::OtherFocusReason);
+            };
+
+            if (hasProcess || hasContainer) {
+                menu.addSeparator();
+            }
+
+            if (hasProcess) {
+                const QString commLabel = comm.isEmpty()
+                    ? tr("[pid %1]").arg(pid) : comm;
+                // Prefer comm match (`comm:<x>`) when available — pids
+                // are recycled and short-lived. Fall back to exact pid
+                // when we don't have a comm (rare but possible).
+                auto *byProc = menu.addAction(
+                    tr("Filter by process: %1").arg(commLabel));
+                if (!comm.isEmpty()) {
+                    const QString q = quoteForFilter(comm);
+                    connect(byProc, &QAction::triggered, this,
+                            [setFilter, q] {
+                                setFilter(QStringLiteral("comm=%1").arg(q));
+                            });
+                } else {
+                    connect(byProc, &QAction::triggered, this,
+                            [setFilter, pid] {
+                                setFilter(QStringLiteral("pid=%1").arg(pid));
+                            });
+                }
+
+                auto *copyProc = menu.addAction(
+                    tr("Copy process info"));
+                connect(copyProc, &QAction::triggered, this,
+                        [copyToClip, comm, pid] {
+                            copyToClip(QStringLiteral("%1 [pid %2]")
+                                .arg(comm.isEmpty() ? QStringLiteral("?") : comm)
+                                .arg(pid));
+                        });
+            }
+
+            if (hasContainer) {
+                const QString containerLabel = !cName.isEmpty() ? cName
+                                              : !cId.isEmpty()   ? cId
+                                              : cRuntime;
+                // Container filter: prefer name (stable, human-meaningful);
+                // fall back to id; final fallback is runtime-only which
+                // matches every flow in that runtime.
+                auto *byCont = menu.addAction(
+                    tr("Filter by container: %1").arg(containerLabel));
+                QString matchToken = !cName.isEmpty() ? cName
+                                    : !cId.isEmpty()   ? cId
+                                    : cRuntime;
+                const QString q = quoteForFilter(matchToken);
+                connect(byCont, &QAction::triggered, this,
+                        [setFilter, q] {
+                            setFilter(QStringLiteral("container:%1").arg(q));
+                        });
+
+                if (!cRuntime.isEmpty()) {
+                    auto *byRt = menu.addAction(
+                        tr("Filter by runtime: %1").arg(cRuntime));
+                    const QString rq = quoteForFilter(cRuntime);
+                    connect(byRt, &QAction::triggered, this,
+                            [setFilter, rq] {
+                                setFilter(QStringLiteral("runtime=%1").arg(rq));
+                            });
+                }
+
+                auto *copyCont = menu.addAction(
+                    tr("Copy container info"));
+                connect(copyCont, &QAction::triggered, this,
+                        [copyToClip, cRuntime, cId, cName] {
+                            QStringList parts;
+                            if (!cRuntime.isEmpty()) parts << cRuntime;
+                            if (!cName.isEmpty())    parts << cName;
+                            if (!cId.isEmpty())      parts << cId;
+                            copyToClip(parts.join(QLatin1Char(' ')));
+                        });
             }
         }
     }

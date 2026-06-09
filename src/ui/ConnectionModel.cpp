@@ -439,7 +439,7 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
                 .arg(c.container.runtime.isEmpty() ? QStringLiteral("?") : c.container.runtime,
                      c.container.id.isEmpty()      ? QStringLiteral("?") : c.container.id,
                      c.container.name.isEmpty()    ? QStringLiteral("?") : c.container.name);
-            if (c.containerChain.size() >= 2) {
+            if (c.containerChain.size() >= 2 && m_showContainerChainInTooltip) {
                 s += QStringLiteral("\n\nNesting (outer → inner):");
                 for (const auto &ci : c.containerChain) {
                     const QString disp = !ci.name.isEmpty() ? ci.name

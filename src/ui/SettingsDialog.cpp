@@ -29,9 +29,12 @@ QWidget *makeFormTab(QFormLayout *&form)
 }
 } // namespace
 
-SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
+SettingsDialog::SettingsDialog(Settings *settings,
+                               const QStringList &agentCapabilities,
+                               QWidget *parent)
     : QDialog(parent)
     , m_settings(settings)
+    , m_agentCaps(agentCapabilities)
 {
     setWindowTitle(tr("Preferences"));
     setModal(true);
@@ -216,6 +219,70 @@ SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
             this, syncThroughputEnabled);
     syncThroughputEnabled();
 
+    // --- Process & Container Attribution (display section) ----------------
+    // Gated by the agent's *-attribution-wire capability tokens: clients
+    // talking to an old agent or to the in-process fallback (no resolver)
+    // see the toggles disabled with an explanatory tooltip — the values
+    // still persist so they take effect when the user later runs against
+    // an attribution-capable agent.
+    const bool hasProcessWire   = m_agentCaps.contains(
+        QStringLiteral("process-attribution-wire"));
+    const bool hasContainerWire = m_agentCaps.contains(
+        QStringLiteral("container-attribution-wire"));
+    const bool hasChainWire     = m_agentCaps.contains(
+        QStringLiteral("container-chain-wire"));
+
+    auto *sep2 = new QFrame;
+    sep2->setFrameShape(QFrame::HLine);
+    sep2->setFrameShadow(QFrame::Sunken);
+    displayForm->addRow(sep2);
+
+    auto *attribHeader = new QLabel(tr("<b>Process &amp; Container Attribution</b>"));
+    displayForm->addRow(attribHeader);
+
+    const QString offTip = tr(
+        "The connected agent does not advertise this capability — "
+        "the column would be empty. The setting still persists and "
+        "will take effect when the agent supports it.");
+
+    m_showProcessColumnBox = new QCheckBox(tr("Show Process column"));
+    m_showProcessColumnBox->setChecked(m_settings->showProcessColumn());
+    if (!hasProcessWire) {
+        m_showProcessColumnBox->setEnabled(false);
+        m_showProcessColumnBox->setToolTip(offTip);
+    } else {
+        m_showProcessColumnBox->setToolTip(tr(
+            "Reveal the per-flow owning process (comm + pid). "
+            "Toggleable any time via the column header's right-click menu."));
+    }
+    displayForm->addRow(m_showProcessColumnBox);
+
+    m_showContainerColumnBox = new QCheckBox(tr("Show Container column"));
+    m_showContainerColumnBox->setChecked(m_settings->showContainerColumn());
+    if (!hasContainerWire) {
+        m_showContainerColumnBox->setEnabled(false);
+        m_showContainerColumnBox->setToolTip(offTip);
+    } else {
+        m_showContainerColumnBox->setToolTip(tr(
+            "Reveal the container runtime + name (or \"(host)\" "
+            "for non-containerised flows). A small \"▸ N×\" badge "
+            "indicates nested containers."));
+    }
+    displayForm->addRow(m_showContainerColumnBox);
+
+    m_showChainInTooltipBox = new QCheckBox(tr("Show full container chain in tooltip"));
+    m_showChainInTooltipBox->setChecked(m_settings->showContainerChainInTooltip());
+    if (!hasChainWire) {
+        m_showChainInTooltipBox->setEnabled(false);
+        m_showChainInTooltipBox->setToolTip(offTip);
+    } else {
+        m_showChainInTooltipBox->setToolTip(tr(
+            "When a container is nested (e.g. pod → sidecar), the "
+            "Container tooltip lists each level from outermost to "
+            "innermost. Disable for a one-line summary only."));
+    }
+    displayForm->addRow(m_showChainInTooltipBox);
+
     tabs->addTab(displayTab, tr("Display"));
 
     // --- DNS tab ---
@@ -291,6 +358,9 @@ void SettingsDialog::apply()
     m_settings->setThroughputWindowSecs(m_throughputWindowSpin->value());
     m_settings->setRateSmoothingMs(int(qRound(m_rateSmoothingSpin->value() * 1000.0)));
     m_settings->setShowStatusInTitle(m_showStatusInTitleBox->isChecked());
+    m_settings->setShowProcessColumn(m_showProcessColumnBox->isChecked());
+    m_settings->setShowContainerColumn(m_showContainerColumnBox->isChecked());
+    m_settings->setShowContainerChainInTooltip(m_showChainInTooltipBox->isChecked());
     m_settings->setCloseToTray(m_closeToTrayBox->isChecked());
     m_settings->setStartOnLogin(m_startOnLoginBox->isChecked());
 }
