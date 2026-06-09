@@ -8,6 +8,111 @@ Pre-release alpha tags (`v0.1-alphaN`) are intentionally omitted —
 their commit history is preserved in `git log`. This file is the
 human-readable summary for *shipping* releases.
 
+## [Unreleased]
+
+### Added
+
+- **Per-flow process & container attribution** — every flow in the
+  Connections view can now carry the owning PID + `comm` + UID, plus
+  the container runtime / id / name where applicable. Driven by a
+  pluggable resolver chain wired into the agent: `SockDiagResolver`
+  walks `NETLINK_SOCK_DIAG` to map 5-tuples → socket inode → PID;
+  `CgroupClassifier` parses `/proc/<pid>/cgroup` to classify the
+  process into a container scope; `NetnsScanner` extends sock_diag
+  coverage into every non-host network namespace so container-side
+  flows attribute correctly (requires `CAP_SYS_ADMIN`). All bounded
+  caches with `(pid, starttime)` PID-reuse guards.
+- **Nested container chain** — for stacked runtimes (e.g. k3s pods
+  inside docker-launched k3d nodes), qiftop walks the full OUTER →
+  INNER ancestry and exposes it via `ConnectionDto.containerChain`.
+  Tooltip shows the breakdown when chain depth ≥ 2; the chain badge
+  ▸ in the Container column hints at the count. Pinned by 18
+  real-world `/proc/<pid>/cgroup` fixtures + Tier-2 integration
+  runners for docker, podman, k3d, naked k8s.
+- **Process and Container columns** in the Connections view —
+  capability-gated against the agent's wire tokens, hidden by
+  default to preserve the v0.1-iftop-like baseline. Settings →
+  Display → "Process & Container Attribution" controls visibility +
+  chain-in-tooltip rendering. Header right-click also offers per-
+  column toggles. `ConnectionAttributionDelegate` renders the
+  PID/runtime/name + a small annotation in the same gauge-overlay
+  style as the rest of the row.
+- **On-demand `GetProcessDetails(pid)` RPC** — clients fetch
+  `exe`/`cmdline`/`cwd`/`startTime` lazily on right-click rather
+  than carrying them in every snapshot. Cache key for clients is
+  `(pid, startTime)` so PID reuse never serves stale data.
+- **Filter mini-language extensions** — `pid=`, `uid=`, `comm:`,
+  `runtime=docker`, `container:<haystack>` (multi-search across
+  runtime / id / name), and `chain_has:<runtime>` (matches any
+  ancestor in `containerChain`). `pid=0` selects unattributed
+  flows by design.
+- **Grouped views in the Connections tab** — new View dropdown:
+  Flat (default, v0.1 look), By Interface, By Container, By
+  Process. Group rows aggregate rate / byte / packet sums and
+  child-flow counts; per-group sort by aggregated value works
+  via column-header click. Persisted across runs.
+- **Row context-menu attribution actions** — Filter by Process /
+  Container / Runtime, Copy process / container info. All filter
+  values are quoted via the filter mini-language so colons,
+  spaces, etc. don't break parsing.
+
+### Changed
+
+- **DBus contract bumped to Version `"0.5"`** (additive):
+  - `ConnectionDto` extended with `pid`, `uid`, `comm`,
+    `containerRuntime`, `containerId`, `containerName`,
+    `containerChain[(runtime,id,name)]`.
+  - New `Connections.GetProcessDetails(uint pid) → (...)` method.
+  - Six new capability tokens: `process-attribution-wire`,
+    `container-attribution-wire`, `container-chain-wire`,
+    `process-attribution`, `container-attribution`,
+    `container-chain`, `netns-scan`, `on-demand-process-details`.
+  - The contract version 0.1 → 0.5 spanned pre-release alphas;
+    only the 0.5 wire ships in v0.2. Older clients fail to
+    unmarshal and fall back to the in-process backend via the
+    existing probe.
+- **`postinst` auto-enrols the installing user into `netdev`**
+  via `$SUDO_USER` / `$PKEXEC_UID`. Users still need to log out
+  or `newgrp netdev` for the membership to take effect, but the
+  manual `usermod -a -G netdev "$USER"` step is no longer
+  required for typical sudo / pkexec installs.
+- Connections view is now a `QTreeView` (was `QTableView`) to
+  host the grouped modes. Flat mode is a strict pass-through and
+  remains pixel-identical to v0.1 (no indentation, no decoration,
+  same delegates).
+
+### Fixed
+
+- Per-flow throughput gauge dark fill is painted on the Connections
+  view again (regression introduced when the view migrated to
+  `QTreeView`; `RowGaugeDelegate` was casting unconditionally to
+  `QTableView*` and silently bailing).
+- Connections-view header click now actually sorts rows
+  (`ConnectionGroupProxy::sort()` was missing — Qt's default no-op
+  was inherited).
+- `/user.slice/.../user@<uid>.service` and its app-service
+  descendants no longer mis-attribute as `systemd` units; on every
+  desktop these would otherwise label every browser tab / Wayland
+  helper as a container.
+- `ConnectionGroupProxy` no longer reset-storms on every
+  `dataChanged` / `rowsInserted` / `rowsRemoved` from the source;
+  Flat mode is now a strict 1:1 pass-through that preserves
+  selection and scroll.
+- Container column on grouped rows no longer mis-renders as
+  `(host)`; the delegate falls through to the model's aggregate
+  text (`—`) for group rows.
+
+### Tier-2 attribution integration
+
+- Live `qiftop-attribution-probe` runners for **docker** and
+  **rootful podman** ship under
+  `tests/integration/attribution/runners/`, gated by
+  `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON`. Docker + podman run on
+  push-to-main / dispatch / release in CI. k3d and naked-k8s (k0s)
+  runners exist for local Vagrant runs — cold bring-up is ~3-4 min
+  each so they're not in CI; the chain shapes they cover are
+  pinned by Tier-1 unit tests.
+
 ## [0.1] — 2026-06-08
 
 The first qiftop stable release. A Qt 6 iftop-style Linux network
