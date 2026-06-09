@@ -6,6 +6,7 @@
 
 #include <QTest>
 
+#include "backend/Connection.h"
 #include "backend/ProcessResolverFactory.h"
 
 using namespace qiftop::backend;

@@ -5,6 +5,7 @@
 
 #include <QTest>
 
+#include "backend/Connection.h"
 #include "backend/null/NullProcessResolver.h"
 
 using namespace qiftop::backend;

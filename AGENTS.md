@@ -144,11 +144,16 @@ restarts.
 
 DTOs live in `src/dbus/Types.h`.
 
-**Connection wire signature** (15 fields per flow):
-`a(yysqysqttttsyuy)` =
+**Connection wire signature** (22 outer fields + nested chain):
+`a(yysqysqttttsyuyuussssa(sss))` =
 `(proto, localFamily, localAddress, localPort, remoteFamily, remoteAddress,
 remotePort, rxBytes, txBytes, rxPackets, txPackets, iface, direction,
-ifIndex, tcpState)`.
+ifIndex, tcpState, pid, uid, comm, containerRuntime, containerId,
+containerName, containerChain[a(sss)])`.
+
+Each `containerChain` entry is `(runtime, id, name)` — outer-to-inner
+nesting, leaf entry equals `(containerRuntime, containerId, containerName)`
+when both are populated.
 
 **InterfaceStats wire signature** (16 fields per row):
 `(ssusasttttbbuytttt)` =
@@ -185,10 +190,32 @@ Per-field notes:
   kernel counters via libnl `RTNL_LINK_RX/TX_ERRORS / RX/TX_DROPPED`.
   Useful for surfacing flaky NICs and tight-budget tunnels. Capability:
   `link-errors`.
+* `pid` / `uid` / `comm` — Best-effort process attribution for a flow.
+  `pid == 0` means unattributed (no resolver wired, or the flow's
+  socket couldn't be located via SOCK_DIAG within the cache window).
+  `comm` is the kernel-truncated 15-byte basename. Expensive fields
+  (`exe`, `cmdline`, `cwd`) are deliberately NOT shipped on the wire —
+  fetched on demand via `GetProcessDetails(pid)` per the "default-cheap
+  pipeline" design principle. Capability: `process-attribution-wire`.
+* `containerRuntime` / `containerId` / `containerName` — Best-effort
+  container-scope attribution. `containerRuntime` is lowercase
+  (`"docker"`, `"containerd"`, `"podman"`, `"kubernetes"`, `"systemd"`,
+  `"lxc"`, `"lxd"`, `"nspawn"`). `containerId` is the 12-char hex
+  prefix for content-addressable runtimes and the full human name for
+  name-ID runtimes (lxd/lxc/nspawn) — see `docs/ATTRIBUTION.md §5c`.
+  All three empty when the flow has no container scope. Capability:
+  `container-attribution-wire`.
+* `containerChain` — Nested ancestry, outer-to-inner. Empty when no
+  nesting was detected. When non-empty the leaf entry equals
+  `(containerRuntime, containerId, containerName)`. Examples: a flow
+  inside a k8s-managed containerd pod yields
+  `[{"kubernetes", "<pod-uid>", ""}, {"containerd", "<cid>", ""}]`
+  (depth 2); a flow inside docker-in-docker can reach depth 3.
+  Capability: `container-chain-wire`.
 
 ### Contract version & capabilities
 
-`Version` is a free-form string (currently `"0.3"`) bumped only for
+`Version` is a free-form string (currently `"0.4"`) bumped only for
 *additive* changes to the agent surface that clients may care about.
 **Breaking** changes (DTO signature, method removal/rename) still require
 a fresh `org.qiftop.NetworkAgent2` interface per §8.
@@ -196,9 +223,12 @@ a fresh `org.qiftop.NetworkAgent2` interface per §8.
 > Historical note: the 0.1 → 0.2 bump (pre-release v0.1-alpha2 →
 > alpha3) reshaped the wire (added `direction` byte, switched `proto`
 > to IANA, PascalCased `AccountingChanged`). The 0.2 → 0.3 bump
-> (alpha3 → tag tbd) extended both DTOs and added a `monotonicMs`
-> leading arg to both data signals. Since only pre-release alphas
-> existed in either window we reshaped in place rather than branching
+> (alpha3 → v0.1) extended both DTOs and added a `monotonicMs` leading
+> arg to both data signals. The 0.3 → 0.4 bump (v0.2 attribution work)
+> appended 7 fields to `ConnectionDto` (`pid, uid, comm,
+> containerRuntime, containerId, containerName, containerChain`) for
+> bulk process + container attribution. Since only pre-release alphas
+> existed in those windows we reshaped in place rather than branching
 > `NetworkAgent2`. Older alpha clients failing to unmarshal fall back
 > cleanly to the in-process backend via the existing probe. Post-v0.1
 > stable release, breaking changes MUST go through `NetworkAgent2`.
@@ -226,6 +256,9 @@ older agents. Tokens currently emitted:
 | `container-attribution` | Resolver chain provides per-PID container runtime + id + name (Linux `CgroupClassifier`). |
 | `container-chain`     | Resolver chain exposes the full OUTER→INNER container nesting via `ProcessResolver::resolveContainerChainForPid` (Linux `CgroupClassifier`). Single-attribution consumers can ignore this and keep calling `resolveContainerForPid`. |
 | `netns-scan`          | Resolver chain dumps sock_diag in every non-host network namespace (Linux `NetnsScanner`, requires `CAP_SYS_ADMIN`). |
+| `process-attribution-wire` | `ConnectionDto` carries `pid`, `uid`, `comm` populated server-side. Implies the agent has a `process-attribution`-capable resolver wired. Mirror token so non-resolver-aware clients gate UI on this rather than poking attribution fields blindly. |
+| `container-attribution-wire` | `ConnectionDto` carries `containerRuntime`, `containerId`, `containerName` populated server-side. Implies `container-attribution` resolver capability. |
+| `container-chain-wire` | `ConnectionDto.containerChain` is populated when applicable. Strict superset of `container-attribution-wire`: a flow with no nesting still yields a single-entry chain. Advertised together with `container-attribution-wire`. |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.

@@ -11,6 +11,9 @@
 #include "dbus/Types.h"
 #include "backend/Connection.h"
 
+using qiftop::backend::ContainerInfo;
+using qiftop::backend::ProcessInfo;
+
 class TestDbusTypes : public QObject {
     Q_OBJECT
 private slots:
@@ -157,6 +160,99 @@ private slots:
         QCOMPARE(back.txErrors,  s.txErrors);
         QCOMPARE(back.rxDropped, s.rxDropped);
         QCOMPARE(back.txDropped, s.txDropped);
+    }
+
+    // ---- v0.4 attribution wire fields ----------------------------------
+
+    void connectionDtoCarriesAttribution()
+    {
+        // Bulk attribution: pid/uid/comm/container.* always present (zero/
+        // empty when no resolver is wired). EXE / cmdline are NOT on the
+        // wire — fetched on demand via GetProcessDetails per design
+        // principle "default-cheap pipeline".
+        Connection c;
+        c.proto      = L4Proto::Tcp;
+        c.local.address  = QHostAddress(QStringLiteral("10.0.0.5"));
+        c.local.port = 8080;
+        c.remote.address = QHostAddress(QStringLiteral("203.0.113.7"));
+        c.remote.port    = 443;
+        c.process.pid = 1234;
+        c.process.uid = 33;
+        c.process.comm = QStringLiteral("nginx");
+        c.container = ContainerInfo{
+            QStringLiteral("docker"),
+            QStringLiteral("af85275074f5"),
+            QStringLiteral("web-frontend")};
+        c.containerChain = {
+            ContainerInfo{QStringLiteral("kubernetes"),
+                          QStringLiteral("1eb53288-f9d"), {}},
+            ContainerInfo{QStringLiteral("docker"),
+                          QStringLiteral("af85275074f5"),
+                          QStringLiteral("web-frontend")},
+        };
+
+        const auto dto = qiftop::dbus::toDto(c);
+        QCOMPARE(dto.pid, quint32(1234));
+        QCOMPARE(dto.uid, quint32(33));
+        QCOMPARE(dto.comm, QStringLiteral("nginx"));
+        QCOMPARE(dto.containerRuntime, QStringLiteral("docker"));
+        QCOMPARE(dto.containerId,      QStringLiteral("af85275074f5"));
+        QCOMPARE(dto.containerName,    QStringLiteral("web-frontend"));
+        QCOMPARE(dto.containerChain.size(), 2);
+        QCOMPARE(dto.containerChain[0].runtime,
+                 QStringLiteral("kubernetes"));
+        QCOMPARE(dto.containerChain[1].id,
+                 QStringLiteral("af85275074f5"));
+
+        // Round-trip through QVariant must preserve every field.
+        QVariant v;
+        v.setValue(dto);
+        const auto round = qvariant_cast<qiftop::dbus::ConnectionDto>(v);
+        QCOMPARE(round.pid,            dto.pid);
+        QCOMPARE(round.uid,            dto.uid);
+        QCOMPARE(round.comm,           dto.comm);
+        QCOMPARE(round.containerRuntime, dto.containerRuntime);
+        QCOMPARE(round.containerId,      dto.containerId);
+        QCOMPARE(round.containerName,    dto.containerName);
+        QCOMPARE(round.containerChain.size(), dto.containerChain.size());
+        for (int i = 0; i < dto.containerChain.size(); ++i) {
+            QCOMPARE(round.containerChain[i].runtime,
+                     dto.containerChain[i].runtime);
+            QCOMPARE(round.containerChain[i].id,
+                     dto.containerChain[i].id);
+            QCOMPARE(round.containerChain[i].name,
+                     dto.containerChain[i].name);
+        }
+
+        const auto rebuilt = qiftop::dbus::fromDto(round);
+        QCOMPARE(rebuilt.process.pid,  qint32(1234));
+        QCOMPARE(rebuilt.process.comm, QStringLiteral("nginx"));
+        QCOMPARE(rebuilt.container.runtime, QStringLiteral("docker"));
+        QCOMPARE(rebuilt.containerChain.size(), 2);
+    }
+
+    void connectionDtoOmitsAttributionWhenAbsent()
+    {
+        // When the agent has no resolver wired, attribution fields are
+        // their zero-init defaults. Round-trip must keep them zero/empty
+        // rather than e.g. inventing pid=1 by accident.
+        Connection c;
+        c.proto = L4Proto::Udp;
+        const auto dto = qiftop::dbus::toDto(c);
+        QCOMPARE(dto.pid, quint32(0));
+        QCOMPARE(dto.uid, quint32(0));
+        QVERIFY(dto.comm.isEmpty());
+        QVERIFY(dto.containerRuntime.isEmpty());
+        QVERIFY(dto.containerId.isEmpty());
+        QVERIFY(dto.containerName.isEmpty());
+        QVERIFY(dto.containerChain.isEmpty());
+
+        QVariant v;
+        v.setValue(dto);
+        const auto round = qvariant_cast<qiftop::dbus::ConnectionDto>(v);
+        QCOMPARE(round.pid, quint32(0));
+        QVERIFY(round.comm.isEmpty());
+        QVERIFY(round.containerChain.isEmpty());
     }
 };
 

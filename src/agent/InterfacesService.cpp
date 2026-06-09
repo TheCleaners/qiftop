@@ -15,7 +15,7 @@ namespace {
 // and gate optional feature use. Breaking wire changes still require a
 // NetworkAgent2 interface (AGENTS.md §8); this is the *additive* contract
 // version.
-constexpr auto kAgentVersion = "0.3";
+constexpr auto kAgentVersion = "0.4";
 } // namespace
 
 InterfacesService::InterfacesService(NetworkMonitor *monitor, QObject *parent)
@@ -70,8 +70,26 @@ QStringList InterfacesService::capabilities() const
         // Merge resolver tokens (process-attribution, container-attribution,
         // netns-scan, ...) — append-only, never reordered, dedup against the
         // base list as a safety net.
-        for (const auto &tok : m_resolver->capabilities()) {
+        const auto resolverCaps = m_resolver->capabilities();
+        for (const auto &tok : resolverCaps) {
             if (!base.contains(tok)) base.append(tok);
+        }
+        // v0.4 wire-level mirror of the resolver attribution capabilities:
+        // clients gate the new ConnectionDto fields (pid/uid/comm + container
+        // bulk + chain) on these tokens rather than poking at fields blindly.
+        // Only advertise when the underlying resolver token is present, so
+        // we never lie about data we don't actually populate.
+        if (resolverCaps.contains(QStringLiteral("process-attribution"))
+            && !base.contains(QStringLiteral("process-attribution-wire"))) {
+            base.append(QStringLiteral("process-attribution-wire"));
+        }
+        if (resolverCaps.contains(QStringLiteral("container-attribution"))
+            && !base.contains(QStringLiteral("container-attribution-wire"))) {
+            base.append(QStringLiteral("container-attribution-wire"));
+            // Chain is a strict superset of leaf container info; agents that
+            // can fill `container` always fill `containerChain` too (single-
+            // entry chain when no nesting is detected).
+            base.append(QStringLiteral("container-chain-wire"));
         }
     }
     return base;

@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "Connection.h"
+struct Connection;  // forward-decl breaks the cycle with Connection.h
 
 namespace qiftop::backend {
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ProcessResolver.h"   // ProcessInfo, ContainerInfo
+
 #include <QHostAddress>
 #include <QList>
 #include <QMetaType>
@@ -144,6 +146,19 @@ struct Connection {
 
     // Conntrack TCP state for TCP flows. `None` for UDP/ICMP/unknown.
     TcpState  tcpState  = TcpState::None;
+
+    // Process + container attribution (v0.2). Populated server-side when a
+    // ProcessResolver is wired and the matching attribution capability
+    // tokens are advertised. Default-constructed (pid=0, runtime empty)
+    // when there's no resolver or the flow couldn't be attributed.
+    //
+    // Bulk fields only — exe/cmdline/cwd are NOT here; they're fetched on
+    // demand via GetProcessDetails(pid). See docs/ATTRIBUTION.md.
+    qiftop::backend::ProcessInfo   process;
+    qiftop::backend::ContainerInfo container;
+    // Outer -> inner ancestry. Leaf entry equals `container` when both
+    // populated. Empty when no nested chain was detected.
+    QList<qiftop::backend::ContainerInfo> containerChain;
 
     // Canonical key used by models to identify a flow across updates.
     // Includes direction so aggregated inbound/outbound rows for the same

@@ -3,6 +3,8 @@
 #include "SockDiagDump.h"
 #include "ProcSnapshot.h"
 
+#include "backend/Connection.h"
+
 #include <QFile>
 #include <QFileInfo>
 

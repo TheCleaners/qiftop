@@ -3,6 +3,8 @@
 #include <QDBusMetaType>
 #include <QHostAddress>
 
+#include <limits>
+
 namespace qiftop::dbus {
 
 QDBusArgument &operator<<(QDBusArgument &a, const InterfaceStatsDto &s)
@@ -29,6 +31,22 @@ const QDBusArgument &operator>>(const QDBusArgument &a, InterfaceStatsDto &s)
     return a;
 }
 
+QDBusArgument &operator<<(QDBusArgument &a, const ContainerInfoDto &c)
+{
+    a.beginStructure();
+    a << c.runtime << c.id << c.name;
+    a.endStructure();
+    return a;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &a, ContainerInfoDto &c)
+{
+    a.beginStructure();
+    a >> c.runtime >> c.id >> c.name;
+    a.endStructure();
+    return a;
+}
+
 QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c)
 {
     a.beginStructure();
@@ -38,7 +56,11 @@ QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c)
       << c.rxBytes << c.txBytes << c.rxPackets << c.txPackets
       << c.iface
       << c.direction
-      << c.ifIndex << c.tcpState;
+      << c.ifIndex << c.tcpState
+      // v0.4 attribution (append-only)
+      << c.pid << c.uid << c.comm
+      << c.containerRuntime << c.containerId << c.containerName
+      << c.containerChain;
     a.endStructure();
     return a;
 }
@@ -52,7 +74,10 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c)
       >> c.rxBytes >> c.txBytes >> c.rxPackets >> c.txPackets
       >> c.iface
       >> c.direction
-      >> c.ifIndex >> c.tcpState;
+      >> c.ifIndex >> c.tcpState
+      >> c.pid >> c.uid >> c.comm
+      >> c.containerRuntime >> c.containerId >> c.containerName
+      >> c.containerChain;
     a.endStructure();
     return a;
 }
@@ -61,6 +86,8 @@ void registerTypes()
 {
     qDBusRegisterMetaType<InterfaceStatsDto>();
     qDBusRegisterMetaType<InterfaceStatsDtoList>();
+    qDBusRegisterMetaType<ContainerInfoDto>();
+    qDBusRegisterMetaType<ContainerInfoDtoList>();
     qDBusRegisterMetaType<ConnectionDto>();
     qDBusRegisterMetaType<ConnectionDtoList>();
 }
@@ -121,6 +148,17 @@ ConnectionDto toDto(const Connection &c)
     d.direction = quint8(c.direction);
     d.ifIndex   = c.ifIndex;
     d.tcpState  = quint8(c.tcpState);
+    // v0.4 attribution — bulk fields only (exe/cmdline/cwd are on-demand).
+    d.pid  = c.process.pid > 0 ? quint32(c.process.pid) : 0;
+    d.uid  = c.process.uid;
+    d.comm = c.process.comm;
+    d.containerRuntime = c.container.runtime;
+    d.containerId      = c.container.id;
+    d.containerName    = c.container.name;
+    d.containerChain.reserve(c.containerChain.size());
+    for (const auto &ci : c.containerChain) {
+        d.containerChain << ContainerInfoDto{ci.runtime, ci.id, ci.name};
+    }
     return d;
 }
 
@@ -144,6 +182,18 @@ Connection fromDto(const ConnectionDto &d)
     c.tcpState  = (d.tcpState <= quint8(TcpState::SynSent2))
                   ? static_cast<TcpState>(d.tcpState)
                   : TcpState::None;
+    // v0.4 attribution. pid is qint32 in ProcessInfo; clamp INT_MAX to be safe.
+    c.process.pid  = (d.pid <= quint32(std::numeric_limits<qint32>::max()))
+                     ? qint32(d.pid) : 0;
+    c.process.uid  = d.uid;
+    c.process.comm = d.comm;
+    c.container.runtime = d.containerRuntime;
+    c.container.id      = d.containerId;
+    c.container.name    = d.containerName;
+    c.containerChain.reserve(d.containerChain.size());
+    for (const auto &ci : d.containerChain) {
+        c.containerChain << qiftop::backend::ContainerInfo{ci.runtime, ci.id, ci.name};
+    }
     return c;
 }
 

@@ -39,10 +39,26 @@ struct InterfaceStatsDto {
 };
 using InterfaceStatsDtoList = QList<InterfaceStatsDto>;
 
-// Wire DTO for a single flow. Field order is the DBus tuple signature
-// (wire signature: a(yysqysqttttsyuy) — 15 fields). Append new fields at
-// the END; reordering or removing fields requires NetworkAgent2 per
-// AGENTS.md §8.
+// Container / cgroup-scope metadata that may be attached to a Connection.
+//
+// `runtime` is the lowercase runtime name (`"docker"`, `"containerd"`,
+// `"podman"`, `"systemd"`, `"lxc"`, `"nspawn"`, ...). `id` is the
+// displayable identifier (12-char hex prefix for content-addressable
+// runtimes; full human name for name-ID runtimes like nspawn/lxd/lxc;
+// see docs/ATTRIBUTION.md §5c).
+struct ContainerInfoDto {
+    QString runtime;
+    QString id;
+    QString name;
+
+    friend bool operator==(const ContainerInfoDto &, const ContainerInfoDto &) = default;
+};
+using ContainerInfoDtoList = QList<ContainerInfoDto>;
+
+// Wire DTO for a single flow. Field order is the DBus tuple signature.
+// Wire signature is (yysqysqttttsyuy uussss a(sss)) — 22 outer fields
+// plus a nested struct array. Append new fields at the END; reordering
+// or removing fields requires NetworkAgent2 per AGENTS.md §8.
 //
 // `proto` is encoded as the IANA L4 protocol number (RFC 5237) so non-Qt
 // clients (libqiftop consumers, Prometheus exporter, ncurses TUI) can
@@ -65,11 +81,33 @@ struct ConnectionDto {
     // v0.3 additions.
     quint32 ifIndex       = 0;   // Matches `iface`; 0 = unknown.
     quint8  tcpState      = 0;   // TCP_CONNTRACK_*; 0 (None) for non-TCP — see TcpState enum
+    // v0.4 additions — process + container attribution (bulk fields only).
+    // Populated server-side when the matching capability token is
+    // advertised: process-attribution-wire, container-attribution-wire,
+    // container-chain-wire. Empty / zero when the resolver returned no
+    // useful info or no resolver is wired.
+    //
+    // Expensive enrichment (exe path, cmdline, cwd) is NOT shipped on
+    // the wire — fetched on demand via GetProcessDetails(pid) per the
+    // "default-cheap pipeline" design principle (docs/ATTRIBUTION.md
+    // §7, planned).
+    quint32 pid           = 0;   // 0 = unknown/unattributed
+    quint32 uid           = 0;   // process uid (0 is meaningful only when pid != 0)
+    QString comm;                // basename, kernel-truncated to 15 bytes
+    QString containerRuntime;    // empty when no container
+    QString containerId;
+    QString containerName;
+    // Outer → inner. Empty when container-chain-wire capability absent
+    // OR the flow has no container ancestry. Leaf entry equals
+    // (containerRuntime, containerId, containerName) when both populated.
+    ContainerInfoDtoList containerChain;
 };
 using ConnectionDtoList = QList<ConnectionDto>;
 
 QDBusArgument &operator<<(QDBusArgument &a, const InterfaceStatsDto &s);
 const QDBusArgument &operator>>(const QDBusArgument &a, InterfaceStatsDto &s);
+QDBusArgument &operator<<(QDBusArgument &a, const ContainerInfoDto &c);
+const QDBusArgument &operator>>(const QDBusArgument &a, ContainerInfoDto &c);
 QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c);
 const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c);
 
@@ -89,5 +127,7 @@ QList<Connection>      fromDtos(const ConnectionDtoList &list);
 
 Q_DECLARE_METATYPE(qiftop::dbus::InterfaceStatsDto)
 Q_DECLARE_METATYPE(qiftop::dbus::InterfaceStatsDtoList)
+Q_DECLARE_METATYPE(qiftop::dbus::ContainerInfoDto)
+Q_DECLARE_METATYPE(qiftop::dbus::ContainerInfoDtoList)
 Q_DECLARE_METATYPE(qiftop::dbus::ConnectionDto)
 Q_DECLARE_METATYPE(qiftop::dbus::ConnectionDtoList)
