@@ -18,8 +18,8 @@ class QAbstractItemView;
 // fill via opt.backgroundBrush). When the row is selected, the highlight
 // takes over and we don't paint a gauge.
 //
-// Use as the default item delegate on a QTableView; columns that need
-// custom content rendering can subclass this and call
+// Use as the default item delegate on a QTableView or QTreeView; columns
+// that need custom content rendering can subclass this and call
 // paintGaugeBackground() before their own paint code.
 class RowGaugeDelegate : public QStyledItemDelegate {
     Q_OBJECT
