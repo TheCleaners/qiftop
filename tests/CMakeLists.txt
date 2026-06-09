@@ -153,6 +153,9 @@ qiftop_add_test(test_attribution
     test_attribution.cpp
     ${CMAKE_SOURCE_DIR}/src/agent/Attribution.cpp)
 
+qiftop_add_test(test_composite_resolver
+    test_composite_resolver.cpp)
+
 qiftop_add_test(test_group_proxy
     test_group_proxy.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/ConnectionGroupProxy.cpp)
