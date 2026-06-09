@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [master, main]
 
+# Default to the minimum: read-only access to repository contents. CI doesn't
+# write to issues, PRs, releases, packages, or anything else — the Release
+# workflow does. Pinned per CodeQL `actions/missing-workflow-permissions`.
+permissions:
+  contents: read
+
 # Cancel in-progress runs for the same branch/PR when a new commit is pushed.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
