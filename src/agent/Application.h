@@ -3,7 +3,10 @@
 #include <QDBusConnection>
 #include <QObject>
 
+#include <memory>
+
 #include "IdleManager.h"
+#include "backend/ProcessResolver.h"
 
 class NetworkMonitor;
 class ConnectionMonitor;
@@ -28,11 +31,12 @@ class Application : public QObject {
     Q_OBJECT
 
 public:
-    Application(QDBusConnection      bus,
-                NetworkMonitor      *netMonitor,
-                ConnectionMonitor   *connMonitor,
-                IdleManager::Config  idleCfg,
-                QObject             *parent = nullptr);
+    Application(QDBusConnection                                bus,
+                NetworkMonitor                                *netMonitor,
+                ConnectionMonitor                             *connMonitor,
+                IdleManager::Config                            idleCfg,
+                std::unique_ptr<backend::ProcessResolver>      resolver,
+                QObject                                       *parent = nullptr);
     ~Application() override;
 
     // Registers the two service objects, requests the bus name, wires
@@ -49,12 +53,14 @@ public:
     [[nodiscard]] InterfacesService  *interfacesService()  const { return m_ifaceSvc; }
     [[nodiscard]] ConnectionsService *connectionsService() const { return m_connSvc; }
     [[nodiscard]] IdleManager        *idleManager()        const { return m_idle; }
+    [[nodiscard]] backend::ProcessResolver *processResolver() const { return m_resolver.get(); }
 
 private:
     QDBusConnection      m_bus;
     NetworkMonitor      *m_netMonitor  = nullptr;
     ConnectionMonitor   *m_connMonitor = nullptr;
     IdleManager::Config  m_idleCfg;
+    std::unique_ptr<backend::ProcessResolver> m_resolver;
 
     InterfacesService   *m_ifaceSvc = nullptr;
     ConnectionsService  *m_connSvc  = nullptr;

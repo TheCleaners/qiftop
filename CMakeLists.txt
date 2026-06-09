@@ -11,6 +11,45 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network DBus)
 
+# --- Per-flow process / container attribution (v0.2+) -----------------------
+# Three independent compile-time toggles. Each gates a layer of the
+# ProcessResolver pipeline; absent flags mean the corresponding source
+# files are simply not compiled (and the resolver layer is unavailable
+# at runtime, not greyed-out in the UI — the UI follows the runtime
+# Capabilities token list). Defaults: ON on Linux, OFF elsewhere.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(QIFTOP_ATTRIBUTION_DEFAULT ON)
+else()
+    set(QIFTOP_ATTRIBUTION_DEFAULT OFF)
+endif()
+option(QIFTOP_ENABLE_PROCESS_ATTRIBUTION
+    "Enable per-flow process attribution (NETLINK_SOCK_DIAG + /proc walk on Linux)"
+    ${QIFTOP_ATTRIBUTION_DEFAULT})
+option(QIFTOP_ENABLE_CONTAINER_ATTRIBUTION
+    "Enable per-flow container attribution (cgroup classifier on Linux)"
+    ${QIFTOP_ATTRIBUTION_DEFAULT})
+option(QIFTOP_ENABLE_NETNS_SCAN
+    "Enable cross-network-namespace socket scanning (setns + sock_diag; Linux only, needs CAP_SYS_ADMIN)"
+    ${QIFTOP_ATTRIBUTION_DEFAULT})
+
+# Expose the toggles to all targets as compile definitions, so the
+# resolver factory and concrete impls can #ifdef on them. Non-Linux
+# builds get NONE of these defines regardless of the user's setting.
+function(qiftop_apply_attribution_defs target)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        return()
+    endif()
+    if(QIFTOP_ENABLE_PROCESS_ATTRIBUTION)
+        target_compile_definitions(${target} PRIVATE QIFTOP_ENABLE_PROCESS_ATTRIBUTION)
+    endif()
+    if(QIFTOP_ENABLE_CONTAINER_ATTRIBUTION)
+        target_compile_definitions(${target} PRIVATE QIFTOP_ENABLE_CONTAINER_ATTRIBUTION)
+    endif()
+    if(QIFTOP_ENABLE_NETNS_SCAN)
+        target_compile_definitions(${target} PRIVATE QIFTOP_ENABLE_NETNS_SCAN)
+    endif()
+endfunction()
+
 # --- Shared DBus type marshalling (used by both client and agent) -----------
 add_library(qiftop_dbus STATIC
     src/dbus/Types.cpp
@@ -23,6 +62,7 @@ add_executable(qiftop
     src/main.cpp
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
+    src/backend/ProcessResolverFactory.cpp
     src/backend/dbus/DBusNetworkMonitor.cpp
     src/backend/dbus/DBusConnectionMonitor.cpp
     src/config/Settings.cpp
@@ -59,6 +99,7 @@ else()
 endif()
 
 target_link_libraries(qiftop PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::DBus qiftop_dbus)
+qiftop_apply_attribution_defs(qiftop)
 
 # --- Privileged agent (qiftop-agent) ----------------------------------------
 add_executable(qiftop-agent
@@ -70,6 +111,7 @@ add_executable(qiftop-agent
     src/agent/IdleManager.cpp
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
+    src/backend/ProcessResolverFactory.cpp
     src/util/Logging.cpp
 )
 target_include_directories(qiftop-agent PRIVATE src)
@@ -78,6 +120,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(qiftop-agent PRIVATE backend_linux)
     target_compile_definitions(qiftop-agent PRIVATE BACKEND_LINUX)
 endif()
+qiftop_apply_attribution_defs(qiftop-agent)
 
 # --- Install rules ----------------------------------------------------------
 include(GNUInstallDirs)

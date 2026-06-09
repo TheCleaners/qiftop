@@ -5,6 +5,7 @@
 
 #include "IdleManager.h"
 #include "backend/NetworkMonitor.h"
+#include "backend/ProcessResolver.h"
 
 namespace qiftop::agent {
 
@@ -35,6 +36,11 @@ void InterfacesService::setIdleManager(IdleManager *idle)
     }
 }
 
+void InterfacesService::setProcessResolver(backend::ProcessResolver *resolver)
+{
+    m_resolver = resolver;
+}
+
 QString InterfacesService::version() const
 {
     return QString::fromLatin1(kAgentVersion);
@@ -46,7 +52,7 @@ QStringList InterfacesService::capabilities() const
     // optional behaviour lands; never remove or rename. Clients gate
     // behaviour on token presence (defaulting to "off" when absent so
     // older agents still work).
-    return {
+    QStringList base = {
         QStringLiteral("cadence-hints"),     // SetDesiredIntervalMs supported
         QStringLiteral("cadence-signal"),    // CadenceChanged signal emitted
         QStringLiteral("name-owner-cleanup"),// hints dropped on peer disconnect
@@ -60,6 +66,15 @@ QStringList InterfacesService::capabilities() const
         QStringLiteral("link-errors"),       // InterfaceStatsDto carries rx/tx errors + drops
         QStringLiteral("tcp-state"),         // ConnectionDto carries conntrack TCP state (TcpState enum)
     };
+    if (m_resolver) {
+        // Merge resolver tokens (process-attribution, container-attribution,
+        // netns-scan, ...) — append-only, never reordered, dedup against the
+        // base list as a safety net.
+        for (const auto &tok : m_resolver->capabilities()) {
+            if (!base.contains(tok)) base.append(tok);
+        }
+    }
+    return base;
 }
 
 dbus::InterfaceStatsDtoList InterfacesService::GetInterfaces()

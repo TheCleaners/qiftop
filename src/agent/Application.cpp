@@ -16,16 +16,18 @@ constexpr auto kIfacesPath = "/org/qiftop/NetworkAgent1/Interfaces";
 constexpr auto kConnsPath  = "/org/qiftop/NetworkAgent1/Connections";
 } // namespace
 
-Application::Application(QDBusConnection      bus,
-                         NetworkMonitor      *netMonitor,
-                         ConnectionMonitor   *connMonitor,
-                         IdleManager::Config  idleCfg,
-                         QObject             *parent)
+Application::Application(QDBusConnection                                bus,
+                         NetworkMonitor                                *netMonitor,
+                         ConnectionMonitor                             *connMonitor,
+                         IdleManager::Config                            idleCfg,
+                         std::unique_ptr<backend::ProcessResolver>      resolver,
+                         QObject                                       *parent)
     : QObject(parent)
     , m_bus(std::move(bus))
     , m_netMonitor(netMonitor)
     , m_connMonitor(connMonitor)
     , m_idleCfg(idleCfg)
+    , m_resolver(std::move(resolver))
 {}
 
 Application::~Application()
@@ -53,6 +55,7 @@ bool Application::start()
     }
 
     m_ifaceSvc = new InterfacesService(m_netMonitor);
+    m_ifaceSvc->setProcessResolver(m_resolver.get());
     m_connSvc  = new ConnectionsService(m_connMonitor);
 
     // Register the service objects *before* requesting the bus name so that

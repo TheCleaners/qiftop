@@ -20,6 +20,7 @@
 
 #include "Application.h"
 #include "Config.h"
+#include "backend/ProcessResolverFactory.h"
 #include "dbus/Types.h"
 #include "util/Logging.h"
 
@@ -79,7 +80,9 @@ int main(int argc, char *argv[])
 #endif
 
     const auto idleCfg = qiftop::agent::loadIdleConfig(parser.value(configOpt));
-    qiftop::agent::Application application(bus, &netMonitor, &connMonitor, idleCfg);
+    auto resolver = qiftop::backend::createProcessResolver({});
+    qiftop::agent::Application application(bus, &netMonitor, &connMonitor,
+                                           idleCfg, std::move(resolver));
     if (!application.start()) {
         qCritical().noquote() << "agent:" << application.errorString();
         return 3;

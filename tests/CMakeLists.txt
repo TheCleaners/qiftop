@@ -135,6 +135,14 @@ qiftop_add_test(test_priv_escalator
     ${CMAKE_SOURCE_DIR}/src/util/PrivilegeEscalator.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
 
+qiftop_add_test(test_process_resolver_null
+    test_process_resolver_null.cpp)
+
+qiftop_add_test(test_resolver_factory
+    test_resolver_factory.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/ProcessResolverFactory.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
+
 # Integration test: spawns the actual qiftop-agent binary against a session
 # bus and drives the live DBus contract end-to-end. Slow (~6 s; baseline +
 # fast windows + spawn/teardown per test method) so it's gated behind
