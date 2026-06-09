@@ -442,7 +442,6 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_direction`           | `inferDirection` (ephemeral-port + local-end fallback)            |
 | `test_forwarded`           | `isForwardedFlow` heuristic                                       |
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
-| `test_filter`              | Filter mini-language parser + evaluator (every field/op)          |
 | `test_settings_migration`  | `Settings` legacy-key migration logic                             |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
 | `test_exporter`            | JSON quint64-as-string, qint64 numeric, CSV formula-injection     |
@@ -456,10 +455,16 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults. |
 | `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
+| `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
-| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds. Uses a tiny stub source model — no real ConnectionModel needed. |
-| `test_filter`              | Filter mini-language parser + evaluator. v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. |
-| `test_cgroup_real_fixtures` | Data-driven: 16 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host scopes). Adding a runtime = drop a fixture + add one table row. |
+| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). Uses a tiny stub source model — no real ConnectionModel needed. |
+| `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. |
+| `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
+| `test_resolver_factory`    | `qiftop::backend::createDefaultProcessResolver` — env-gated composite construction; `InterfacesService::capabilities()` aggregation: `process-attribution-wire` / `container-attribution-wire` / `container-chain-wire` mirror tokens emitted iff the underlying resolver advertises the producer-side token; `container-chain-wire` requires BOTH `container-attribution` AND `container-chain`. |
+| `test_sockdiag_parse`      | `qiftop::backend::sockDiagParse` — netlink dump message parsing edge cases (IPv4/IPv6, multi-message dumps, truncated tail). Pure parser, no socket. |
+| `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
+| `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
+| `test_proc_snapshot`       | `qiftop::backend::procsnap::pidStartTime` — `/proc/<pid>/stat` field-22 parser robustness (commands with spaces / parens / nested quotes), live self-PID round-trip, missing PID returns nullopt. |
 | `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |
 | `attribution_podman` (Tier-2) | Sibling of `attribution_docker` using rootful podman + netavark; exercises the `libpod-<id>.scope` cgroup hierarchy that the docker path never produces. SKIPs cleanly on hosts where rootful podman can't start a container (e.g. logind rlimit-delegation quirks). |
 | `attribution_k3d` (Tier-2) | k3s-in-docker (k3d). Exercises the **nested** container chain (`docker → kubernetes → containerd`, depth 3) — the leaf-wins segment-walk has to land on the innermost containerd CID, not on the outer k3s node container. Local-only (Vagrant); not in CI (cold k3d image pull is ~3–4 min, the chain shape is already pinned by Tier-1 fixtures). |
@@ -578,8 +583,9 @@ runner user. See docs/HACKING.md §5.5 for the test-writing conventions.
 runners (docker + podman only) on push-to-main / dispatch / release.
 k3d and k8s runners exist but only run locally via the Vagrant
 harness — cold bring-up is 3–4 min each and the chain shapes are
-already pinned by Tier-1 unit fixtures (`k3dInDockerCgroupfs`,
-`k8sNakedCgroupfsDriver`, `k8sNakedSystemdDriver` etc.).
+already pinned by Tier-1 unit tests
+(`test_cgroup_parse::k8sCgroupfsDriverK3dShape`,
+`k8sNakedCgroupfsDriver`, `k8sNakedSystemdDriver`).
 
 ### 6.5a Vagrant runner ordering (local Tier-2)
 

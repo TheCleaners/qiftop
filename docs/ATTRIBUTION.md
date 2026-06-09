@@ -238,12 +238,23 @@ some ancestor segment happens to look like a unit — the
 The chain shape is the cheapest *distinguishing* signal between
 "real" k8s and k8s-in-docker, and the test suite exercises both:
 
-| Flavour                  | Tier-1 fixture                                    | Tier-2 runner       | Expected chain (outer → inner) |
-|--------------------------|---------------------------------------------------|---------------------|-------------------------------|
-| Docker plain             | `docker_cgroupfs_v2.txt`                          | `run-docker.sh`     | `[docker]`                    |
-| k3d (k8s-in-docker)      | `k3d_in_docker.txt`                               | `run-k3d.sh`        | `[docker, kubernetes, containerd]` (depth 3) |
-| Naked k8s, cgroupfs      | `k8s_naked_cgroupfs.txt`                          | `run-k8s.sh` (k0s)  | `[kubernetes, containerd]` (depth 2, **no `docker`**) |
-| Naked k8s, systemd       | `k8s_naked_systemd.txt`                           | `run-k8s.sh` (k0s)  | `[kubernetes, containerd]` (depth 2, **no `docker`**) |
+| Flavour                  | Tier-1 coverage                                              | Tier-2 runner       | Expected chain (outer → inner) |
+|--------------------------|--------------------------------------------------------------|---------------------|-------------------------------|
+| Docker plain             | `docker_v2_cgroupfs.txt` (fixture)                           | `run-docker.sh`     | `[docker]`                    |
+| k3d (k8s-in-docker)      | `test_cgroup_parse.cpp::k8sCgroupfsDriverK3dShape` + `k3sPodInDockerPrefersInnermost` (inline synthetic — fixture pending an upstream-sourced sample) | `run-k3d.sh`        | `[docker, kubernetes, containerd]` (depth 3) |
+| Naked k8s, cgroupfs      | `test_cgroup_parse.cpp::k8sNakedCgroupfsDriver` (inline synthetic — fixture pending an upstream-sourced sample) | `run-k8s.sh` (k0s)  | `[kubernetes, containerd]` (depth 2, **no `docker`**) |
+| Naked k8s, systemd       | `test_cgroup_parse.cpp::k8sNakedSystemdDriver` (inline synthetic — fixture pending an upstream-sourced sample) | `run-k8s.sh` (k0s)  | `[kubernetes, containerd]` (depth 2, **no `docker`**) |
+
+Three of the four rows above are currently pinned by **inline
+synthetic paths** in `tests/test_cgroup_parse.cpp` rather than by
+fixture files in `tests/fixtures/cgroup_real/`. Per §6.3a's policy
+("each runtime + driver combination MUST have at least one fixture
+sourced from authoritative upstream documentation"), they should
+eventually grow real fixtures harvested from k3s.io / kubernetes.io
+issue trackers — the inline tests verify our regexes, not the
+upstream cgroup path shape. The chain assertions are still real:
+they exercise `classifyPathChain` on representative paths, and a
+regression in the regexes WOULD fail them.
 
 The Tier-2 `run-k8s.sh` includes a `grep -q '"runtime":"docker"'`
 post-check on the probe's JSON output that MUST fail — catching any
