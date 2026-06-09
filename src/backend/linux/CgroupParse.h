@@ -75,7 +75,26 @@ inline constexpr int kMaxContainerChainDepth = 16;
 //                     (kept distinct from host so the UI can show e.g. "unit:nginx.service";
 //                     /user.slice is explicitly excluded so a desktop's user@<uid>.service
 //                     and its app children are NOT misclassified as systemd units)
-[[nodiscard]] inline QList<ContainerInfo> classifyPathChain(const QString &path)
+// Classification hint that callers can supply when they have
+// out-of-band knowledge of the host's container runtime configuration.
+// The cgroup-v2 / cgroupfs kubepods leaf path is IDENTICAL between
+// containerd and CRI-O (both ship CRI pods through
+// "/kubepods/<qos>/pod<UID>/<64hex>"); the cgroup layer alone cannot
+// distinguish them. By default we label the leaf "containerd" because
+// it's the dominant CRI runtime in 2026 and what most tooling (Tracee,
+// runc helpers, etc.) does too. A caller that has probed
+// /run/crio/crio.sock at agent startup and confirmed CRI-O is the
+// active runtime can pass PreferCrio so the same leaf is labelled
+// "cri-o" instead. CgroupClassifier::initialize is the only call site
+// that runs the probe; downstream callers should not invent their own
+// hint.
+enum class CgroupHint {
+    Auto,        // default: cgroupfs kubepods leaf → "containerd"
+    PreferCrio,  // host probe confirmed CRI-O → leaf labelled "cri-o"
+};
+
+[[nodiscard]] inline QList<ContainerInfo>
+classifyPathChain(const QString &path, CgroupHint hint = CgroupHint::Auto)
 {
     QList<ContainerInfo> chain;
     if (path.isEmpty() || path == QLatin1String("/")
@@ -193,15 +212,29 @@ inline constexpr int kMaxContainerChainDepth = 16;
             continue;
         }
         // Stateful: a bare 64-hex segment IMMEDIATELY following a
-        // kubernetes pod scope is the cgroupfs-driver containerd leaf
-        // (path shape: ".../kubepods/burstable/pod<UID>/<64hex>"). We
-        // gate on prevRuntime == "kubernetes" to avoid false matches
-        // on hypothetical bare-hex segments elsewhere in the tree.
+        // kubernetes pod scope is the CRI leaf (path shape:
+        // ".../kubepods/burstable/pod<UID>/<64hex>"). We gate on
+        // prevRuntime == "kubernetes" to avoid false matches on
+        // hypothetical bare-hex segments elsewhere in the tree.
+        //
+        // CONTAINERD vs CRI-O AMBIGUITY: with the cgroupfs cgroup
+        // driver (default on older kubelet builds) both containerd
+        // AND cri-o produce IDENTICAL path segments — the runtime
+        // identity is not encoded in the cgroup path. We default to
+        // "containerd" (the dominant CRI runtime; matches what
+        // Tracee and similar tools do); callers with host-level
+        // knowledge can override via CgroupHint::PreferCrio.
+        // Without that hint, runtime=cri-o filters silently miss
+        // pods on cgroupfs-driver CRI-O nodes; the systemd-driver
+        // path correctly carries `crio-<id>.scope` and is unaffected.
         if (prevRuntime == QLatin1String("kubernetes")) {
             if (const auto m = rxBareHex64.match(seg); m.hasMatch()) {
+                const QString runtime = (hint == CgroupHint::PreferCrio)
+                    ? QStringLiteral("cri-o")
+                    : QStringLiteral("containerd");
                 chain.append(ContainerInfo{
-                    QStringLiteral("containerd"), m.captured(1).left(12), {}});
-                prevRuntime = QStringLiteral("containerd");
+                    runtime, m.captured(1).left(12), {}});
+                prevRuntime = runtime;
                 continue;
             }
         }
@@ -283,9 +316,10 @@ inline constexpr int kMaxContainerChainDepth = 16;
 // container scope found. Convenience wrapper over `classifyPathChain`
 // for call sites that don't (yet) care about nesting. Returns nullopt
 // for empty / host-scope paths.
-[[nodiscard]] inline std::optional<ContainerInfo> classifyPath(const QString &path)
+[[nodiscard]] inline std::optional<ContainerInfo>
+classifyPath(const QString &path, CgroupHint hint = CgroupHint::Auto)
 {
-    const auto chain = classifyPathChain(path);
+    const auto chain = classifyPathChain(path, hint);
     if (chain.isEmpty()) return std::nullopt;
     return chain.last();
 }
@@ -293,17 +327,18 @@ inline constexpr int kMaxContainerChainDepth = 16;
 // Convenience: combine extractPath + classifyPathChain on raw file
 // contents. Returns the full outer→inner chain.
 [[nodiscard]] inline QList<ContainerInfo>
-classifyProcCgroupChain(QStringView contents)
+classifyProcCgroupChain(QStringView contents,
+                        CgroupHint hint = CgroupHint::Auto)
 {
-    return classifyPathChain(extractPath(contents));
+    return classifyPathChain(extractPath(contents), hint);
 }
 
 // Convenience: combine extractPath + classifyPath (innermost only) on
 // raw file contents.
 [[nodiscard]] inline std::optional<ContainerInfo>
-classifyProcCgroup(QStringView contents)
+classifyProcCgroup(QStringView contents, CgroupHint hint = CgroupHint::Auto)
 {
-    return classifyPath(extractPath(contents));
+    return classifyPath(extractPath(contents), hint);
 }
 
 } // namespace qiftop::backend::cgroup

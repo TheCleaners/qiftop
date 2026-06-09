@@ -44,6 +44,15 @@ private slots:
         QTest::newRow("k8s_containerd_burstable")  << "k8s_containerd_burstable.txt"  << "containerd" << "7698bf823d17";
         QTest::newRow("k8s_containerd_guaranteed") << "k8s_containerd_guaranteed.txt" << "containerd" << "7698bf823d17";
         QTest::newRow("k8s_crio_besteffort")       << "k8s_crio_besteffort.txt"       << "cri-o"      << "f2b6e0560f1e";
+        // RUNTIMES-M1: CRI-O cgroupfs cgroup driver produces an
+        // identical kubepods leaf path to containerd cgroupfs. By
+        // default (no host probe hint) the leaf classifies as
+        // containerd — the dominant CRI runtime. CgroupClassifier
+        // overrides via CgroupHint::PreferCrio when it detects
+        // /run/crio/crio.sock at startup; this fixture pins the
+        // default behaviour so future regex churn doesn't silently
+        // swap the default token.
+        QTest::newRow("k8s_crio_cgroupfs")         << "k8s_crio_cgroupfs.txt"         << "containerd" << "deadbeef0011";
         QTest::newRow("podman_rootless_v2")        << "podman_rootless_v2.txt"        << "podman"     << "abcdef012345";
         QTest::newRow("podman_rootful_v2")         << "podman_rootful_v2.txt"         << "podman"     << "abcdef012345";
         // RUNTIMES-M3: cgroupfs cgroup manager omits the `.scope`

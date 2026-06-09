@@ -21,6 +21,18 @@ bool CgroupClassifier::initialize()
                                 " container attribution disabled";
         return false;
     }
+    // Cheap host probe for CRI-O. The cgroupfs cgroup driver produces
+    // the SAME path shape for cri-o and containerd, so without an
+    // out-of-band hint the leaf is labelled containerd by default
+    // (matches Tracee + the broader ecosystem). On cri-o nodes the
+    // socket lives at /run/crio/crio.sock; if it exists, we flip the
+    // hint so kubepods cgroupfs leaves are labelled cri-o instead.
+    // Single stat at startup — no ongoing cost.
+    if (QFile::exists(QStringLiteral("/run/crio/crio.sock"))) {
+        m_crioPreferred = true;
+        qCInfo(lcVerbose) << "CgroupClassifier: detected CRI-O socket, "
+                             "kubepods cgroupfs leaf will label as cri-o";
+    }
     m_ready = true;
     qCInfo(lcVerbose) << "CgroupClassifier: ready";
     return true;
@@ -63,7 +75,10 @@ CgroupClassifier::resolveContainerChainForPid(qint32 pid)
         // /proc/<pid>/cgroup is typically <512 bytes (v2 unified) and
         // bounded to a few KiB even on busy v1 hosts.
         const QByteArray data = f.read(4096);
-        chain = cgroup::classifyProcCgroupChain(QString::fromUtf8(data));
+        const auto hint = m_crioPreferred
+            ? cgroup::CgroupHint::PreferCrio
+            : cgroup::CgroupHint::Auto;
+        chain = cgroup::classifyProcCgroupChain(QString::fromUtf8(data), hint);
     }
     // If the open failed (race: pid died between starttime read and
     // here), chain stays empty and we cache that — cheap, and the

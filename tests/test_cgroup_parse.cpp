@@ -7,8 +7,10 @@
 #include "backend/linux/CgroupParse.h"
 
 using qiftop::backend::cgroup::classifyPath;
+using qiftop::backend::cgroup::classifyPathChain;
 using qiftop::backend::cgroup::classifyProcCgroup;
 using qiftop::backend::cgroup::extractPath;
+using qiftop::backend::cgroup::CgroupHint;
 
 class TestCgroupParse : public QObject {
     Q_OBJECT
@@ -130,6 +132,52 @@ private slots:
         QVERIFY(info.has_value());
         QCOMPARE(info->runtime, QStringLiteral("podman"));
         QCOMPARE(info->id,      QStringLiteral("cafebabe0011"));
+    }
+
+    // RUNTIMES-M1: CRI-O cgroupfs cgroup driver produces an identical
+    // kubepods leaf path to containerd cgroupfs. By default we label
+    // it containerd (matches Tracee + ecosystem convention). With
+    // CgroupHint::PreferCrio supplied — what CgroupClassifier does
+    // when /run/crio/crio.sock exists — the same leaf is labelled
+    // cri-o instead, and `runtime=cri-o` filters work.
+    void crioCgroupfsDefaultsToContainerd()
+    {
+        const QString path =
+            QStringLiteral("/kubepods/besteffort/pod665b0949-7b83-49a8-a8df-1c50ac9b9d8c/"
+                           "deadbeef00112233445566778899001122334455667788990011223344556677");
+        const auto chain = classifyPathChain(path);  // Auto hint
+        QCOMPARE(chain.size(), 2);
+        QCOMPARE(chain.first().runtime, QStringLiteral("kubernetes"));
+        QCOMPARE(chain.last().runtime,  QStringLiteral("containerd"));
+        QCOMPARE(chain.last().id,       QStringLiteral("deadbeef0011"));
+    }
+
+    void crioCgroupfsWithHintLabelsAsCrio()
+    {
+        const QString path =
+            QStringLiteral("/kubepods/besteffort/pod665b0949-7b83-49a8-a8df-1c50ac9b9d8c/"
+                           "deadbeef00112233445566778899001122334455667788990011223344556677");
+        const auto chain = classifyPathChain(path, CgroupHint::PreferCrio);
+        QCOMPARE(chain.size(), 2);
+        QCOMPARE(chain.first().runtime, QStringLiteral("kubernetes"));
+        QCOMPARE(chain.last().runtime,  QStringLiteral("cri-o"));
+        QCOMPARE(chain.last().id,       QStringLiteral("deadbeef0011"));
+    }
+
+    // Hint must NOT affect the systemd-driver CRI-O path (which carries
+    // a canonical crio-<id>.scope segment and is unambiguous).
+    void crioSystemdSchemeUnaffectedByHint()
+    {
+        const QString path =
+            QStringLiteral("/kubepods.slice/kubepods-besteffort.slice/"
+                           "kubepods-besteffort-pod665b0949_7b83_49a8_a8df_1c50ac9b9d8c.slice/"
+                           "crio-deadbeef00112233445566778899001122334455667788990011223344556677.scope");
+        const auto chain  = classifyPathChain(path);
+        const auto chain2 = classifyPathChain(path, CgroupHint::PreferCrio);
+        QCOMPARE(chain.size(), 2);
+        QCOMPARE(chain.last().runtime, QStringLiteral("cri-o"));
+        QCOMPARE(chain2.size(), 2);
+        QCOMPARE(chain2.last().runtime, QStringLiteral("cri-o"));
     }
 
     void lxcPayload()

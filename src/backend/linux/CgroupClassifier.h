@@ -51,6 +51,14 @@ public:
 
 private:
     bool                              m_ready = false;
+    // Set at initialize() if /run/crio/crio.sock exists. When true, the
+    // cgroupfs kubepods leaf is classified as runtime=cri-o instead of
+    // the default runtime=containerd — see CgroupHint::PreferCrio in
+    // CgroupParse.h. Hosts running both runtimes side by side (rare)
+    // will be misattributed for the non-cri-o pods; the alternative
+    // (silent containerd label for every cri-o pod on cgroupfs-driver
+    // nodes) is worse for the dominant deployment case.
+    bool                              m_crioPreferred = false;
     std::mutex                        m_mu;
     QElapsedTimer                     m_clock;
     struct CacheEntry {
