@@ -147,6 +147,11 @@ qiftop_add_test(test_attribution
     test_attribution.cpp
     ${CMAKE_SOURCE_DIR}/src/agent/Attribution.cpp)
 
+qiftop_add_test(test_group_proxy
+    test_group_proxy.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/ConnectionGroupProxy.cpp)
+target_link_libraries(test_group_proxy PRIVATE Qt6::Widgets)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_test(test_sockdiag_parse
         test_sockdiag_parse.cpp)

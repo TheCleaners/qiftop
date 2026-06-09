@@ -26,6 +26,7 @@ constexpr auto kRateSmoothingMs           = "display/rateSmoothingMs";
 constexpr auto kRateSmoothingSecsLegacy   = "display/rateSmoothingSecs"; // pre-2026-06-06
 constexpr auto kShowStatusInTitle         = "display/showStatusInTitle";
 constexpr auto kConnectionFilterExpr      = "connections/filterExpr";
+constexpr auto kConnectionViewMode        = "connections/viewMode";
 } // namespace
 
 Settings::Settings(QObject *parent)
@@ -83,6 +84,12 @@ void Settings::load()
                                                 m_showStatusInTitle).toBool();
     m_connFilterExpr               = m_store.value(kConnectionFilterExpr,
                                                 m_connFilterExpr).toString();
+    {
+        const int mode = m_store.value(kConnectionViewMode,
+                                       static_cast<int>(m_connViewMode)).toInt();
+        if (mode >= 0 && mode <= static_cast<int>(ConnectionViewMode::ByProcess))
+            m_connViewMode = static_cast<ConnectionViewMode>(mode);
+    }
 }
 
 void Settings::store(const char *key, const QVariant &value)
@@ -291,5 +298,13 @@ void Settings::setConnectionFilterExpr(const QString &expr)
     if (expr == m_connFilterExpr) return;
     m_connFilterExpr = expr;
     store(kConnectionFilterExpr, expr);
+    emit changed();
+}
+
+void Settings::setConnectionViewMode(ConnectionViewMode m)
+{
+    if (m == m_connViewMode) return;
+    m_connViewMode = m;
+    store(kConnectionViewMode, static_cast<int>(m));
     emit changed();
 }

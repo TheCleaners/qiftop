@@ -75,6 +75,7 @@ add_executable(qiftop
     src/ui/InterfaceNameDelegate.cpp
     src/ui/ConnectionModel.cpp
     src/ui/ConnectionFilterProxy.cpp
+    src/ui/ConnectionGroupProxy.cpp
     src/ui/ConnectionFlowDelegate.cpp
     src/ui/RowGaugeDelegate.cpp
     src/ui/SettingsDialog.cpp

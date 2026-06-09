@@ -61,6 +61,19 @@ public:
     //   CumulativeAverage = lifetime CMA of the connection's rate samples
     enum class ThroughputMaxMode : int { Windowed = 0, CumulativeAverage = 1 };
     [[nodiscard]] ThroughputMaxMode throughputMaxMode() const { return m_throughputMaxMode; }
+
+    // Connections view layout. Flat = v0.1 iftop-style table. The grouped
+    // modes turn the view into a tree where each top-level row aggregates
+    // the SUM of its children's rates and is annotated with a flow count.
+    // Children are individual flows, rendered identically to Flat mode
+    // so the color-coded gauge / direction tint stay meaningful.
+    enum class ConnectionViewMode : int {
+        Flat = 0,
+        ByInterface = 1,
+        ByContainer = 2,
+        ByProcess = 3,
+    };
+    [[nodiscard]] ConnectionViewMode connectionViewMode() const { return m_connViewMode; }
     [[nodiscard]] int  throughputWindowSecs() const          { return m_throughputWindowSecs; }
     // EMA time constant (milliseconds) for smoothing per-connection
     // instantaneous rx/tx rates. 0 = no smoothing (raw per-tick deltas).
@@ -116,6 +129,7 @@ public:
     void setShowStatusInTitle(bool v);
     void setStartOnLogin(bool v);
     void setConnectionFilterExpr(const QString &expr);
+    void setConnectionViewMode(ConnectionViewMode m);
 
 signals:
     void changed();
@@ -148,4 +162,5 @@ private:
     int  m_rateSmoothingMs               = 0;   // 0 = off (EMA τ in ms; sub-second supported)
     bool m_showStatusInTitle             = false;
     QString m_connFilterExpr;
+    ConnectionViewMode m_connViewMode    = ConnectionViewMode::Flat;
 };

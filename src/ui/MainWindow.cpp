@@ -43,6 +43,10 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTableView>
+#include <QTreeView>
+#include <QComboBox>
+
+#include "ui/ConnectionGroupProxy.h"
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -188,15 +192,29 @@ void MainWindow::setupUi()
     m_connProxy->setSourceModel(m_connModel);
     m_connProxy->setSortRole(ConnectionModel::SortRole);
 
-    m_connView = new QTableView;
-    m_connView->setModel(m_connProxy);
+    // Group proxy: pass-through in Flat mode (default), tree-of-groups
+    // in the by-X modes. Sits BETWEEN the filter proxy and the view so
+    // grouping always sees post-filter rows. Mode is applied in
+    // applySettingsToUi() based on Settings::connectionViewMode().
+    m_connGroupProxy = new ConnectionGroupProxy(this);
+    m_connGroupProxy->setSourceModel(m_connProxy);
+
+    m_connView = new QTreeView;
+    m_connView->setModel(m_connGroupProxy);
     m_connView->setSortingEnabled(true);
     m_connView->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_connView->setAlternatingRowColors(true);
-    m_connView->verticalHeader()->setVisible(false);
-    m_connView->setShowGrid(false);
-    m_connView->horizontalHeader()->setStretchLastSection(false);
-    m_connView->horizontalHeader()->setSectionResizeMode(
+    m_connView->setUniformRowHeights(true);
+    // Flat-mode defaults — match v0.1's QTableView geometry exactly so
+    // the RowGaugeDelegate / ConnectionFlowDelegate keep painting at
+    // the same coordinates. The mode-switch path in applySettingsToUi()
+    // toggles these for the grouped modes.
+    m_connView->setRootIsDecorated(false);
+    m_connView->setItemsExpandable(false);
+    m_connView->setIndentation(0);
+    m_connView->setExpandsOnDoubleClick(false);
+    m_connView->header()->setStretchLastSection(false);
+    m_connView->header()->setSectionResizeMode(
         static_cast<int>(ConnectionModel::Column::Flow), QHeaderView::Stretch);
     m_connFlowDelegate = new ConnectionFlowDelegate(m_connView);
     m_connView->setItemDelegateForColumn(
@@ -220,10 +238,10 @@ void MainWindow::setupUi()
 
     // Right-click on the connections table header → per-column visibility
     // toggles. Same model as the interfaces header (above).
-    m_connView->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_connView->horizontalHeader(), &QWidget::customContextMenuRequested,
+    m_connView->header()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_connView->header(), &QWidget::customContextMenuRequested,
             this, &MainWindow::showConnHeaderMenu);
-    m_connView->horizontalHeader()->setSectionsMovable(true);
+    m_connView->header()->setSectionsMovable(true);
 
     // Empty-state placeholder: a centered hint shown when the model has
     // zero rows. Parented to the viewport so it scrolls with the (empty)
@@ -473,6 +491,40 @@ void MainWindow::setupMenuAndToolbar()
             &QToolButton::showMenu);
     m_connIfaceFilterToolbarAct = toolbar->addWidget(m_connIfaceFilterBtn);
 
+    // "View as" dropdown (Flat / by Interface / by Container / by
+    // Process). Same visibility rules as the iface filter button —
+    // only the Connections tab cares — wired up via
+    // updateConnIfaceFilterVisibility() below.
+    auto *viewModeBox    = new QWidget(toolbar);
+    viewModeBox->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    auto *viewModeLayout = new QHBoxLayout(viewModeBox);
+    viewModeLayout->setContentsMargins(6, 0, 0, 0);
+    viewModeLayout->setSpacing(6);
+    auto *viewModeLabel  = new QLabel(tr("View:"), viewModeBox);
+    viewModeLabel->setForegroundRole(QPalette::WindowText);
+    m_connViewModeCombo  = new QComboBox(viewModeBox);
+    m_connViewModeCombo->addItem(tr("Flat"),
+                                 static_cast<int>(Settings::ConnectionViewMode::Flat));
+    m_connViewModeCombo->addItem(tr("by Interface"),
+                                 static_cast<int>(Settings::ConnectionViewMode::ByInterface));
+    m_connViewModeCombo->addItem(tr("by Container"),
+                                 static_cast<int>(Settings::ConnectionViewMode::ByContainer));
+    m_connViewModeCombo->addItem(tr("by Process"),
+                                 static_cast<int>(Settings::ConnectionViewMode::ByProcess));
+    m_connViewModeCombo->setToolTip(tr(
+        "Group connections. \"Flat\" matches the classic iftop view."));
+    m_connViewModeCombo->setCurrentIndex(
+        static_cast<int>(m_settings->connectionViewMode()));
+    connect(m_connViewModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+                if (i < 0) return;
+                m_settings->setConnectionViewMode(
+                    static_cast<Settings::ConnectionViewMode>(i));
+            });
+    viewModeLayout->addWidget(viewModeLabel);
+    viewModeLayout->addWidget(m_connViewModeCombo);
+    m_connViewModeToolbarAct = toolbar->addWidget(viewModeBox);
+
     // Visual breathing room between the iface dropdown and the filter
     // line edit. QToolBar::addSeparator() draws a vertical divider which
     // also pads either side by the style's default spacing.
@@ -601,6 +653,28 @@ void MainWindow::applySettingsToUi()
         m_connView->setColumnHidden(
             static_cast<int>(ConnectionModel::Column::TxMax), !showMax);
     }
+    if (m_connView && m_connGroupProxy) {
+        // Apply the persisted view mode to the group proxy and adjust
+        // the QTreeView decorations so Flat mode stays pixel-identical
+        // to v0.1 (no indent, no branch markers) and grouped modes
+        // expose the normal tree branches.
+        const auto mode = m_settings->connectionViewMode();
+        m_connGroupProxy->setViewMode(mode);
+        const bool flat = (mode == Settings::ConnectionViewMode::Flat);
+        m_connView->setRootIsDecorated(!flat);
+        m_connView->setItemsExpandable(!flat);
+        m_connView->setIndentation(flat ? 0 : 14);
+        m_connView->setExpandsOnDoubleClick(!flat);
+        if (!flat) m_connView->expandAll();
+        // Keep the view-mode dropdown in the toolbar in sync if a
+        // change came in via the Settings dialog rather than the
+        // dropdown itself.
+        if (m_connViewModeCombo
+            && m_connViewModeCombo->currentIndex() != static_cast<int>(mode)) {
+            const QSignalBlocker block(m_connViewModeCombo);
+            m_connViewModeCombo->setCurrentIndex(static_cast<int>(mode));
+        }
+    }
     if (m_connFlowDelegate) {
         const bool wasOn = m_connFlowDelegate->colorCodeEnabled();
         const bool nowOn = m_settings->colorCodeConnectionFlow();
@@ -674,6 +748,8 @@ void MainWindow::updateConnIfaceFilterVisibility()
                          m_tabs->currentWidget() == m_connTab);
     if (m_connIfaceFilterToolbarAct)
         m_connIfaceFilterToolbarAct->setVisible(onConn);
+    if (m_connViewModeToolbarAct)
+        m_connViewModeToolbarAct->setVisible(onConn);
     if (m_connFilterSepAct)
         m_connFilterSepAct->setVisible(onConn);
     if (m_connFilterSpacerAct)
@@ -1068,7 +1144,7 @@ void MainWindow::readUiState()
     if (const QByteArray nh = s.value(kUiNetHeaderState).toByteArray(); !nh.isEmpty())
         m_netView->horizontalHeader()->restoreState(nh);
     if (const QByteArray ch = s.value(kUiConnHeaderState).toByteArray(); !ch.isEmpty())
-        m_connView->horizontalHeader()->restoreState(ch);
+        m_connView->header()->restoreState(ch);
 }
 
 void MainWindow::writeUiState()
@@ -1081,12 +1157,12 @@ void MainWindow::writeUiState()
     s.setValue(kUiNetSortColumn, m_netView->horizontalHeader()->sortIndicatorSection());
     s.setValue(kUiNetSortOrder,
                static_cast<int>(m_netView->horizontalHeader()->sortIndicatorOrder()));
-    s.setValue(kUiConnSortColumn, m_connView->horizontalHeader()->sortIndicatorSection());
+    s.setValue(kUiConnSortColumn, m_connView->header()->sortIndicatorSection());
     s.setValue(kUiConnSortOrder,
-               static_cast<int>(m_connView->horizontalHeader()->sortIndicatorOrder()));
+               static_cast<int>(m_connView->header()->sortIndicatorOrder()));
 
     s.setValue(kUiNetHeaderState,  m_netView->horizontalHeader()->saveState());
-    s.setValue(kUiConnHeaderState, m_connView->horizontalHeader()->saveState());
+    s.setValue(kUiConnHeaderState, m_connView->header()->saveState());
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -1145,10 +1221,10 @@ void MainWindow::installShortcuts()
         });
     }
 
-    // Ctrl+C in either table copies the selected rows. QTableView's default
+    // Ctrl+C in either table copies the selected rows. The view's default
     // Ctrl+C copies a single cell — we want the whole row(s), formatted via
     // the existing copyTextForFlow() / Exportable CSV emitter.
-    auto installCopy = [this](QTableView *view) {
+    auto installCopy = [this](QAbstractItemView *view) {
         auto *act = new QShortcut(QKeySequence(QKeySequence::Copy), view);
         act->setContext(Qt::WidgetShortcut);
         connect(act, &QShortcut::activated, this,
@@ -1172,7 +1248,7 @@ void MainWindow::installShortcuts()
     }
 }
 
-void MainWindow::copyTableSelectionToClipboard(QTableView *view)
+void MainWindow::copyTableSelectionToClipboard(QAbstractItemView *view)
 {
     if (!view) return;
     auto *sel = view->selectionModel();
@@ -1184,16 +1260,25 @@ void MainWindow::copyTableSelectionToClipboard(QTableView *view)
     lines.reserve(rows.size());
     for (const QModelIndex &viewIdx : rows) {
         QModelIndex src = viewIdx;
-        // Map proxy → source row when applicable so the model can use its
-        // own row indices.
-        if (auto *proxy = qobject_cast<QSortFilterProxyModel *>(view->model()))
+        // Map through the (possibly chained) proxies down to the source
+        // row so the model can use its own row indices. For the
+        // Connections view this is GroupProxy → FilterProxy →
+        // ConnectionModel; for the Interfaces view it's a single filter
+        // proxy.
+        if (view == m_connView) {
+            if (m_connGroupProxy && m_connGroupProxy->isGroupIndex(viewIdx))
+                continue;  // skip group headers; no flow to copy
+            if (m_connGroupProxy)
+                src = m_connGroupProxy->mapToSource(viewIdx);
+            if (src.isValid() && m_connProxy)
+                src = m_connProxy->mapToSource(src);
+        } else if (auto *proxy = qobject_cast<QSortFilterProxyModel *>(view->model())) {
             src = proxy->mapToSource(viewIdx);
+        }
         if (!src.isValid()) continue;
         if (view == m_connView && m_connModel) {
             lines << m_connModel->copyTextForFlow(src.row());
         } else if (view == m_netView && m_netModel) {
-            // No copyTextForFlow on NetworkModel; fall back to a tab-joined
-            // row dump via DisplayRole. Good enough for a 4-column table.
             QStringList cells;
             const int cols = m_netModel->columnCount();
             for (int c = 0; c < cols; ++c) {
@@ -1212,7 +1297,13 @@ void MainWindow::filterByConnectionRow(const QPoint &pos, bool exclude)
     if (!m_connView || !m_connFilterEdit || !m_connModel || !m_connProxy) return;
     const QModelIndex viewIdx = m_connView->indexAt(pos);
     if (!viewIdx.isValid()) return;
-    const QModelIndex srcIdx = m_connProxy->mapToSource(viewIdx);
+    // viewIdx may be a group row (no source flow); skip it.
+    if (m_connGroupProxy && m_connGroupProxy->isGroupIndex(viewIdx)) return;
+    const QModelIndex filterIdx = m_connGroupProxy
+                                      ? m_connGroupProxy->mapToSource(viewIdx)
+                                      : viewIdx;
+    if (!filterIdx.isValid()) return;
+    const QModelIndex srcIdx = m_connProxy->mapToSource(filterIdx);
     if (!srcIdx.isValid()) return;
 
     const QString peer = m_connModel->peerAddressText(srcIdx.row());
@@ -1576,10 +1667,16 @@ void MainWindow::showConnectionContextMenu(const QPoint &pos)
     QMenu menu(this);
 
     const QModelIndex viewIdx = m_connView->indexAt(pos);
-    if (viewIdx.isValid()) {
-        // Map through the filter proxy to a source row before asking the model
-        // for its copy text — proxy row indices are unstable under sort/filter.
-        const QModelIndex srcIdx = m_connProxy->mapToSource(viewIdx);
+    if (viewIdx.isValid() && !(m_connGroupProxy && m_connGroupProxy->isGroupIndex(viewIdx))) {
+        // Map view → group proxy → filter proxy → source. Proxy row indices
+        // are unstable under sort/filter, so we map all the way down before
+        // asking the model.
+        const QModelIndex filterIdx = m_connGroupProxy
+                                          ? m_connGroupProxy->mapToSource(viewIdx)
+                                          : viewIdx;
+        const QModelIndex srcIdx = filterIdx.isValid()
+                                       ? m_connProxy->mapToSource(filterIdx)
+                                       : QModelIndex{};
         if (srcIdx.isValid()) {
             const int row = srcIdx.row();
 
@@ -1710,6 +1807,6 @@ void MainWindow::showConnHeaderMenu(const QPoint &pos)
         static_cast<int>(ConnectionModel::Column::TxMax),
     };
     QMenu menu(this);
-    populateHeaderMenu(&menu, m_connView->horizontalHeader(), alwaysHidden);
-    menu.exec(m_connView->horizontalHeader()->viewport()->mapToGlobal(pos));
+    populateHeaderMenu(&menu, m_connView->header(), alwaysHidden);
+    menu.exec(m_connView->header()->viewport()->mapToGlobal(pos));
 }

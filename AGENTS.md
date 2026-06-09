@@ -457,6 +457,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults. |
 | `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
+| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds. Uses a tiny stub source model — no real ConnectionModel needed. |
 | `test_filter`              | Filter mini-language parser + evaluator. v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. |
 | `test_cgroup_real_fixtures` | Data-driven: 16 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host scopes). Adding a runtime = drop a fixture + add one table row. |
 | `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |
@@ -628,6 +629,23 @@ remember when iterating:
   refuses to hide the last visible column. `applySettingsToUi()` still
   force-toggles `RxMax` / `TxMax` based on the throughput-gauge
   setting — those two columns are gauge-dependent, not user-controlled.
+* **Connections view is a QTreeView with a two-proxy chain**:
+  `ConnectionModel` → `ConnectionFilterProxy` → `ConnectionGroupProxy`
+  → `QTreeView`. Flat mode is the default and is a strict pass-through
+  in `ConnectionGroupProxy` (top-level rows map 1:1 to source rows; no
+  parents, no children, `internalId == quintptr(-1)`); the view also
+  flips `setRootIsDecorated(false)` + `setIndentation(0)` + disables
+  expand-on-double-click so RowGaugeDelegate / ConnectionFlowDelegate
+  paint at the same coordinates as the v0.1 QTableView. The grouped
+  modes (`ByInterface` / `ByContainer` / `ByProcess`) synthesize a
+  one-level tree where group rows aggregate per-column SUMs via
+  `aggregateData()` and child rows forward to source via
+  `mapToSource()`. **When mapping back to the source model, always
+  walk both proxies** (`m_connGroupProxy->mapToSource(view)` then
+  `m_connProxy->mapToSource(filter)`) and skip group rows via
+  `m_connGroupProxy->isGroupIndex(view)`. Adding a new grouping mode
+  = extend the `Settings::ConnectionViewMode` enum + `groupKeyFor()`
+  + `groupLabelFor()`; the rest is automatic.
 * **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
   uses an **allowlist** (`sessionEnv()`) when forwarding environment
   variables into the privileged child, not a denylist. The root child runs

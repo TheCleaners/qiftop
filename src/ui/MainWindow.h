@@ -17,6 +17,8 @@ class QFrame;
 class QTimer;
 class QLabel;
 class QTableView;
+class QTreeView;
+class QAbstractItemView;
 class QTabWidget;
 class QToolBar;
 class QMenu;
@@ -129,7 +131,7 @@ private:
     // Copies the currently-selected rows of `view` to the clipboard,
     // formatted via the matching Exportable model's CSV emitter for
     // selected rows, or via copyTextForFlow() for connections.
-    void copyTableSelectionToClipboard(QTableView *view);
+    void copyTableSelectionToClipboard(QAbstractItemView *view);
     // Sets the Connections filter expression to one isolating (or
     // excluding) the peer at the row under `pos` in m_connView.
     void filterByConnectionRow(const QPoint &pos, bool exclude);
@@ -163,7 +165,8 @@ protected:
     // Connections tab
     ConnectionModel       *m_connModel     = nullptr;
     ConnectionFilterProxy *m_connProxy     = nullptr;
-    QTableView            *m_connView      = nullptr;
+    class ConnectionGroupProxy *m_connGroupProxy = nullptr;
+    QTreeView             *m_connView      = nullptr;
     ConnectionFlowDelegate *m_connFlowDelegate = nullptr;
     QFrame                *m_connBanner    = nullptr; // shown on EPERM
     QLabel                *m_connBannerLbl = nullptr;
@@ -175,6 +178,8 @@ protected:
     class QToolButton     *m_connIfaceFilterBtn        = nullptr; // toolbar trigger
     QAction               *m_connIfaceFilterToolbarAct = nullptr; // QAction wrapping the button
     QAction               *m_connIfaceFilterMenuAct    = nullptr; // QAction wrapping the submenu
+    class QComboBox       *m_connViewModeCombo         = nullptr;
+    QAction               *m_connViewModeToolbarAct    = nullptr;
     class QLineEdit       *m_connFilterEdit            = nullptr;
     QAction               *m_connFilterToolbarAct      = nullptr;
     QAction               *m_connFilterSepAct          = nullptr;
