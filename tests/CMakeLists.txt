@@ -146,6 +146,8 @@ qiftop_add_test(test_resolver_factory
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_test(test_sockdiag_parse
         test_sockdiag_parse.cpp)
+    qiftop_add_test(test_cgroup_parse
+        test_cgroup_parse.cpp)
 endif()
 
 # Integration test: spawns the actual qiftop-agent binary against a session

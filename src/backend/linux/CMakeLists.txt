@@ -7,6 +7,7 @@ add_library(backend_linux STATIC
     NetlinkMonitor.cpp
     ConntrackMonitor.cpp
     SockDiagResolver.cpp
+    CgroupClassifier.cpp
 )
 
 target_include_directories(backend_linux
