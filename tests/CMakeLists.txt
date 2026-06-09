@@ -143,6 +143,11 @@ qiftop_add_test(test_resolver_factory
     ${CMAKE_SOURCE_DIR}/src/backend/ProcessResolverFactory.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    qiftop_add_test(test_sockdiag_parse
+        test_sockdiag_parse.cpp)
+endif()
+
 # Integration test: spawns the actual qiftop-agent binary against a session
 # bus and drives the live DBus contract end-to-end. Slow (~6 s; baseline +
 # fast windows + spawn/teardown per test method) so it's gated behind
