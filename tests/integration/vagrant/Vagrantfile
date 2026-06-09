@@ -30,16 +30,30 @@ Vagrant.configure("2") do |config|
   config.vm.hostname = "qiftop-integration"
 
   config.vm.provider "libvirt" do |lv|
-    # Rootless libvirt: avoids the polkit prompt that qemu:///system
-    # triggers when the host user isn't in the 'libvirt' group. All
-    # VM state lives under ~/.local/share/libvirt/ instead of
-    # /var/lib/libvirt/. Override with LIBVIRT_DEFAULT_URI if you
-    # really want the system instance.
-    lv.uri = ENV.fetch("LIBVIRT_DEFAULT_URI", "qemu:///session")
+    # Default to the system libvirt instance — vagrant-libvirt's
+    # session mode forces qemu-bridge-helper for the management
+    # network, which needs both /etc/qemu/bridge.conf ACL edits AND
+    # setuid on the helper (more invasive than the standard libvirt
+    # group setup). With qemu:///system the libvirt 'default' NAT
+    # network just works.
+    #
+    # Polkit lets members of the 'libvirt' group access qemu:///system
+    # without a password. If you get a polkit prompt, add yourself once:
+    #   sudo usermod -aG libvirt $USER && newgrp libvirt
+    #
+    # Override via LIBVIRT_DEFAULT_URI if you really want session mode
+    # (you'll also need /etc/qemu/bridge.conf + setuid helper).
+    lv.uri = ENV.fetch("LIBVIRT_DEFAULT_URI", "qemu:///system")
     lv.memory = 4096
     lv.cpus   = 4
     lv.machine_virtual_size = 20
   end
+
+  # Disable vagrant's default /vagrant synced folder — it tries NFS by
+  # default with libvirt, which needs host-side nfsd config we don't
+  # want to require. Our explicit rsync share below is the only one
+  # we actually use.
+  config.vm.synced_folder ".", "/vagrant", disabled: true
 
   # rsync the repo into the guest. NFS/9p would be faster but rsync
   # works without any extra host config and matches what CI sees (a

@@ -40,10 +40,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default to rootless libvirt so we don't trigger a polkit/pkexec
-# prompt when the host user isn't in the 'libvirt' group. Caller can
-# still force the system instance by exporting LIBVIRT_DEFAULT_URI.
-export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///session}"
+# Default to the system libvirt instance — see Vagrantfile for the
+# rationale (rootless session mode needs invasive qemu-bridge-helper
+# setup). Polkit allows the 'libvirt' group passwordless access.
+export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
+
+# Surface the libvirt-group requirement early with a helpful message
+# instead of letting it fail later as a polkit prompt mid-run.
+if [[ "$LIBVIRT_DEFAULT_URI" == "qemu:///system" ]] && ! id -nG | tr ' ' '\n' | grep -qx libvirt; then
+    cat >&2 <<EOF
+error: $USER is not in the 'libvirt' group, so qemu:///system access
+will trigger a polkit/pkexec password prompt. One-time fix:
+
+    sudo usermod -aG libvirt \$USER
+    newgrp libvirt          # or log out + back in for it to stick
+
+Then re-run this script. (To use rootless libvirt instead, export
+LIBVIRT_DEFAULT_URI=qemu:///session — but you'll also need to fix
+/etc/qemu/bridge.conf + setuid the bridge helper. Group is cleaner.)
+EOF
+    exit 1
+fi
 
 cd "$VAGRANT_DIR"
 
