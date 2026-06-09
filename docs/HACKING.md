@@ -65,7 +65,7 @@ Useful overrides:
 |---------------------------------|---------|------------------------------------------------------|
 | `CMAKE_BUILD_TYPE`              | (empty) | `Debug`, `Release`, `RelWithDebInfo`.                |
 | `CMAKE_INSTALL_PREFIX`          | `/usr/local` | Where `cmake --install` lands. Use `/usr` for `.deb`. |
-| `QIFTOP_BUILD_TESTS`            | `OFF`   | Build the (forthcoming) test suite under `tests/`.   |
+| `QIFTOP_BUILD_TESTS`            | `ON`    | Build the test suite under `tests/`. Turn `OFF` for distro builds that don't want QtTest in the build deps. |
 | `QIFTOP_AUTO_PACKAGE`           | `ON`    | Run `cpack -G DEB` automatically after each agent re-link. |
 
 ### Incremental rebuild
@@ -161,12 +161,16 @@ sudo usermod -a -G netdev "$USER"
 ```
 
 The Debian `postinst` creates the `netdev` group if it doesn't already
-exist, but never auto-adds users to it (we don't silently relax
-permissions). On distros without a stock `netdev` group, either add it
-(`sudo groupadd -r netdev`) or change the `<policy group="netdev">`
-stanza to a group that exists on your system.
+exist AND auto-adds the installing user — preferring `$SUDO_USER`
+(populated when `apt`/`dpkg` runs under `sudo`), falling back to
+`$PKEXEC_UID` (populated when GNOME Software / KDE Discover install via
+`pkexec`). The user still needs to log out and back in (or
+`newgrp netdev`) for the new group membership to take effect. On
+distros without a stock `netdev` group, `postinst` creates one;
+the bus policy file (`dist/dbus/org.qiftop.NetworkAgent1.conf`) hard-
+codes the name, so changing it requires editing that stanza too.
 
-`agentReachable()` (in `src/main.cpp`) probes the agent with a real
+`probeAgent()` (in `src/main.cpp`) probes the agent with a real
 `GetInterfaces` call now, so a user who isn't in `netdev` falls back
 cleanly to the in-process backend instead of staring at an empty UI.
 
@@ -477,7 +481,7 @@ root user. If you renamed the service, the policy needs updating too.
 
 Most common cause after the June 2026 hardening: your user isn't in the
 `netdev` group, so the DBus policy denies every method call. The
-`agentReachable()` probe in `src/main.cpp` calls `GetInterfaces` with a
+`probeAgent()` helper in `src/main.cpp` calls `GetInterfaces` with a
 1 s timeout; AccessDenied makes it return `false` and the GUI drops into
 the in-process path. To confirm:
 
