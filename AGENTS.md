@@ -222,6 +222,9 @@ older agents. Tokens currently emitted:
 | `oper-state`          | `InterfaceStatsDto.operState` populated with `IF_OPER_*` per RFC 2863. |
 | `link-errors`         | `InterfaceStatsDto` carries `rxErrors` / `txErrors` / `rxDropped` / `txDropped`. |
 | `tcp-state`           | `ConnectionDto.tcpState` populated for TCP flows.           |
+| `process-attribution` | Resolver chain provides per-flow PID / comm / uid (Linux `SockDiagResolver`). UI-visible once `ConnectionDtoV2` lands. |
+| `container-attribution` | Resolver chain provides per-PID container runtime + id + name (Linux `CgroupClassifier`). |
+| `netns-scan`          | Resolver chain dumps sock_diag in every non-host network namespace (Linux `NetnsScanner`, requires `CAP_SYS_ADMIN`). |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.

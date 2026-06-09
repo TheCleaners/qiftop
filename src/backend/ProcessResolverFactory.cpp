@@ -23,6 +23,9 @@
 #  ifdef QIFTOP_ENABLE_CONTAINER_ATTRIBUTION
 #    include "linux/CgroupClassifier.h"
 #  endif
+#  ifdef QIFTOP_ENABLE_NETNS_SCAN
+#    include "linux/NetnsScanner.h"
+#  endif
 #endif
 
 namespace qiftop::backend {
@@ -51,6 +54,17 @@ createProcessResolver(const ProcessResolverConfig &cfg)
             composite->add(std::move(r));
         } else {
             qCInfo(lcVerbose) << "ProcessResolverFactory: CgroupClassifier probe failed";
+        }
+    }
+#  endif
+#  ifdef QIFTOP_ENABLE_NETNS_SCAN
+    if (cfg.netnsScan) {
+        auto r = std::make_unique<linuximpl::NetnsScanner>();
+        if (r->initialize()) {
+            qCInfo(lcVerbose) << "ProcessResolverFactory: NetnsScanner added";
+            composite->add(std::move(r));
+        } else {
+            qCInfo(lcVerbose) << "ProcessResolverFactory: NetnsScanner probe failed";
         }
     }
 #  endif

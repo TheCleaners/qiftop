@@ -34,4 +34,27 @@ namespace qiftop::backend::sockdiag {
     return ok ? std::optional<quint64>(inode) : std::nullopt;
 }
 
+// Parse the target of a /proc/<pid>/ns/<type> readlink. Kernel formats
+// these as e.g. "net:[4026531840]" / "mnt:[4026531841]" / "pid:[...]".
+// `type` is the leading token without the colon (e.g. "net").
+//
+//   parseNamespaceLink(u"net:[4026531840]", "net") -> 4026531840
+//   parseNamespaceLink(u"mnt:[1]",          "net") -> nullopt  (wrong type)
+//   parseNamespaceLink(u"net:[abc]",        "net") -> nullopt
+[[nodiscard]] inline std::optional<quint64>
+parseNamespaceLink(QStringView link, QLatin1StringView type)
+{
+    if (!link.startsWith(type)) return std::nullopt;
+    if (link.size() < qsizetype(type.size() + 3)) return std::nullopt;
+    if (link[type.size()]     != u':') return std::nullopt;
+    if (link[type.size() + 1] != u'[') return std::nullopt;
+    if (!link.endsWith(u']'))          return std::nullopt;
+    const auto inner = link.mid(type.size() + 2,
+                                link.size() - type.size() - 3);
+    if (inner.isEmpty()) return std::nullopt;
+    bool ok = false;
+    const quint64 v = inner.toULongLong(&ok, 10);
+    return ok ? std::optional<quint64>(v) : std::nullopt;
+}
+
 } // namespace qiftop::backend::sockdiag

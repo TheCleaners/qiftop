@@ -37,6 +37,31 @@ private slots:
         QVERIFY(!qiftop::backend::sockdiag::parseSocketLink(u"socket:[-1]").has_value());
         QVERIFY(!qiftop::backend::sockdiag::parseSocketLink(u"socket:[12 34]").has_value());
     }
+
+    // /proc/<pid>/ns/<type> links — same shape but typed.
+    void parsesValidNamespaceLink()
+    {
+        using qiftop::backend::sockdiag::parseNamespaceLink;
+        QCOMPARE(parseNamespaceLink(u"net:[4026531840]", QLatin1StringView("net")),
+                 std::optional<quint64>(4026531840ULL));
+        QCOMPARE(parseNamespaceLink(u"mnt:[1]", QLatin1StringView("mnt")),
+                 std::optional<quint64>(1));
+        QCOMPARE(parseNamespaceLink(u"pid:[4026532256]", QLatin1StringView("pid")),
+                 std::optional<quint64>(4026532256ULL));
+    }
+
+    void rejectsWrongNamespaceType()
+    {
+        using qiftop::backend::sockdiag::parseNamespaceLink;
+        QVERIFY(!parseNamespaceLink(u"mnt:[1]",        QLatin1StringView("net")).has_value());
+        QVERIFY(!parseNamespaceLink(u"netfoo:[1]",     QLatin1StringView("net")).has_value());
+        QVERIFY(!parseNamespaceLink(u"net[1]",         QLatin1StringView("net")).has_value());
+        QVERIFY(!parseNamespaceLink(u"net:1",          QLatin1StringView("net")).has_value());
+        QVERIFY(!parseNamespaceLink(u"net:[abc]",      QLatin1StringView("net")).has_value());
+        QVERIFY(!parseNamespaceLink(u"net:[]",         QLatin1StringView("net")).has_value());
+        QVERIFY(!parseNamespaceLink(u"net:[123",       QLatin1StringView("net")).has_value());
+        QVERIFY(!parseNamespaceLink(u"",               QLatin1StringView("net")).has_value());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestSockDiagParse)
