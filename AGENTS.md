@@ -513,6 +513,93 @@ runner user. See docs/HACKING.md §5.5 for the test-writing conventions.
 
 ---
 
+## 8a. Lifetime & races in process / container attribution
+
+Process and container attribution (`ProcessResolver` and its
+implementations under `src/backend/linux/`) chase information that the
+kernel can invalidate at any moment: processes exit, fds close, cgroups
+get removed, network namespaces get destroyed. Every resolver MUST treat
+those as the normal case and degrade silently rather than crash, spam
+the log, or — worst — return *wrong* attribution.
+
+Concrete rules every resolver must follow:
+
+1. **All `/proc/<pid>/*` reads tolerate ENOENT / EACCES.** Any open or
+   readlink that races a vanishing process returns `nullopt`, not an
+   error. No `qWarning` on these — they happen every second on a busy
+   host and would drown the log. (See SockDiagResolver's
+   `refreshProcWalk`: `opendir`/`readlink` failures just `continue`.)
+
+2. **PID reuse is guarded by starttime.** PIDs wrap on busy hosts (and
+   on hosts with `kernel.pid_max=32768` they wrap fast). Any cache or
+   late-bound lookup that maps `pid → info` MUST snapshot
+   `/proc/<pid>/stat` field 22 (starttime in jiffies-since-boot) at
+   enrollment time and re-check on use. A mismatch means the kernel has
+   handed that pid to a different process; the cached attribution is
+   stale and MUST be discarded, not served. See
+   `backend/linux/ProcSnapshot.h::pidStartTime` and its use in
+   `SockDiagResolver::resolveFlow` + `CgroupClassifier::resolveContainerForPid`.
+
+3. **Cached "info is unknown" is fine.** When the underlying file
+   disappears, caching `nullopt` keyed by (pid, starttime) for the TTL
+   is correct: short-lived processes don't deserve repeated /proc
+   churn, and the entry will age out naturally.
+
+4. **Container names are display strings, not handles.** A
+   `ContainerInfo{runtime, id, name}` returned to the GUI may refer to
+   a cgroup that has since been deleted (container stopped). That's
+   fine — we display the snapshot we took. Never re-resolve "live" from
+   a cached id without going back through the resolver chain (which
+   re-snapshots starttime + cgroup path).
+
+5. **Namespace operations (step 4 — NetnsScanner) must be RAII-fenced.**
+   The pattern, when implemented:
+     - Open `/proc/<pid>/ns/net` with `O_RDONLY | O_CLOEXEC`. ENOENT →
+       skip this pid silently.
+     - `fstat()` the fd; the `st_ino` uniquely identifies the netns.
+       Dedupe scans by inode so multiple pids in the same container
+       cost one dump.
+     - Capture the worker thread's *original* netns fd FIRST. Wrap the
+       `setns()` + dump + `setns(back)` sequence in a scope guard whose
+       destructor restores the original netns. **If the restore
+       `setns()` ever fails, `qFatal`** — we're stuck running future
+       sock_diag dumps in the wrong netns and would attribute every
+       host flow to the wrong container.
+     - The dump itself running in a since-destroyed netns returns
+       ENETUNREACH or empty results; treat as "no flows", not an error.
+     - All of this happens on the agent's worker thread so the main
+       thread is never affected.
+
+6. **No `int`-returning syscalls without checking errno.** Anything
+   that can fail (socket, bind, sendto, recv, opendir, setns,
+   readlink, openat) must either bail out cleanly or log via
+   `qCWarning(lcVerbose)` exactly ONCE per cycle — not per failure.
+
+7. **Resolver methods must be safe to call from the data-emission
+   loop.** That loop has a per-tick budget; resolvers are NOT allowed
+   to do unbounded I/O or block on external services. The `kCacheTtlMs`
+   constants in each resolver are the contract: refresh costs amortise
+   to roughly once per TTL per pid, never per flow.
+
+8. **Bounded caches, hard cap, clear-on-overflow.** Every per-pid cache
+   has an upper bound (e.g. `CgroupClassifier::kCacheMaxItems = 8192`).
+   On overflow, full-clear rather than LRU-evict — at this scale the
+   complexity isn't justified and the next tick repopulates the hot
+   set. **Never** let the cache grow unbounded; a host with 100 k
+   short-lived workers per minute would OOM the agent otherwise.
+
+Unit coverage of the race surface lives in `tests/test_proc_snapshot.cpp`
+(parser robustness + live self-pid stability) and the existing resolver
+unit tests; for end-to-end "actually races a dying process" coverage we
+rely on the integration test running under `dbus-run-session`.
+
+When adding a new resolver: re-read this section, then ask yourself
+"what happens if every /proc/<pid>/* file I touch returns ENOENT?" If
+the answer is anything other than "the resolver returns nullopt and the
+caller carries on", the design is wrong.
+
+---
+
 ## 9. Keeping this document fresh
 
 This file describes the *current* state of the codebase — architecture,

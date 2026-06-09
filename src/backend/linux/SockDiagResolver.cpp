@@ -6,6 +6,8 @@
 #include <QtEndian>
 
 #include <array>
+#include "ProcSnapshot.h"
+
 #include <cerrno>
 #include <cstring>
 #include <vector>
@@ -110,7 +112,12 @@ struct SockDiagResolver::Impl {
 
     std::mutex                  mu;
     QHash<QByteArray, quint64>  keyToInode;     // 4-tuple -> kernel inode
-    QHash<quint64, qint32>      inodeToPid;     // socket inode -> owning pid
+    // socket inode -> (owning pid, pid starttime jiffies). starttime is
+    // captured at enrollment so a later lookup can detect PID reuse
+    // (kernel hands out the same pid to a brand-new process) and skip
+    // reading /proc/<pid>/* for the unrelated process.
+    struct PidStamp { qint32 pid; quint64 startTime; };
+    QHash<quint64, PidStamp>    inodeToPid;
     qint64                      lastProcWalkMs = -1;
     bool                        ready = false;
 
@@ -245,7 +252,13 @@ struct SockDiagResolver::Impl {
                         const QString target = QString::fromUtf8(linkBuf.data(),
                                                                  int(n));
                         if (auto inode = sockdiag::parseSocketLink(target)) {
-                            inodeToPid.insert(*inode, qint32(pid));
+                            // Snapshot starttime now; verifies later.
+                            // If the pid is already gone, store 0 —
+                            // resolveFlow will treat any nonzero
+                            // mismatch as reuse.
+                            const auto st = procsnap::pidStartTime(qint32(pid));
+                            inodeToPid.insert(*inode,
+                                              { qint32(pid), st.value_or(0) });
                         }
                         break;
                     }
@@ -330,8 +343,17 @@ std::optional<ProcessInfo> SockDiagResolver::resolveFlow(const Connection &flow)
     auto itPid = m_d->inodeToPid.constFind(*itSock);
     if (itPid == m_d->inodeToPid.constEnd()) return std::nullopt;
 
+    // Defend against PID reuse: if the pid's starttime has changed
+    // since we enrolled it, a different process now holds that pid
+    // and any /proc/<pid>/* we'd read would be wrong. Drop the
+    // attribution rather than mislabel the flow.
+    const auto stNow = procsnap::pidStartTime(itPid->pid);
+    if (!stNow.has_value() || *stNow != itPid->startTime) {
+        return std::nullopt;
+    }
+
     ProcessInfo info;
-    info.pid = *itPid;
+    info.pid = itPid->pid;
     readProcStatus(info.pid, info.comm, info.uid);
     info.cmdline = readProcCmdline(info.pid);
     info.exe     = readProcExe(info.pid);

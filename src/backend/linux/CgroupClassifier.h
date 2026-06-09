@@ -48,7 +48,11 @@ private:
     bool                              m_ready = false;
     std::mutex                        m_mu;
     QElapsedTimer                     m_clock;
-    struct CacheEntry { std::optional<ContainerInfo> info; qint64 ts; };
+    struct CacheEntry {
+        std::optional<ContainerInfo> info;
+        qint64                       ts;
+        quint64                      startTime;  // pid identity guard
+    };
     QHash<qint32, CacheEntry>         m_cache;
     static constexpr int  kCacheTtlMs    = 2000;
     static constexpr int  kCacheMaxItems = 8192;
