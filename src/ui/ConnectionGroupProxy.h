@@ -114,4 +114,9 @@ private:
     QList<Group> m_groups;     // empty when mode==Flat
     int m_sortColumn = -1;     // -1 = no sort applied yet
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
+    // Snapshot of the pre-removal source-row span captured in
+    // onSourceRowsAboutToBeRemoved so onSourceRowsRemoved can map
+    // them back to (group, childRow) after the source has shifted.
+    int m_pendingRemovalFirst = -1;
+    int m_pendingRemovalLast  = -1;
 };

@@ -91,34 +91,142 @@ void ConnectionGroupProxy::onSourceRowsAboutToBeInserted(const QModelIndex &pare
 {
     if (m_mode == ViewMode::Flat)
         beginInsertRows(mapFromSource(parent), first, last);
+    // Grouped mode: we can't compute groupKeyFor() until the source
+    // has actually been inserted (the data isn't readable yet). Defer
+    // all begin/endInsertRows pairs to onSourceRowsInserted.
 }
 
-void ConnectionGroupProxy::onSourceRowsInserted(const QModelIndex &, int, int)
+void ConnectionGroupProxy::onSourceRowsInserted(const QModelIndex &, int first, int last)
 {
     if (m_mode == ViewMode::Flat) {
         endInsertRows();
         return;
     }
-    // TODO: emit fine-grained child/group inserts in grouped modes. For
-    // now, structural churn is much rarer than value-only repaint churn, so
-    // keep the safe wholesale rebuild outside Flat's strict pass-through path.
-    onSourceReset();
+    // Grouped: process each inserted source row incrementally so the
+    // view's expansion state, selection, and scroll position survive.
+    // Pre-fix this called onSourceReset() — every newly tracked flow
+    // collapsed the entire tree, which on a busy host means the user
+    // can never keep a group expanded.
+    const int insertedCount = last - first + 1;
+
+    // 1. Shift existing srcRows >= first by the insertion count so
+    //    they continue to point at the same logical source rows.
+    for (Group &g : m_groups) {
+        for (int &r : g.srcRows)
+            if (r >= first) r += insertedCount;
+    }
+
+    // 2. For each newly inserted source row, classify it into a
+    //    group and emit a single begin/endInsertRows pair (either
+    //    a new top-level group row, or a child of an existing group).
+    for (int srcRow = first; srcRow <= last; ++srcRow) {
+        const QString key = groupKeyFor(srcRow);
+
+        // Find existing group by key (linear scan; #groups is small —
+        // an interface count or container count, not a flow count).
+        int existing = -1;
+        for (int gi = 0; gi < m_groups.size(); ++gi) {
+            if (m_groups[gi].key == key) { existing = gi; break; }
+        }
+
+        if (existing >= 0) {
+            // Append to existing group. srcRows stays sorted by row
+            // arrival order (matches what rebuild() would produce).
+            const QModelIndex parent = createIndex(existing, 0, kTopLevelId);
+            const int childRow = m_groups[existing].srcRows.size();
+            beginInsertRows(parent, childRow, childRow);
+            m_groups[existing].srcRows.append(srcRow);
+            endInsertRows();
+        } else {
+            // New group at the end of m_groups.
+            const int groupRow = m_groups.size();
+            beginInsertRows({}, groupRow, groupRow);
+            Group g;
+            g.key = key;
+            g.label = groupLabelFor(srcRow, key);
+            g.srcRows.append(srcRow);
+            m_groups.append(std::move(g));
+            endInsertRows();
+        }
+    }
+
+    // 3. Re-apply current sort. applyCurrentSort emits no signals so
+    //    this re-orders in place; the view will pick up the new order
+    //    on its next paint. Skipped when no sort has been requested
+    //    yet.
+    applyCurrentSort();
 }
 
 void ConnectionGroupProxy::onSourceRowsAboutToBeRemoved(const QModelIndex &parent, int first, int last)
 {
-    if (m_mode == ViewMode::Flat)
+    if (m_mode == ViewMode::Flat) {
         beginRemoveRows(mapFromSource(parent), first, last);
+        return;
+    }
+    // Grouped: stash the about-to-be-removed source row span so
+    // onSourceRowsRemoved can map them back to (group, childRow)
+    // even after the source has shifted rows down. The source
+    // model is still in pre-removal state RIGHT NOW so we MUST do
+    // the lookup before the removal completes — but we MUST NOT emit
+    // beginRemoveRows here, since Qt requires begin/end pairs to
+    // bracket the SHORT moment the model is in an inconsistent
+    // state, and we have nothing inconsistent until the source
+    // actually removes the rows.
+    m_pendingRemovalFirst = first;
+    m_pendingRemovalLast  = last;
 }
 
-void ConnectionGroupProxy::onSourceRowsRemoved(const QModelIndex &, int, int)
+void ConnectionGroupProxy::onSourceRowsRemoved(const QModelIndex &, int first, int last)
 {
     if (m_mode == ViewMode::Flat) {
         endRemoveRows();
         return;
     }
-    // TODO: emit fine-grained child/group removals in grouped modes.
-    onSourceReset();
+    // Use the snapshot if it matches; the args we just got should
+    // equal the pre-removal first/last. Defensive in case of races.
+    if (m_pendingRemovalFirst != first || m_pendingRemovalLast != last) {
+        m_pendingRemovalFirst = first;
+        m_pendingRemovalLast  = last;
+    }
+    const int removedCount = last - first + 1;
+
+    // 1. For each removed source row, locate (group, childRow) and
+    //    emit a begin/endRemoveRows pair. Track which groups became
+    //    empty so we can remove them from the top level after.
+    QList<int> emptiedGroups;
+    for (int srcRow = first; srcRow <= last; ++srcRow) {
+        for (int gi = 0; gi < m_groups.size(); ++gi) {
+            const int childRow = static_cast<int>(
+                m_groups[gi].srcRows.indexOf(srcRow));
+            if (childRow < 0) continue;
+            const QModelIndex parent = createIndex(gi, 0, kTopLevelId);
+            beginRemoveRows(parent, childRow, childRow);
+            m_groups[gi].srcRows.removeAt(childRow);
+            endRemoveRows();
+            if (m_groups[gi].srcRows.isEmpty() && !emptiedGroups.contains(gi))
+                emptiedGroups.append(gi);
+            break;  // a srcRow lives in exactly one group
+        }
+    }
+
+    // 2. Shift remaining srcRows > last DOWN by removedCount so the
+    //    proxy's view of source row numbers stays consistent.
+    for (Group &g : m_groups) {
+        for (int &r : g.srcRows)
+            if (r > last) r -= removedCount;
+    }
+
+    // 3. Remove emptied groups. Sort descending so removal indices
+    //    stay valid as we shrink m_groups.
+    std::sort(emptiedGroups.begin(), emptiedGroups.end(), std::greater<int>());
+    for (int gi : emptiedGroups) {
+        beginRemoveRows({}, gi, gi);
+        m_groups.removeAt(gi);
+        endRemoveRows();
+    }
+
+    m_pendingRemovalFirst = -1;
+    m_pendingRemovalLast  = -1;
 }
 
 void ConnectionGroupProxy::onSourceDataChanged(const QModelIndex &topLeft,

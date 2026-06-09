@@ -61,6 +61,11 @@ public:
         rows.append(std::move(c));
         endInsertRows();
     }
+    void removeAt(int row) {
+        beginRemoveRows({}, row, row);
+        rows.removeAt(row);
+        endRemoveRows();
+    }
     void setRow(int row, Connection c, const QVector<int> &roles) {
         rows[row] = std::move(c);
         emit dataChanged(index(row, 0), index(row, columnCount() - 1), roles);
@@ -344,6 +349,73 @@ private slots:
         // Sort must still be applied: wlan0 (200) before wifi0 (100).
         QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 200.0);
         QCOMPARE(p.index(1, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 100.0);
+    }
+
+    // Pins bug-view-redraw: in grouped modes, source rowsInserted /
+    // rowsRemoved used to trigger a wholesale onSourceReset(), which
+    // collapsed every expanded group in the view. On a busy host the
+    // tree would visibly collapse-and-reopen on every snapshot tick.
+    // The fix is incremental insert / remove that emits fine-grained
+    // begin/endInsertRows + begin/endRemoveRows pairs; modelReset must
+    // NOT be emitted.
+    void groupedInsertDoesNotResetModel()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "", "", 0, "", 100, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        QSignalSpy resetSpy(&p, &QAbstractItemModel::modelReset);
+        QSignalSpy insertSpy(&p, &QAbstractItemModel::rowsInserted);
+
+        // Append a flow on an EXISTING group — should fire one
+        // rowsInserted on that group's child list, no reset.
+        src.addRow(mk("eth0", "", "", 0, "", 50, 0));
+        QCOMPARE(resetSpy.size(), 0);
+        QVERIFY(insertSpy.size() >= 1);
+        QCOMPARE(p.rowCount(), 1);                        // still 1 group
+        const QModelIndex eth = p.index(0, 0);
+        QCOMPARE(p.rowCount(eth), 2);                     // 2 children now
+
+        // Append a flow on a NEW group — should fire one
+        // rowsInserted on the root, still no reset.
+        const int prevInserts = insertSpy.size();
+        src.addRow(mk("wlan0", "", "", 0, "", 75, 0));
+        QCOMPARE(resetSpy.size(), 0);
+        QVERIFY(insertSpy.size() > prevInserts);
+        QCOMPARE(p.rowCount(), 2);                        // 2 groups now
+    }
+
+    void groupedRemoveDoesNotResetModel()
+    {
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, "", 100, 0),
+                     mk("eth0",  "", "", 0, "", 200, 0),
+                     mk("wlan0", "", "", 0, "",  50, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        QCOMPARE(p.rowCount(), 2);
+        QCOMPARE(p.rowCount(p.index(0, 0)), 2);
+
+        QSignalSpy resetSpy(&p, &QAbstractItemModel::modelReset);
+        QSignalSpy removeSpy(&p, &QAbstractItemModel::rowsRemoved);
+
+        // Remove the second eth0 row — leaves eth0 group with 1 child.
+        // No reset; one rowsRemoved on eth0's child list.
+        src.removeAt(1);
+        QCOMPARE(resetSpy.size(), 0);
+        QVERIFY(removeSpy.size() >= 1);
+        QCOMPARE(p.rowCount(), 2);                        // both groups remain
+        QCOMPARE(p.rowCount(p.index(0, 0)), 1);
+
+        // Remove the wlan0 row — emptied group should disappear.
+        const int prevRemoves = removeSpy.size();
+        src.removeAt(1);
+        QCOMPARE(resetSpy.size(), 0);
+        QVERIFY(removeSpy.size() > prevRemoves);
+        QCOMPARE(p.rowCount(), 1);                        // wlan0 group gone
     }
 };
 
