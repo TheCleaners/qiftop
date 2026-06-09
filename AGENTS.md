@@ -436,7 +436,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 `dbus-run-session` with `QT_QPA_PLATFORM=offscreen` on a matrix of
 ubuntu-22.04 + ubuntu-24.04 × Debug + Release. `HOME` is redirected to
 `$RUNNER_TEMP/home` so QSettings/Autostart tests don't trample the
-runner user. See HACKING.md §5.5 for the test-writing conventions.
+runner user. See docs/HACKING.md §5.5 for the test-writing conventions.
 
 ---
 
@@ -527,7 +527,7 @@ When you make a non-trivial change to the codebase:
 * Update the relevant section above so it still describes how the code
   actually works. Same commit as the code change.
 * If the change affects a dev-loop recipe (build, run, debug, package,
-  test), update [HACKING.md](HACKING.md) too.
+  test), update [docs/HACKING.md](docs/HACKING.md) too.
 * Don't add a dated entry here — the commit message and `git log` are
   the canonical record.
 

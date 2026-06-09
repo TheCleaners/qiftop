@@ -15,7 +15,7 @@ small DBus system-bus daemon (`qiftop-agent`) so the UI itself does not
 need elevated capabilities.
 
 ![qiftop showing live per-connection traffic with the throughput gauge
-and the filter expression bar](screenshot1.png)
+and the filter expression bar](docs/screenshot1.png)
 
 ## Features
 
@@ -85,11 +85,11 @@ administrator" fallback) on machines without the agent installed.
 
 ## Contributing & internals
 
-- [`HACKING.md`](HACKING.md) — developer cookbook: build/run/debug
+- [`docs/HACKING.md`](docs/HACKING.md) — developer cookbook: build/run/debug
   recipes, common dev tasks, debugging gotchas.
 - [`AGENTS.md`](AGENTS.md) — architecture reference: layering rules,
   DBus contract, config keys, testability notes.
-- [`CHANGELOG.md`](CHANGELOG.md) — release notes (Keep a Changelog
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — release notes (Keep a Changelog
   format).
 - [`SECURITY.md`](SECURITY.md) — how to report vulnerabilities
   privately (the agent runs as root; this matters).

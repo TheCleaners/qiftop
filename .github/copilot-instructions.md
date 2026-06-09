@@ -168,6 +168,6 @@ Tests are Qt6::Test, one executable per `.cpp`, gated by `option(QIFTOP_BUILD_TE
 
 ## Further reading
 
-- **[`HACKING.md`](../HACKING.md)** — recipe-level cookbook: build/run/debug recipes, common dev tasks, debugging gotchas. Update when changing dev loops.
+- **[`docs/HACKING.md`](../docs/HACKING.md)** — recipe-level cookbook: build/run/debug recipes, common dev tasks, debugging gotchas. Update when changing dev loops.
 - **[`AGENTS.md`](../AGENTS.md)** — architecture reference + changelog. Append a changelog entry for every non-trivial change.
 
