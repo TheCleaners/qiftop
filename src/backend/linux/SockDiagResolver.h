@@ -30,13 +30,13 @@ namespace qiftop::backend::linuximpl {
 // CACHING
 //   Both the socket table and the inode→PID map are rebuilt at most once
 //   per kCacheTtlMs (default 1s) to amortise across the typical 20–500
-//   flow lookups that arrive together when ConntrackMonitor ticks. The
-//   sock_diag dump is cheap (~ms even on busy hosts); the /proc walk is
-//   the expensive bit and is gated by a dirty flag — we only walk /proc
-//   when we get a socket-table hit for an inode we don't yet know.
+//   flow lookups that arrive together when ConntrackMonitor ticks.
+//   resolvePid() does only cached table lookups; enrichPid() performs
+//   /proc metadata reads and is intended to be memoised per unique PID by
+//   the caller (agent::attributeFlows does this for each snapshot).
 //
 // THREADING
-//   resolveFlow() is called from the agent thread (or, future: the
+//   resolvePid()/enrichPid() are called from the agent thread (or, future: the
 //   ConntrackMonitor worker thread). Internal caches are guarded by a
 //   single mutex — contention is negligible at our call rate.
 class SockDiagResolver final : public ProcessResolver {
@@ -47,14 +47,16 @@ public:
     // Opens the NETLINK_SOCK_DIAG socket. Returns true if the socket
     // opened AND a probe dump succeeded; false (with a logged warning)
     // if the running kernel lacks sock_diag (extremely rare on anything
-    // post-2012) or the agent lacks permission. On failure resolveFlow
-    // always returns nullopt and capabilities() is empty.
+    // post-2012) or the agent lacks permission. On failure resolvePid
+    // always returns 0 and capabilities() is empty.
     bool initialize() override;
 
     [[nodiscard]] QStringList capabilities() const override;
 
+    [[nodiscard]] qint32 resolvePid(const Connection &flow) override;
+
     [[nodiscard]] std::optional<ProcessInfo>
-        resolveFlow(const Connection &flow) override;
+        enrichPid(qint32 pid) override;
 
     // Step 2 doesn't ship container attribution; the future cgroup
     // classifier (step 3) is what populates this.

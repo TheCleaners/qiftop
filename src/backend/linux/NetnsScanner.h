@@ -22,7 +22,7 @@ class NetnsScannerWorker;
 //   anything not NAT'd by the host), a flow's local 4-tuple matches a
 //   socket that lives INSIDE a container's netns — invisible to a
 //   netlink dump issued from the host netns. This resolver enumerates
-//   non-host netnses and dumps each one, so resolveFlow() can attribute
+//   non-host netnses and dumps each one, so resolvePid()/enrichPid() can attribute
 //   those flows too.
 //
 // THREADING (read AGENTS.md §8a rule 5 before touching this)
@@ -48,7 +48,7 @@ class NetnsScannerWorker;
 //        inodes back to pids in that netns.
 //     6. Publishes the merged (4-tuple → pid) map atomically.
 //
-//   resolveFlow() runs on the agent data thread and only reads the
+//   resolvePid()/enrichPid() run on the agent data thread and only read the
 //   published map under a mutex — never touches setns.
 //
 // FAILURE MODES
@@ -69,8 +69,10 @@ public:
 
     [[nodiscard]] QStringList capabilities() const override;
 
+    [[nodiscard]] qint32 resolvePid(const Connection &flow) override;
+
     [[nodiscard]] std::optional<ProcessInfo>
-        resolveFlow(const Connection &flow) override;
+        enrichPid(qint32 pid) override;
 
     [[nodiscard]] std::optional<ContainerInfo>
         resolveContainerForPid(qint32) override { return std::nullopt; }
@@ -86,6 +88,7 @@ private:
     QHash<QByteArray, quint64>        m_keyToInode;
     struct PidStamp { qint32 pid; quint64 startTime; };
     QHash<quint64, PidStamp>          m_inodeToPid;
+    QHash<qint32, quint64>            m_pidToStartTime;
 
     friend class NetnsScannerWorker;
 };

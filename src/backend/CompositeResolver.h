@@ -43,11 +43,20 @@ public:
         return out;
     }
 
-    [[nodiscard]] std::optional<ProcessInfo>
-        resolveFlow(const Connection &flow) override
+    [[nodiscard]] qint32 resolvePid(const Connection &flow) override
     {
         for (auto &c : m_children) {
-            if (auto r = c->resolveFlow(flow)) return r;
+            const qint32 pid = c->resolvePid(flow);
+            if (pid > 0) return pid;
+        }
+        return 0;
+    }
+
+    [[nodiscard]] std::optional<ProcessInfo>
+        enrichPid(qint32 pid) override
+    {
+        for (auto &c : m_children) {
+            if (auto r = c->enrichPid(pid)) return r;
         }
         return std::nullopt;
     }

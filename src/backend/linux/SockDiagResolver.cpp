@@ -82,6 +82,7 @@ struct SockDiagResolver::Impl {
     // reading /proc/<pid>/* for the unrelated process.
     struct PidStamp { qint32 pid; quint64 startTime; };
     QHash<quint64, PidStamp>    inodeToPid;
+    QHash<qint32, quint64>      pidToStartTime;
     qint64                      lastProcWalkMs = -1;
     bool                        ready = false;
 
@@ -120,6 +121,7 @@ struct SockDiagResolver::Impl {
         // resolve to a real inode, so QDir::Files (S_ISREG of target)
         // excludes them.
         inodeToPid.clear();
+        pidToStartTime.clear();
         DIR *procDir = ::opendir("/proc");
         if (!procDir) return;
         std::vector<char> linkBuf(256);
@@ -154,6 +156,7 @@ struct SockDiagResolver::Impl {
                             const auto st = procsnap::pidStartTime(qint32(pid));
                             inodeToPid.insert(*inode,
                                               { qint32(pid), st.value_or(0) });
+                            pidToStartTime.insert(qint32(pid), st.value_or(0));
                         }
                         break;
                     }
@@ -205,7 +208,7 @@ bool SockDiagResolver::initialize()
         return false;
     }
     m_d->ready      = true;
-    // Leave lastDumpMs at its sentinel so the first resolveFlow() call
+    // Leave lastDumpMs at its sentinel so the first resolvePid() call
     // triggers a fresh dump. The probe dump above only loaded TCPv4 and
     // is meant strictly for capability detection.
     m_d->keyToInode.clear();
@@ -219,13 +222,13 @@ QStringList SockDiagResolver::capabilities() const
     return { QStringLiteral("process-attribution") };
 }
 
-std::optional<ProcessInfo> SockDiagResolver::resolveFlow(const Connection &flow)
+qint32 SockDiagResolver::resolvePid(const Connection &flow)
 {
-    if (!m_d->ready) return std::nullopt;
+    if (!m_d->ready) return 0;
     const quint8 proto = (flow.proto == L4Proto::Tcp)
         ? quint8{IPPROTO_TCP}
         : (flow.proto == L4Proto::Udp ? quint8{IPPROTO_UDP} : quint8{0});
-    if (proto == 0) return std::nullopt;
+    if (proto == 0) return 0;
 
     std::lock_guard lock(m_d->mu);
     m_d->maybeRefresh();
@@ -234,21 +237,42 @@ std::optional<ProcessInfo> SockDiagResolver::resolveFlow(const Connection &flow)
                                    flow.local.address,  flow.local.port,
                                    flow.remote.address, flow.remote.port);
     auto itSock = m_d->keyToInode.constFind(key);
-    if (itSock == m_d->keyToInode.constEnd()) return std::nullopt;
+    if (itSock == m_d->keyToInode.constEnd()) return 0;
     auto itPid = m_d->inodeToPid.constFind(*itSock);
-    if (itPid == m_d->inodeToPid.constEnd()) return std::nullopt;
+    if (itPid == m_d->inodeToPid.constEnd()) return 0;
 
     // Defend against PID reuse: if the pid's starttime has changed
     // since we enrolled it, a different process now holds that pid
-    // and any /proc/<pid>/* we'd read would be wrong. Drop the
-    // attribution rather than mislabel the flow.
+    // and any later /proc/<pid>/* we'd read would be wrong.
     const auto stNow = procsnap::pidStartTime(itPid->pid);
     if (!stNow.has_value() || *stNow != itPid->startTime) {
-        return std::nullopt;
+        return 0;
+    }
+
+    return itPid->pid;
+}
+
+std::optional<ProcessInfo> SockDiagResolver::enrichPid(qint32 pid)
+{
+    if (!m_d->ready || pid <= 0) return std::nullopt;
+
+    {
+        std::lock_guard lock(m_d->mu);
+        m_d->maybeRefresh();
+        auto it = m_d->pidToStartTime.constFind(pid);
+        if (it == m_d->pidToStartTime.constEnd()) return std::nullopt;
+
+        // Re-check PID identity immediately before /proc metadata reads.
+        // This keeps the resolvePid/enrichPid split safe against PID reuse
+        // while still allowing the caller to memoise enrichment per PID.
+        const auto stNow = procsnap::pidStartTime(pid);
+        if (!stNow.has_value() || *stNow != it.value()) {
+            return std::nullopt;
+        }
     }
 
     ProcessInfo info;
-    info.pid = itPid->pid;
+    info.pid = pid;
     readProcStatus(info.pid, info.comm, info.uid);
     info.cmdline = readProcCmdline(info.pid);
     info.exe     = readProcExe(info.pid);

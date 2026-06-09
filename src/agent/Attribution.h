@@ -10,7 +10,7 @@
 // Threading: callers are expected to call this from the same thread
 // that constructs the resolver and owns the slot (the agent main
 // thread). ProcessResolver implementations are documented as
-// reentrant-safe across resolveFlow / resolveContainerForPid /
+// reentrant-safe across resolvePid / enrichPid / resolveContainerForPid /
 // resolveContainerChainForPid (ProcessResolver.h §THREADING), so this
 // helper makes no extra synchronisation.
 
@@ -38,6 +38,9 @@ struct AttributionOptions {
 // resolver lookup succeeded. Entries with no PID, an inert resolver,
 // or a host-native PID keep their default-constructed attribution
 // (pid=0, runtime empty, chain empty).
+//
+// Process enrichment is split into cheap per-flow PID resolution and
+// memoised per-PID metadata reads so /proc work stays O(unique-pids).
 //
 // Safe to call with resolver==nullptr: no-op (every flow keeps zero
 // attribution).

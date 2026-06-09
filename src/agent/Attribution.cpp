@@ -14,23 +14,33 @@ void attributeFlows(QList<Connection> &flows,
     if (!resolver) return;
 
     // Per-tick memoisation: many flows share a PID (every conn of one
-    // server process) and a cgroup (every conn of one container). The
-    // resolver implementations cache too, but the cache lookup is not
-    // free — a local QHash hop is cheaper still and bounds the cost at
-    // O(unique-pids) rather than O(flows).
+    // server process) and a cgroup (every conn of one container). PID
+    // resolution remains per-flow because the 4-tuple is unique, but
+    // /proc-backed process enrichment and container lookup are per-PID.
+    QHash<qint32, backend::ProcessInfo>            processByPid;
     QHash<qint32, backend::ContainerInfo>          containerByPid;
     QHash<qint32, QList<backend::ContainerInfo>>   chainByPid;
 
     for (auto &c : flows) {
-        // 1. Process attribution. resolveFlow may fail (forwarded flows,
-        //    closed sockets, netns we don't scan) — leave defaults.
-        const auto pi = resolver->resolveFlow(c);
-        if (!pi || !pi->valid()) continue;
-        c.process = *pi;
+        // 1. Process attribution. resolvePid is the cheap socket-table
+        //    lookup; enrichPid does the expensive /proc reads and is
+        //    memoised per tick by PID.
+        const qint32 pid = resolver->resolvePid(c);
+        if (pid <= 0) continue;
+        if (auto it = processByPid.constFind(pid); it != processByPid.constEnd()) {
+            c.process = it.value();
+        } else {
+            backend::ProcessInfo info{};
+            if (auto pi = resolver->enrichPid(pid); pi && pi->valid()) {
+                info = *pi;
+            }
+            processByPid.insert(pid, info);
+            c.process = info;
+        }
+        if (!c.process.valid()) continue;
 
         // 2. Container attribution. Memoised by PID so a single
         //    container hosting 200 connections costs one lookup.
-        const qint32 pid = c.process.pid;
         if (auto it = containerByPid.constFind(pid); it != containerByPid.constEnd()) {
             c.container = it.value();
         } else {

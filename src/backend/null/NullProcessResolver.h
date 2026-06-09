@@ -20,8 +20,10 @@ public:
 
     [[nodiscard]] QStringList capabilities() const override { return {}; }
 
+    [[nodiscard]] qint32 resolvePid(const Connection &) override { return 0; }
+
     [[nodiscard]] std::optional<ProcessInfo>
-        resolveFlow(const Connection &) override { return std::nullopt; }
+        enrichPid(qint32) override { return std::nullopt; }
 
     [[nodiscard]] std::optional<ContainerInfo>
         resolveContainerForPid(qint32) override { return std::nullopt; }

@@ -11,8 +11,8 @@
 namespace qiftop::backend::linuximpl {
 
 // PID → container/cgroup-scope classifier. Implements only the container
-// half of the ProcessResolver interface; resolveFlow always returns
-// nullopt (that's SockDiagResolver's job). Composed with SockDiagResolver
+// half of the ProcessResolver interface; resolvePid always returns 0
+// (that's SockDiagResolver's job). Composed with SockDiagResolver
 // behind a CompositeResolver in the factory.
 //
 // DATA SOURCE
@@ -38,8 +38,10 @@ public:
 
     [[nodiscard]] QStringList capabilities() const override;
 
+    [[nodiscard]] qint32 resolvePid(const Connection &) override { return 0; }
+
     [[nodiscard]] std::optional<ProcessInfo>
-        resolveFlow(const Connection &) override { return std::nullopt; }
+        enrichPid(qint32) override { return std::nullopt; }
 
     [[nodiscard]] std::optional<ContainerInfo>
         resolveContainerForPid(qint32 pid) override;

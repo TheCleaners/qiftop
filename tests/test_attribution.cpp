@@ -4,9 +4,9 @@
 // test stays a pure unit test (no /proc, no sock_diag, no agent
 // process).
 //
-// Pins the per-tick PID memoisation: the helper must call into the
-// resolver at most once per unique PID for container resolution, no
-// matter how many flows share that PID.
+// Pins the per-tick PID memoisation: the helper may resolve a PID for
+// each unique 4-tuple, but must call into the resolver at most once per
+// unique PID for process enrichment and container resolution.
 
 #include <QTest>
 
@@ -21,20 +21,29 @@ using qiftop::backend::ProcessResolver;
 namespace {
 
 // Configurable fake. Records call counts so the memoisation assertion
-// is testable. resolveFlow returns whatever process the caller mapped
-// via setProcessFor(); resolveContainerForPid returns whatever
-// container was mapped via setContainerFor(pid).
+// is testable. resolvePid returns the PID mapped via setProcessFor();
+// enrichPid returns the ProcessInfo for that PID; resolveContainerForPid
+// returns whatever container was mapped via setContainerFor(pid).
 class FakeResolver : public ProcessResolver {
 public:
     bool initialize() override { return true; }
     QStringList capabilities() const override { return m_caps; }
 
-    std::optional<ProcessInfo> resolveFlow(const Connection &flow) override
+    qint32 resolvePid(const Connection &flow) override
     {
-        ++flowCalls;
+        ++pidCalls;
         const auto key = QString::number(flow.local.port);
         if (auto it = m_processByLocalPort.constFind(key);
             it != m_processByLocalPort.constEnd())
+            return it.value().pid;
+        return 0;
+    }
+
+    std::optional<ProcessInfo> enrichPid(qint32 pid) override
+    {
+        ++enrichCalls[pid];
+        if (auto it = m_processByPid.constFind(pid);
+            it != m_processByPid.constEnd())
             return it.value();
         return std::nullopt;
     }
@@ -61,19 +70,24 @@ public:
 
     void setCapabilities(QStringList c) { m_caps = std::move(c); }
     void setProcessForLocalPort(quint16 p, ProcessInfo info)
-    { m_processByLocalPort.insert(QString::number(p), info); }
+    {
+        m_processByPid.insert(info.pid, info);
+        m_processByLocalPort.insert(QString::number(p), info);
+    }
     void setContainerForPid(qint32 pid, ContainerInfo c)
     { m_containerByPid.insert(pid, c); }
     void setChainForPid(qint32 pid, QList<ContainerInfo> chain)
     { m_chainByPid.insert(pid, std::move(chain)); }
 
-    int flowCalls = 0;
+    int pidCalls = 0;
+    QHash<qint32, int> enrichCalls;
     QHash<qint32, int> containerCalls;
     QHash<qint32, int> chainCalls;
 
 private:
     QStringList                 m_caps;
     QHash<QString, ProcessInfo> m_processByLocalPort;
+    QHash<qint32, ProcessInfo>  m_processByPid;
     QHash<qint32, ContainerInfo>m_containerByPid;
     QHash<qint32, QList<ContainerInfo>> m_chainByPid;
 };
@@ -186,9 +200,9 @@ private slots:
 
     void memoisesByPid()
     {
-        // 50 flows from the same PID must yield 1 resolveContainerForPid
-        // call, not 50. Process resolution is per-flow (no memoisation —
-        // each flow's 5-tuple is genuinely unique).
+        // 50 flows from the same PID must yield 1 enrichPid and
+        // 1 resolveContainerForPid call, not 50. PID resolution is
+        // per-flow because each flow's 5-tuple is genuinely unique.
         FakeResolver r;
         ProcessInfo p; p.pid = 999; p.uid = 0; p.comm = QStringLiteral("redis");
         for (quint16 port = 9000; port < 9050; ++port) {
@@ -205,11 +219,43 @@ private slots:
 
         qiftop::agent::attributeFlows(flows, &r);
 
-        QCOMPARE(r.flowCalls, 50);
+        QCOMPARE(r.pidCalls, 50);
+        QCOMPARE(r.enrichCalls.value(999), 1);
         QCOMPARE(r.containerCalls.value(999), 1);
         // Every flow got the container.
         for (const auto &c : flows) {
             QCOMPARE(c.container.id, QStringLiteral("abc123def456"));
+        }
+    }
+
+    void attributionMemoisesProcessLookupByPid()
+    {
+        // 50 flows across 5 PIDs: resolvePid remains per-flow, while
+        // enrichPid (the /proc-heavy operation in real resolvers) is
+        // called once per unique PID.
+        FakeResolver r;
+        QList<Connection> flows;
+        for (qint32 pid = 1000; pid < 1005; ++pid) {
+            ProcessInfo p;
+            p.pid = pid;
+            p.uid = quint32(pid);
+            p.comm = QStringLiteral("svc%1").arg(pid);
+            for (quint16 offset = 0; offset < 10; ++offset) {
+                const quint16 port = quint16(10000 + (pid - 1000) * 10 + offset);
+                r.setProcessForLocalPort(port, p);
+                flows << makeFlow(port);
+            }
+        }
+
+        qiftop::agent::attributeFlows(flows, &r);
+
+        QCOMPARE(r.pidCalls, 50);
+        for (qint32 pid = 1000; pid < 1005; ++pid) {
+            QCOMPARE(r.enrichCalls.value(pid), 1);
+        }
+        for (const auto &c : flows) {
+            QVERIFY(c.process.valid());
+            QVERIFY(c.process.comm.startsWith(QStringLiteral("svc")));
         }
     }
 
@@ -247,7 +293,8 @@ private slots:
         FakeResolver r;
         QList<Connection> flows = { makeFlow(8080) };
         qiftop::agent::attributeFlows(flows, &r);
-        QCOMPARE(r.flowCalls, 1);
+        QCOMPARE(r.pidCalls, 1);
+        QVERIFY(r.enrichCalls.isEmpty());
         QVERIFY(r.containerCalls.isEmpty());
     }
 };

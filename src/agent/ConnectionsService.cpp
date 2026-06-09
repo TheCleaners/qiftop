@@ -131,9 +131,9 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
     }
 
     // Populate process + container attribution from the wired resolver.
-    // No-op when resolver is null or returns nothing useful. PID/comm
-    // memoised internally so a single container hosting many flows
-    // costs O(unique-pids), not O(flows). See agent::attributeFlows.
+    // No-op when resolver is null or returns nothing useful. Socket PID
+    // resolution is per-flow, but /proc enrichment and container/chain
+    // lookups are memoised by PID in agent::attributeFlows.
     attributeFlows(kept, m_resolver, AttributionOptions{m_wantContainerChain});
 
     m_last = dbus::toDtos(kept);

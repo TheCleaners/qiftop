@@ -58,14 +58,15 @@ struct ContainerInfo {
 // THREADING
 //   resolve*() may be called from the agent's ConntrackMonitor worker
 //   thread on every conntrack snapshot. Implementations MUST be
-//   reentrant-safe across resolveFlow / resolveContainerForPid calls and
-//   should maintain bounded caches with a short TTL (~1s) since the same
-//   PIDs and containers are queried repeatedly.
+//   reentrant-safe across resolvePid / enrichPid /
+//   resolveContainerForPid calls and should maintain bounded caches with
+//   a short TTL (~1s) since the same PIDs and containers are queried
+//   repeatedly.
 //
 // CAPABILITIES
 //   Tokens use the same dash-separated lowercase grammar as the
 //   InterfacesService::capabilities() list. v0.2 introduces:
-//     "process-attribution"   — resolveFlow returns useful ProcessInfo
+//     "process-attribution"   — resolvePid/enrichPid return useful ProcessInfo
 //     "container-attribution" — resolveContainerForPid returns useful ContainerInfo
 //     "netns-scan"            — process attribution sees container netns flows
 //   A resolver MUST omit a token when the underlying API isn't reachable
@@ -86,12 +87,29 @@ public:
     // feature set, intersected with whatever the runtime probe found.
     [[nodiscard]] virtual QStringList capabilities() const = 0;
 
-    // Look up the process owning the local end of `flow`. Returns
-    // nullopt when the resolver cannot attribute (flow originates from
-    // a netns it doesn't scan, is purely forwarded, or the underlying
-    // socket has already closed).
+    // Cheaply look up the PID owning the local end of `flow`. Returns 0
+    // when the resolver cannot attribute (flow originates from a netns it
+    // doesn't scan, is purely forwarded, or the underlying socket has
+    // already closed). Implementations should avoid expensive /proc
+    // enrichment here so callers can memoise enrichPid() per unique PID.
+    [[nodiscard]] virtual qint32 resolvePid(const Connection &flow) = 0;
+
+    // Enrich a PID with process metadata. This is where /proc reads
+    // happen; callers that batch flow snapshots should call it once per
+    // unique PID. Implementations MUST guard PID reuse (e.g. via
+    // starttime) before returning data.
     [[nodiscard]] virtual std::optional<ProcessInfo>
-        resolveFlow(const Connection &flow) = 0;
+        enrichPid(qint32 pid) = 0;
+
+    // Convenience API for direct callers. Batch code should prefer
+    // resolvePid() + per-PID enrichPid() memoisation.
+    [[nodiscard]] virtual std::optional<ProcessInfo>
+        resolveFlow(const Connection &flow)
+    {
+        const qint32 pid = resolvePid(flow);
+        if (pid <= 0) return std::nullopt;
+        return enrichPid(pid);
+    }
 
     // Look up container metadata for a PID. Returns nullopt for
     // host-native processes (no container scope) or when container
