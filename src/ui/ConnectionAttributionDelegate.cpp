@@ -2,6 +2,7 @@
 
 #include "ConnectionModel.h"
 
+#include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QFont>
@@ -65,6 +66,18 @@ void ConnectionAttributionDelegate::paint(QPainter *painter,
         && col != ConnectionModel::Column::Container) {
         // Fall back to the default render path for any non-attribution
         // column that might end up routed here by accident.
+        RowGaugeDelegate::paint(painter, option, index);
+        return;
+    }
+
+    // Group rows in ConnectionGroupProxy's tree modes (ByInterface /
+    // ByContainer / ByProcess) have children — the per-flow attribution
+    // structured roles are empty (the group aggregates over heterogeneous
+    // flows that may span multiple containers/processes). Render the
+    // group's own DisplayRole text ("—") via the default path instead
+    // of synthesising "(host)" from the empty structured roles, which
+    // would mislead the user into thinking the group is host-native.
+    if (index.model() && index.model()->hasChildren(index)) {
         RowGaugeDelegate::paint(painter, option, index);
         return;
     }
