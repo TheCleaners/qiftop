@@ -20,11 +20,9 @@
 //                group rows at depth 0 (aggregated rate / byte / packet
 //                sums + child-flow count), individual flows at depth 1.
 //
-// The model is rebuilt (reset) on:
-//   • Mode change.
-//   • rowsInserted/rowsRemoved on the source.
-//   • dataChanged on the source (for the columns that contribute to
-//     the group key or to aggregated rates).
+// Flat mode forwards source structure/data changes without resetting so
+// selection, scroll anchors, and current index behave exactly as they did
+// when the view was attached directly to the flat source model.
 //
 // Per-row data for child flows is forwarded verbatim to the source row.
 // Group rows synthesize their own DisplayRole text ("kube-pod-X  [12]")
@@ -68,8 +66,12 @@ public:
 
 private slots:
     void onSourceReset();
-    void onSourceRowsInsertedOrRemoved();
-    void onSourceDataChanged();
+    void onSourceRowsAboutToBeInserted(const QModelIndex &parent, int first, int last);
+    void onSourceRowsInserted(const QModelIndex &parent, int first, int last);
+    void onSourceRowsAboutToBeRemoved(const QModelIndex &parent, int first, int last);
+    void onSourceRowsRemoved(const QModelIndex &parent, int first, int last);
+    void onSourceDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight,
+                             const QVector<int> &roles);
 
 private:
     struct Group {
@@ -82,6 +84,9 @@ private:
     [[nodiscard]] QString groupKeyFor(int srcRow) const;
     [[nodiscard]] QString groupLabelFor(int srcRow, const QString &key) const;
     [[nodiscard]] QVariant aggregateData(const Group &g, int column, int role) const;
+    [[nodiscard]] int groupIndexForSourceRow(int srcRow) const;
+    void forwardSourceDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight,
+                                  const QVector<int> &roles);
 
     QAbstractItemModel *m_src = nullptr;
     ViewMode m_mode = ViewMode::Flat;

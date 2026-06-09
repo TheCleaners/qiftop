@@ -5,6 +5,7 @@
 #include "util/Units.h"
 
 #include <QFont>
+#include <QSet>
 #include <QStringList>
 
 #include <algorithm>
@@ -38,16 +39,31 @@ void ConnectionGroupProxy::setSourceModel(QAbstractItemModel *src)
     if (m_src) {
         connect(m_src, &QAbstractItemModel::modelReset,
                 this,  &ConnectionGroupProxy::onSourceReset);
-        connect(m_src, &QAbstractItemModel::rowsInserted, this,
-                [this](const QModelIndex &, int, int){ onSourceRowsInsertedOrRemoved(); });
-        connect(m_src, &QAbstractItemModel::rowsRemoved, this,
-                [this](const QModelIndex &, int, int){ onSourceRowsInsertedOrRemoved(); });
-        connect(m_src, &QAbstractItemModel::layoutChanged, this,
-                [this]{ onSourceReset(); });
-        connect(m_src, &QAbstractItemModel::dataChanged, this,
-                [this](const QModelIndex &, const QModelIndex &, const QVector<int> &){
-                    onSourceDataChanged();
+        connect(m_src, &QAbstractItemModel::rowsAboutToBeInserted,
+                this, &ConnectionGroupProxy::onSourceRowsAboutToBeInserted);
+        connect(m_src, &QAbstractItemModel::rowsInserted,
+                this, &ConnectionGroupProxy::onSourceRowsInserted);
+        connect(m_src, &QAbstractItemModel::rowsAboutToBeRemoved,
+                this, &ConnectionGroupProxy::onSourceRowsAboutToBeRemoved);
+        connect(m_src, &QAbstractItemModel::rowsRemoved,
+                this, &ConnectionGroupProxy::onSourceRowsRemoved);
+        connect(m_src, &QAbstractItemModel::layoutAboutToBeChanged, this,
+                [this](const QList<QPersistentModelIndex> &parents,
+                       QAbstractItemModel::LayoutChangeHint hint) {
+                    if (m_mode == ViewMode::Flat)
+                        emit layoutAboutToBeChanged(parents, hint);
                 });
+        connect(m_src, &QAbstractItemModel::layoutChanged, this,
+                [this](const QList<QPersistentModelIndex> &parents,
+                       QAbstractItemModel::LayoutChangeHint hint) {
+                    if (m_mode == ViewMode::Flat) {
+                        emit layoutChanged(parents, hint);
+                    } else {
+                        onSourceReset();
+                    }
+                });
+        connect(m_src, &QAbstractItemModel::dataChanged, this,
+                &ConnectionGroupProxy::onSourceDataChanged);
     }
     rebuild();
     endResetModel();
@@ -69,32 +85,66 @@ void ConnectionGroupProxy::onSourceReset()
     endResetModel();
 }
 
-void ConnectionGroupProxy::onSourceRowsInsertedOrRemoved()
+void ConnectionGroupProxy::onSourceRowsAboutToBeInserted(const QModelIndex &parent, int first, int last)
 {
-    // Treat structural changes as a wholesale rebuild — the alternative
-    // (incremental insert/remove with row mapping) buys nothing for a
-    // model that's already capped at ~4 k rows by the agent and is
-    // refreshed on every backend tick.
+    if (m_mode == ViewMode::Flat)
+        beginInsertRows(mapFromSource(parent), first, last);
+}
+
+void ConnectionGroupProxy::onSourceRowsInserted(const QModelIndex &, int, int)
+{
+    if (m_mode == ViewMode::Flat) {
+        endInsertRows();
+        return;
+    }
+    // TODO: emit fine-grained child/group inserts in grouped modes. For
+    // now, structural churn is much rarer than value-only repaint churn, so
+    // keep the safe wholesale rebuild outside Flat's strict pass-through path.
     onSourceReset();
 }
 
-void ConnectionGroupProxy::onSourceDataChanged()
+void ConnectionGroupProxy::onSourceRowsAboutToBeRemoved(const QModelIndex &parent, int first, int last)
 {
-    // In Flat mode there's no aggregation cache; just forward as a
-    // blanket repaint. In grouped mode, the group key for a row could
-    // have changed (e.g. a flow just gained a PID via late attribution)
-    // so rebuild to be safe — same justification as the
-    // rowsInserted/Removed handler.
+    if (m_mode == ViewMode::Flat)
+        beginRemoveRows(mapFromSource(parent), first, last);
+}
+
+void ConnectionGroupProxy::onSourceRowsRemoved(const QModelIndex &, int, int)
+{
     if (m_mode == ViewMode::Flat) {
-        if (!m_src) return;
-        const int rows = m_src->rowCount();
-        const int cols = m_src->columnCount();
-        if (rows > 0 && cols > 0) {
-            emit dataChanged(index(0, 0), index(rows - 1, cols - 1));
-        }
+        endRemoveRows();
         return;
     }
+    // TODO: emit fine-grained child/group removals in grouped modes.
     onSourceReset();
+}
+
+void ConnectionGroupProxy::onSourceDataChanged(const QModelIndex &topLeft,
+                                               const QModelIndex &bottomRight,
+                                               const QVector<int> &roles)
+{
+    if (m_mode == ViewMode::Flat) {
+        emit dataChanged(index(topLeft.row(), topLeft.column()),
+                         index(bottomRight.row(), bottomRight.column()),
+                         roles);
+        return;
+    }
+
+    const bool maybeGroupKeyChanged =
+        roles.isEmpty() || roles.contains(ConnectionModel::ConnectionRole);
+    if (maybeGroupKeyChanged) {
+        for (int row = topLeft.row(); row <= bottomRight.row(); ++row) {
+            const int gi = groupIndexForSourceRow(row);
+            if (gi < 0 || gi >= m_groups.size()
+                || m_groups[gi].key != groupKeyFor(row)
+                || m_groups[gi].label != groupLabelFor(row, m_groups[gi].key)) {
+                onSourceReset();
+                return;
+            }
+        }
+    }
+
+    forwardSourceDataChanged(topLeft, bottomRight, roles);
 }
 
 void ConnectionGroupProxy::rebuild()
@@ -315,6 +365,38 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         return f;
     }
     return {};
+}
+
+int ConnectionGroupProxy::groupIndexForSourceRow(int srcRow) const
+{
+    for (int gi = 0; gi < m_groups.size(); ++gi) {
+        if (m_groups[gi].srcRows.contains(srcRow))
+            return gi;
+    }
+    return -1;
+}
+
+void ConnectionGroupProxy::forwardSourceDataChanged(const QModelIndex &topLeft,
+                                                    const QModelIndex &bottomRight,
+                                                    const QVector<int> &roles)
+{
+    QSet<int> parentGroups;
+    for (int row = topLeft.row(); row <= bottomRight.row(); ++row) {
+        const QModelIndex left = mapFromSource(m_src->index(row, topLeft.column()));
+        const QModelIndex right = mapFromSource(m_src->index(row, bottomRight.column()));
+        if (left.isValid() && right.isValid())
+            emit dataChanged(left, right, roles);
+
+        const int gi = groupIndexForSourceRow(row);
+        if (gi >= 0)
+            parentGroups.insert(gi);
+    }
+
+    for (int gi : std::as_const(parentGroups)) {
+        emit dataChanged(index(gi, topLeft.column()),
+                         index(gi, bottomRight.column()),
+                         roles);
+    }
 }
 
 QVariant ConnectionGroupProxy::data(const QModelIndex &index, int role) const

@@ -45,6 +45,19 @@ public:
         rows = std::move(data);
         endResetModel();
     }
+    void addRow(Connection c) {
+        const int row = rows.size();
+        beginInsertRows({}, row, row);
+        rows.append(std::move(c));
+        endInsertRows();
+    }
+    void setRow(int row, Connection c, const QVector<int> &roles) {
+        rows[row] = std::move(c);
+        emit dataChanged(index(row, 0), index(row, columnCount() - 1), roles);
+    }
+    void emitRowChanged(int row, const QVector<int> &roles) {
+        emit dataChanged(index(row, 0), index(row, columnCount() - 1), roles);
+    }
 };
 
 Connection mk(const char *iface, const char *runtime, const char *cid,
@@ -92,6 +105,38 @@ private slots:
             QCOMPARE(p.rowCount(i), 0);  // strict 1-level
             QCOMPARE(p.mapToSource(i).row(), r);
         }
+    }
+
+    void flatPassthroughOnInsert()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "docker", "abc", 100, "nginx")});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+
+        QSignalSpy reset(&p, &QAbstractItemModel::modelReset);
+        QSignalSpy inserted(&p, &QAbstractItemModel::rowsInserted);
+        src.addRow(mk("wlan0", "", "", 0, ""));
+
+        QCOMPARE(reset.size(), 0);
+        QCOMPARE(inserted.size(), 1);
+        QCOMPARE(p.rowCount(), 2);
+        QCOMPARE(p.mapToSource(p.index(1, 0)).row(), 1);
+    }
+
+    void flatPassthroughOnDataChanged()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "", "", 0, "")});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+
+        QSignalSpy reset(&p, &QAbstractItemModel::modelReset);
+        QSignalSpy changed(&p, &QAbstractItemModel::dataChanged);
+        src.emitRowChanged(0, {ConnectionModel::RxRateRole});
+
+        QCOMPARE(reset.size(), 0);
+        QCOMPARE(changed.size(), 1);
     }
 
     void byInterfaceBuildsExpectedGroups()
@@ -148,6 +193,46 @@ private slots:
         QCOMPARE(txSum,  100.0);
         // Group's SortRole on RxRate column equals the rx sum.
         QCOMPARE(g.data(ConnectionModel::SortRole).toDouble(), 1000.0);
+    }
+
+    void groupedDoesNotResetOnValueDataChanged()
+    {
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, "", 100, 10),
+                     mk("wlan0", "", "", 0, "", 200, 20)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        QSignalSpy reset(&p, &QAbstractItemModel::modelReset);
+        QSignalSpy changed(&p, &QAbstractItemModel::dataChanged);
+        src.emitRowChanged(0, {ConnectionModel::RxRateRole});
+
+        QCOMPARE(reset.size(), 0);
+        QVERIFY(changed.size() > 0);
+        QCOMPARE(p.rowCount(), 2);
+    }
+
+    void groupedRebuildsOnKeyChange()
+    {
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, ""),
+                     mk("wlan0", "", "", 0, "")});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        QCOMPARE(p.rowCount(), 2);
+
+        QSignalSpy reset(&p, &QAbstractItemModel::modelReset);
+        Connection moved = src.rows[0];
+        moved.iface = QStringLiteral("wlan0");
+        src.setRow(0, moved, {ConnectionModel::ConnectionRole});
+
+        QCOMPARE(reset.size(), 1);
+        QCOMPARE(p.rowCount(), 1);
+        const QModelIndex group = p.index(0, 0);
+        QVERIFY(p.isGroupIndex(group));
+        QCOMPARE(p.rowCount(group), 2);
     }
 
     void switchingModesResetsModel()
