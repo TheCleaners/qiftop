@@ -48,6 +48,14 @@ private slots:
         QTest::newRow("podman_rootful_v2")         << "podman_rootful_v2.txt"         << "podman"     << "abcdef012345";
         QTest::newRow("lxd_systemd")               << "lxd_systemd.txt"               << "lxd"        << "testcontaine";
         QTest::newRow("lxc_payload")               << "lxc_payload.txt"               << "lxc"        << "myguest";
+        // systemd-nspawn: machinectl-registered (the modern default), both
+        // when the resolved process is the container's init AND when it's
+        // a service inside the booted container. The id is the human
+        // machine name (NOT a content-addressable hash) — distinguishes
+        // nspawn from every other supported runtime.
+        QTest::newRow("nspawn_machinectl")         << "nspawn_machinectl.txt"         << "nspawn"     << "alpine";
+        QTest::newRow("nspawn_machinectl_inside")  << "nspawn_machinectl_inside.txt"  << "nspawn"     << "fedora";
+        QTest::newRow("nspawn_template_service")   << "nspawn_template_service.txt"   << "nspawn"     << "debian";
         QTest::newRow("host_init_scope")           << "host_init_scope.txt"           << ""           << "";
         QTest::newRow("host_user_session")         << "host_user_session.txt"         << ""           << "";
         QTest::newRow("host_systemd_service")      << "host_systemd_service.txt"      << "systemd"    << "unit:nginx.s";

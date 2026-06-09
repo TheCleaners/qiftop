@@ -269,6 +269,58 @@ private slots:
         QVERIFY(info->id.startsWith(QStringLiteral("665b0949")));
     }
 
+    void nspawnMachinectl()
+    {
+        // Containers booted by `machinectl start NAME` or
+        // `systemd-nspawn --machine=NAME --boot ...`. The process
+        // attribution-target is INSIDE the container, so we walk
+        // through several segments of the guest's own systemd
+        // hierarchy under .../payload/.
+        using qiftop::backend::cgroup::classifyPathChain;
+        const auto path = QStringLiteral(
+            "/machine.slice/machine-alpine.scope"
+            "/payload/system.slice/nginx.service");
+        const auto chain = classifyPathChain(path);
+        QCOMPARE(chain.size(), 1);
+        QCOMPARE(chain[0].runtime, QStringLiteral("nspawn"));
+        QCOMPARE(chain[0].id, QStringLiteral("alpine"));
+
+        // Leaf-wins single-answer view returns the same.
+        const auto info = classifyPath(path);
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("nspawn"));
+        QCOMPARE(info->id, QStringLiteral("alpine"));
+    }
+
+    void nspawnTemplatedService()
+    {
+        // `systemctl start systemd-nspawn@NAME` form. Without the
+        // explicit handler the systemd-unit fallback would label this
+        // `systemd:unit:systemd-nspawn@NAME.service` — strictly true
+        // but unhelpful (the runtime IS nspawn).
+        using qiftop::backend::cgroup::classifyPathChain;
+        const auto path = QStringLiteral(
+            "/system.slice/system-systemd\\x2dnspawn.slice"
+            "/systemd-nspawn@debian.service");
+        const auto chain = classifyPathChain(path);
+        QCOMPARE(chain.size(), 1);
+        QCOMPARE(chain[0].runtime, QStringLiteral("nspawn"));
+        QCOMPARE(chain[0].id, QStringLiteral("debian"));
+    }
+
+    void nspawnNameWithSystemdEscapes()
+    {
+        // Machine names containing characters systemd hex-escapes (dots,
+        // dashes in some positions). The captured id is verbatim — same
+        // form `machinectl list` and journal logs show.
+        using qiftop::backend::cgroup::classifyPath;
+        const auto info = classifyPath(QStringLiteral(
+            "/machine.slice/machine-my\\x2dvm\\x2eorg.scope/payload/init.scope"));
+        QVERIFY(info.has_value());
+        QCOMPARE(info->runtime, QStringLiteral("nspawn"));
+        QCOMPARE(info->id, QStringLiteral("my\\x2dvm\\x2eorg"));
+    }
+
     // ---- classifyPathChain depth bound ----------------------------------
 
     void chainCapsAtMaxDepth()

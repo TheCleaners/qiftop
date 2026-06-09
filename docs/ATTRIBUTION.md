@@ -169,6 +169,7 @@ one was discovered the hard way:
 | podman     | `libpod-<64hex>.scope`                                                 | Same shape rootful or rootless; differs by parent slice (`machine.slice` vs `user.slice/.../user@N.service/user.slice/`). |
 | lxd        | `/system.slice/lxd-<name>.service/lxc.payload`                         | Match the `.service` segment; tested before generic systemd unit so LXD wins. |
 | lxc        | `/lxc(\.payload)?[./]<name>`                                           | Plain LXC, names not hex. |
+| nspawn     | `/machine.slice/machine-<NAME>.scope` <br> `systemd-nspawn@<NAME>.service` | systemd-nspawn registered via machined (default) or started via the template unit. NAME is human-readable, NOT a content-addressable hash — distinguishes nspawn from every other supported runtime. Caveat: libvirt VMs (when libvirtd has machined integration) also register as `machine-qemu\x2d<id>.scope` and get mislabelled `nspawn`; the machine name typically makes it obvious. |
 | systemd    | `/<unit>.{service,socket,mount}`                                       | Non-container scope but useful — UI labels it `unit:nginx.service`. |
 
 Order matters in `classifyPath`: lxd before generic systemd, kubepods

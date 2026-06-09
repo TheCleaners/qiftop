@@ -99,6 +99,26 @@ inline constexpr int kMaxContainerChainDepth = 16;
         QStringLiteral("^libpod-([0-9a-f]{64})\\.scope$"));
     static const QRegularExpression rxLxd(
         QStringLiteral("^lxd-([^/\\s.]+)\\.service$"));
+    // systemd-nspawn: containers registered via systemd-machined live
+    // under /machine.slice/machine-<NAME>.scope. NAME may include
+    // systemd-style hex escapes (\x2d for '-' etc) — we capture
+    // verbatim; users see the same escaped form in `machinectl list`.
+    //
+    // Caveat: libvirt VMs (when libvirtd is built with machined
+    // integration) also register here as machine-qemu\x2d<id>.scope.
+    // That's a known mislabel — qiftop will call them runtime=nspawn
+    // even though they're actually QEMU. The machine NAME usually
+    // makes it obvious in the UI. Fixing this would require parsing
+    // sd-bus GetMachineByPID, which is more plumbing than the
+    // mislabel is worth.
+    static const QRegularExpression rxNspawnScope(
+        QStringLiteral("^machine-(.+)\\.scope$"));
+    // Templated systemd unit form: `systemctl start systemd-nspawn@NAME`
+    // produces cgroup segment `systemd-nspawn@NAME.service`. Less
+    // common than the machinectl path but real (used by sysadmins
+    // who want auto-restart semantics).
+    static const QRegularExpression rxNspawnService(
+        QStringLiteral("^systemd-nspawn@(.+)\\.service$"));
     // Pod UIDs use `_` under the systemd cgroup driver
     // (kubepods-besteffort-pod665b0949_7b83_....slice) and `-` under
     // the cgroupfs driver (pod665b0949-7b83-...). Allow both.
@@ -132,6 +152,10 @@ inline constexpr int kMaxContainerChainDepth = 16;
             return ContainerInfo{QStringLiteral("podman"), m.captured(1).left(12), {}};
         if (const auto m = rxLxd.match(seg); m.hasMatch())
             return ContainerInfo{QStringLiteral("lxd"), m.captured(1), {}};
+        if (const auto m = rxNspawnScope.match(seg); m.hasMatch())
+            return ContainerInfo{QStringLiteral("nspawn"), m.captured(1), {}};
+        if (const auto m = rxNspawnService.match(seg); m.hasMatch())
+            return ContainerInfo{QStringLiteral("nspawn"), m.captured(1), {}};
         if (const auto m = rxKubepodsPodCgfs.match(seg); m.hasMatch())
             return ContainerInfo{QStringLiteral("kubernetes"), m.captured(1).left(12), {}};
         if (const auto m = rxKubepodsPod.match(seg); m.hasMatch())
