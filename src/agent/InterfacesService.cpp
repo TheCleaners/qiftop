@@ -87,9 +87,13 @@ QStringList InterfacesService::capabilities() const
         if (resolverCaps.contains(QStringLiteral("container-attribution"))
             && !base.contains(QStringLiteral("container-attribution-wire"))) {
             base.append(QStringLiteral("container-attribution-wire"));
-            // Chain is a strict superset of leaf container info; agents that
-            // can fill `container` always fill `containerChain` too (single-
-            // entry chain when no nesting is detected).
+        }
+        // AGENTS.md §4: chain-wire is a strict superset of leaf container
+        // info, so it requires BOTH resolver tokens. Keep this in sync with
+        // Application::start()'s wantChain computation.
+        if (resolverCaps.contains(QStringLiteral("container-attribution"))
+            && resolverCaps.contains(QStringLiteral("container-chain"))
+            && !base.contains(QStringLiteral("container-chain-wire"))) {
             base.append(QStringLiteral("container-chain-wire"));
         }
     }

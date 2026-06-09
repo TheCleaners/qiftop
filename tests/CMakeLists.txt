@@ -140,8 +140,14 @@ qiftop_add_test(test_process_resolver_null
 
 qiftop_add_test(test_resolver_factory
     test_resolver_factory.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/InterfacesService.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/IdleManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/ConnectionMonitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/NetworkMonitor.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/ProcessResolverFactory.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/Types.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
+target_link_libraries(test_resolver_factory PRIVATE Qt6::DBus)
 
 qiftop_add_test(test_attribution
     test_attribution.cpp
