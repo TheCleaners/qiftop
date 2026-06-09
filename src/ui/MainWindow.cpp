@@ -171,6 +171,15 @@ void MainWindow::setupUi()
     m_netView->sortByColumn(static_cast<int>(NetworkModel::Column::Name),
                             Qt::AscendingOrder);
 
+    // Right-click on the interfaces table header → checkable per-column
+    // visibility toggles. Visual order + width persistence already lives
+    // in saveHeaderState(); this menu only manages hidden-ness on top.
+    m_netView->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_netView->horizontalHeader(), &QWidget::customContextMenuRequested,
+            this, &MainWindow::showNetHeaderMenu);
+    // Allow drag-reordering of columns (state captured by saveState()).
+    m_netView->horizontalHeader()->setSectionsMovable(true);
+
     // --- Connections tab ---
     m_connModel = new ConnectionModel(this);
     m_connModel->setDnsResolver(m_dnsResolver);
@@ -208,6 +217,13 @@ void MainWindow::setupUi()
     m_connView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_connView, &QWidget::customContextMenuRequested,
             this,        &MainWindow::showConnectionContextMenu);
+
+    // Right-click on the connections table header → per-column visibility
+    // toggles. Same model as the interfaces header (above).
+    m_connView->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_connView->horizontalHeader(), &QWidget::customContextMenuRequested,
+            this, &MainWindow::showConnHeaderMenu);
+    m_connView->horizontalHeader()->setSectionsMovable(true);
 
     // Empty-state placeholder: a centered hint shown when the model has
     // zero rows. Parented to the viewport so it scrolls with the (empty)
@@ -1623,4 +1639,77 @@ void MainWindow::updateStatusBar(const QList<InterfaceStats> &stats)
     m_statusThroughput->setText(QStringLiteral("↓ %1   ↑ %2")
                                     .arg(util::formatBytes(totalRx),
                                          util::formatBytes(totalTx)));
+}
+
+namespace {
+
+// Build a header context menu populated with one checkable action per
+// logical column, plus a "Reset to defaults" item that re-shows every
+// column. Used by both the interfaces- and connections-table headers
+// (the per-view "default visible" calculation may differ — pass in
+// alwaysHidden for columns whose visibility is governed by other
+// settings, e.g. the RxMax/TxMax gauge columns).
+void populateHeaderMenu(QMenu *menu, QHeaderView *header,
+                        const QSet<int> &alwaysHidden = {})
+{
+    QAbstractItemModel *m = header->model();
+    if (!m) return;
+    const int cols = m->columnCount();
+
+    // Count currently-visible sections so we can disable the toggle of
+    // the last one — hiding every column would orphan the view with no
+    // way to summon the menu back.
+    int visibleCount = 0;
+    for (int i = 0; i < cols; ++i)
+        if (!header->isSectionHidden(i)) ++visibleCount;
+
+    for (int i = 0; i < cols; ++i) {
+        const QString label = m->headerData(i, Qt::Horizontal, Qt::DisplayRole).toString();
+        QAction *act = menu->addAction(label.isEmpty()
+            ? QStringLiteral("Column %1").arg(i + 1) : label);
+        act->setCheckable(true);
+        act->setChecked(!header->isSectionHidden(i));
+        if (act->isChecked() && visibleCount <= 1)
+            act->setEnabled(false);  // refuse to hide the last visible column
+        QObject::connect(act, &QAction::toggled, header,
+            [header, i](bool checked) { header->setSectionHidden(i, !checked); });
+    }
+
+    menu->addSeparator();
+    QAction *resetAct = menu->addAction(QObject::tr("Reset columns to defaults"));
+    QObject::connect(resetAct, &QAction::triggered, header,
+        [header, cols, alwaysHidden] {
+            for (int i = 0; i < cols; ++i)
+                header->setSectionHidden(i, alwaysHidden.contains(i));
+            // Also restore the original logical order. Walk visual->
+            // logical and move each into its logical slot.
+            for (int logical = 0; logical < cols; ++logical) {
+                const int visual = header->visualIndex(logical);
+                if (visual != logical)
+                    header->moveSection(visual, logical);
+            }
+        });
+}
+
+} // namespace
+
+void MainWindow::showNetHeaderMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    populateHeaderMenu(&menu, m_netView->horizontalHeader());
+    menu.exec(m_netView->horizontalHeader()->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::showConnHeaderMenu(const QPoint &pos)
+{
+    // RxMax/TxMax visibility is governed by the throughput-gauge toggle
+    // in applySettingsToUi(); pin them as "default hidden" so Reset does
+    // the same thing.
+    const QSet<int> alwaysHidden{
+        static_cast<int>(ConnectionModel::Column::RxMax),
+        static_cast<int>(ConnectionModel::Column::TxMax),
+    };
+    QMenu menu(this);
+    populateHeaderMenu(&menu, m_connView->horizontalHeader(), alwaysHidden);
+    menu.exec(m_connView->horizontalHeader()->viewport()->mapToGlobal(pos));
 }

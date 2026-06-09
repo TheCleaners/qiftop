@@ -618,6 +618,16 @@ remember when iterating:
   `calledFromDBus() / message().service()` to get the caller's unique name.
 * Backend `setPollIntervalMs(int ms)` semantics: `ms <= 0` means "pause the
   timer, emit nothing"; positive values set the interval and (re)start.
+* **Per-column visibility / order / width is persisted via
+  `QHeaderView::saveState()` / `restoreState()`** under the
+  `ui/interfaces/headerState` and `ui/connections/headerState` keys.
+  The opaque blob already covers visibility + visual order + widths +
+  sort indicator — don't add parallel per-column-name settings keys.
+  The user-facing toggle UI lives in the header right-click menu
+  (`MainWindow::showNetHeaderMenu` / `showConnHeaderMenu`) and the menu
+  refuses to hide the last visible column. `applySettingsToUi()` still
+  force-toggles `RxMax` / `TxMax` based on the throughput-gauge
+  setting — those two columns are gauge-dependent, not user-controlled.
 * **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
   uses an **allowlist** (`sessionEnv()`) when forwarding environment
   variables into the privileged child, not a denylist. The root child runs

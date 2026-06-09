@@ -79,6 +79,8 @@ private slots:
     void openSettingsDialog();
     void showInterfaceContextMenu(const QPoint &pos);
     void showConnectionContextMenu(const QPoint &pos);
+    void showNetHeaderMenu(const QPoint &pos);
+    void showConnHeaderMenu(const QPoint &pos);
     void quitFromTray();
     void onConnectionsPermissionDenied(const QString &detail);
     void onConnectionsAccountingUnavailable(const QString &detail);
