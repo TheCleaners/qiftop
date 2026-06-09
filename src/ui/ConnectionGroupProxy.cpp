@@ -5,6 +5,8 @@
 #include "util/Units.h"
 
 #include <QFont>
+#include <QHash>
+#include <QPartialOrdering>
 #include <QSet>
 #include <QStringList>
 
@@ -168,6 +170,142 @@ void ConnectionGroupProxy::rebuild()
         }
         m_groups[idx].srcRows.append(r);
     }
+
+    applyCurrentSort();
+}
+
+void ConnectionGroupProxy::applyCurrentSort()
+{
+    if (m_sortColumn < 0 || m_mode == ViewMode::Flat || m_groups.isEmpty())
+        return;
+
+    const auto cmpVariant = [order = m_sortOrder](const QVariant &a, const QVariant &b) {
+        // QVariant::compare returns QPartialOrdering. Use it so numeric and
+        // string sort roles compare correctly without ambiguous toString.
+        const auto ord = QVariant::compare(a, b);
+        const bool less = (ord == QPartialOrdering::Less);
+        const bool equal = (ord == QPartialOrdering::Equivalent);
+        if (equal) return false;
+        return order == Qt::AscendingOrder ? less : !less;
+    };
+
+    // Sort each group's children by the source SortRole for the sort column.
+    for (Group &g : m_groups) {
+        std::sort(g.srcRows.begin(), g.srcRows.end(),
+                  [&](int lhs, int rhs) {
+                      const QVariant a = m_src->index(lhs, m_sortColumn)
+                                             .data(ConnectionModel::SortRole);
+                      const QVariant b = m_src->index(rhs, m_sortColumn)
+                                             .data(ConnectionModel::SortRole);
+                      return cmpVariant(a, b);
+                  });
+    }
+
+    // Sort groups by their aggregated SortRole value.
+    std::sort(m_groups.begin(), m_groups.end(),
+              [&](const Group &lhs, const Group &rhs) {
+                  const QVariant a = aggregateData(lhs, m_sortColumn,
+                                                   ConnectionModel::SortRole);
+                  const QVariant b = aggregateData(rhs, m_sortColumn,
+                                                   ConnectionModel::SortRole);
+                  return cmpVariant(a, b);
+              });
+}
+
+void ConnectionGroupProxy::sort(int column, Qt::SortOrder order)
+{
+    // Remember even when m_src isn't ready yet — applyCurrentSort()
+    // will pick it up the first time rebuild() runs.
+    m_sortColumn = column;
+    m_sortOrder  = order;
+
+    if (!m_src) return;
+
+    if (m_mode == ViewMode::Flat) {
+        // Forward to the source (QSortFilterProxyModel handles the real
+        // work + emits layoutChanged for its own persistents). We must
+        // additionally remap OUR persistent indexes — the view holds
+        // proxies into us, not into source.
+        emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
+
+        // Snapshot identities via source's QPersistentModelIndex; these
+        // follow the source's row remap automatically.
+        const auto oldList = persistentIndexList();
+        QList<QPersistentModelIndex> srcPersistents;
+        srcPersistents.reserve(oldList.size());
+        for (const QModelIndex &p : oldList)
+            srcPersistents.append(QPersistentModelIndex(m_src->index(p.row(), p.column())));
+
+        m_src->sort(column, order);
+
+        QModelIndexList newList;
+        newList.reserve(oldList.size());
+        for (int i = 0; i < oldList.size(); ++i) {
+            const QPersistentModelIndex &sp = srcPersistents[i];
+            newList.append(sp.isValid()
+                               ? createIndex(sp.row(), sp.column(), kTopLevelId)
+                               : QModelIndex{});
+        }
+        changePersistentIndexList(oldList, newList);
+
+        emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
+        return;
+    }
+
+    // Grouped: rearrange m_groups + each group's srcRows, remap
+    // persistent indexes by (groupKey, sourceRow) identity so selection
+    // and tree expansion state survive sort.
+    emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
+
+    const auto oldList = persistentIndexList();
+    // identity[i] = pair(groupKey, sourceRow); sourceRow == -1 means
+    // the persistent points at a group row itself.
+    struct Identity { QString key; int srcRow; int col; };
+    QList<Identity> identities;
+    identities.reserve(oldList.size());
+    for (const QModelIndex &p : oldList) {
+        Identity id{{}, -1, p.column()};
+        if (p.internalId() == kTopLevelId) {
+            const int gi = p.row();
+            if (gi >= 0 && gi < m_groups.size()) id.key = m_groups[gi].key;
+        } else {
+            const auto gi = static_cast<int>(p.internalId());
+            if (gi >= 0 && gi < m_groups.size()
+                && p.row() >= 0 && p.row() < m_groups[gi].srcRows.size()) {
+                id.key = m_groups[gi].key;
+                id.srcRow = m_groups[gi].srcRows[p.row()];
+            }
+        }
+        identities.append(std::move(id));
+    }
+
+    applyCurrentSort();
+
+    // Re-build the key→index lookup once for the post-sort group order.
+    QHash<QString, int> keyToIdx;
+    keyToIdx.reserve(m_groups.size());
+    for (int gi = 0; gi < m_groups.size(); ++gi)
+        keyToIdx.insert(m_groups[gi].key, gi);
+
+    QModelIndexList newList;
+    newList.reserve(oldList.size());
+    for (const Identity &id : identities) {
+        if (id.key.isEmpty()) { newList.append(QModelIndex{}); continue; }
+        const int gi = keyToIdx.value(id.key, -1);
+        if (gi < 0) { newList.append(QModelIndex{}); continue; }
+        if (id.srcRow < 0) {
+            newList.append(createIndex(gi, id.col, kTopLevelId));
+        } else {
+            const int childRow = static_cast<int>(
+                m_groups[gi].srcRows.indexOf(id.srcRow));
+            newList.append(childRow >= 0
+                               ? createIndex(childRow, id.col, static_cast<quintptr>(gi))
+                               : QModelIndex{});
+        }
+    }
+    changePersistentIndexList(oldList, newList);
+
+    emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
 }
 
 QString ConnectionGroupProxy::groupKeyFor(int srcRow) const

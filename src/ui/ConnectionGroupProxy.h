@@ -64,6 +64,21 @@ public:
                                       int role = Qt::DisplayRole) const override;
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex &index) const override;
 
+    // Sort entry point invoked by the view (header click,
+    // sortByColumn during setSortingEnabled/state restore). Both modes
+    // remember the column/order so rebuild() re-applies it after a
+    // group restructure.
+    //
+    //   Flat mode:    forwarded to source (QSortFilterProxyModel does
+    //                 the work and emits layoutChanged; we re-emit in
+    //                 the connect lambda).
+    //   Grouped mode: sorts m_groups by aggregated SortRole value and
+    //                 each group's srcRows by source SortRole value,
+    //                 then emits layoutChanged with full persistent
+    //                 index remapping so selection and expansion state
+    //                 survive sort clicks.
+    void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
+
 private slots:
     void onSourceReset();
     void onSourceRowsAboutToBeInserted(const QModelIndex &parent, int first, int last);
@@ -88,7 +103,15 @@ private:
     void forwardSourceDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight,
                                   const QVector<int> &roles);
 
+    // Re-applies the current m_sortColumn / m_sortOrder to m_groups
+    // and each group's srcRows. Cheap; called from rebuild() so that
+    // group restructures after dataChanged keep the user's sort order
+    // instead of snapping back to insertion order.
+    void applyCurrentSort();
+
     QAbstractItemModel *m_src = nullptr;
     ViewMode m_mode = ViewMode::Flat;
     QList<Group> m_groups;     // empty when mode==Flat
+    int m_sortColumn = -1;     // -1 = no sort applied yet
+    Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 };

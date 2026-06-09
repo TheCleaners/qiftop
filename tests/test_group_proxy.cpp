@@ -31,6 +31,16 @@ public:
         if (role == ConnectionModel::ConnectionRole) return QVariant::fromValue(c);
         if (role == ConnectionModel::RxRateRole)     return double(c.rxBytes);  // pretend
         if (role == ConnectionModel::TxRateRole)     return double(c.txBytes);
+        if (role == ConnectionModel::SortRole) {
+            switch (static_cast<ConnectionModel::Column>(i.column())) {
+            case ConnectionModel::Column::RxRate:  return double(c.rxBytes);
+            case ConnectionModel::Column::TxRate:  return double(c.txBytes);
+            case ConnectionModel::Column::RxTotal: return static_cast<qulonglong>(c.rxBytes);
+            case ConnectionModel::Column::TxTotal: return static_cast<qulonglong>(c.txBytes);
+            case ConnectionModel::Column::Iface:   return c.iface;
+            default: return {};
+            }
+        }
         if (role == Qt::DisplayRole) {
             switch (static_cast<ConnectionModel::Column>(i.column())) {
             case ConnectionModel::Column::Iface: return c.iface;
@@ -250,6 +260,90 @@ private slots:
         QCOMPARE(reset.size(), 2);
         QCOMPARE(p.rowCount(), 2);  // back to source row count
         QVERIFY(!p.isGroupIndex(p.index(0, 0)));
+    }
+
+    // Pins UIUX-C2: header click on the connections view must actually
+    // reorder rows. Pre-fix, ConnectionGroupProxy had no sort() override
+    // so QAbstractItemModel's no-op was inherited and every
+    // sortByColumn / header-click dispatch was silently dropped.
+    void groupedModeSortsGroupsByAggregatedValue()
+    {
+        StubFlows src;
+        // Three interfaces, each with one flow of different rx — groups
+        // are eth0=10, wlan0=300, lo=70. Descending by RxRate should
+        // put wlan0 first.
+        src.replace({mk("eth0",  "", "", 0, "",  10, 0),
+                     mk("wlan0", "", "", 0, "", 300, 0),
+                     mk("lo",    "", "", 0, "",  70, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+
+        QCOMPARE(p.rowCount(), 3);
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 300.0);
+        QCOMPARE(p.index(1, rxCol).data(ConnectionModel::RxRateRole).toDouble(),  70.0);
+        QCOMPARE(p.index(2, rxCol).data(ConnectionModel::RxRateRole).toDouble(),  10.0);
+
+        p.sort(rxCol, Qt::AscendingOrder);
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(),  10.0);
+        QCOMPARE(p.index(2, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 300.0);
+    }
+
+    void groupedModeSortsChildrenWithinEachGroup()
+    {
+        StubFlows src;
+        // Two interfaces; eth0 has three flows of varying rx.
+        src.replace({mk("eth0",  "", "", 0, "",  50, 0),
+                     mk("eth0",  "", "", 0, "", 500, 0),
+                     mk("eth0",  "", "", 0, "", 200, 0),
+                     mk("wlan0", "", "", 0, "",  10, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+
+        // First group is eth0 (sum=750 > wlan0's 10). Its children should
+        // be ordered 500, 200, 50.
+        const QModelIndex eth = p.index(0, 0);
+        QVERIFY(p.isGroupIndex(eth));
+        QCOMPARE(p.rowCount(eth), 3);
+        QCOMPARE(p.index(0, rxCol, eth).data(ConnectionModel::RxRateRole).toDouble(), 500.0);
+        QCOMPARE(p.index(1, rxCol, eth).data(ConnectionModel::RxRateRole).toDouble(), 200.0);
+        QCOMPARE(p.index(2, rxCol, eth).data(ConnectionModel::RxRateRole).toDouble(),  50.0);
+    }
+
+    void groupedModeSortSurvivesRebuild()
+    {
+        // After a sort, a dataChanged that triggers an internal rebuild
+        // (group-key change) must reapply the sort, not snap back to
+        // source insertion order. Pins applyCurrentSort()'s rebuild-time
+        // re-entry.
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, "", 100, 0),
+                     mk("wlan0", "", "", 0, "", 200, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 200.0);
+
+        // Mutate row 0 to change its group key (eth0 → wifi0), which
+        // forces ConnectionGroupProxy::onSourceDataChanged to fall into
+        // the wholesale onSourceReset() rebuild path.
+        src.setRow(0, mk("wifi0", "", "", 0, "", 100, 0),
+                   {ConnectionModel::ConnectionRole});
+
+        QCOMPARE(p.rowCount(), 2);  // still 2 groups, just renamed
+        // Sort must still be applied: wlan0 (200) before wifi0 (100).
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 200.0);
+        QCOMPARE(p.index(1, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 100.0);
     }
 };
 
