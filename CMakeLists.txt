@@ -62,6 +62,7 @@ add_executable(qiftop
     src/main.cpp
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
+    src/backend/PlatformInfo.cpp
     src/backend/ProcessResolverFactory.cpp
     src/backend/dbus/DBusNetworkMonitor.cpp
     src/backend/dbus/DBusConnectionMonitor.cpp
@@ -111,6 +112,7 @@ add_executable(qiftop-agent
     src/agent/IdleManager.cpp
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
+    src/backend/PlatformInfo.cpp
     src/backend/ProcessResolverFactory.cpp
     src/util/Logging.cpp
 )

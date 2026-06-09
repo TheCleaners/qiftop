@@ -72,6 +72,14 @@ dist/
    `util/ConnectionHeuristics.h` — are the future `libqiftop` material
    (see §10). Anything pulling in `QWidget`, `QAbstract*Model`,
    `QSortFilterProxyModel`, or similar belongs in `ui/`.
+6. **No platform headers outside `backend/<os>/` or `backend/PlatformInfo.cpp`.**
+   `<linux/*>`, `<sys/un.h>`, `<netinet/*>`, `<ifaddrs.h>`, `<windows.h>`,
+   `<sys/sysctl.h>` etc. live in the platform subdirectory's translation
+   units, or behind `qiftop::platform` (with documented fallbacks on
+   unsupported OSes). Code in `agent/`, `ui/`, `dns/`, `config/`,
+   `dbus/` and the abstract `backend/*.h` interfaces must compile on
+   any Qt 6 target. See `docs/PORTABILITY.md` for the full survey of
+   what each target OS would need.
 
 ### Future direction (long-term)
 

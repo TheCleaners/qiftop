@@ -1,37 +1,16 @@
 #include "ConnectionModel.h"
 #include "util/ConnectionHeuristics.h"
+#include "backend/PlatformInfo.h"
 #include "dns/DnsResolver.h"
 #include "util/Units.h"
 
 #include <QApplication>
-#include <QFile>
 #include <QFont>
 #include <QPalette>
-#include <QRegularExpression>
 
 #include <algorithm>
 
 namespace {
-
-// Read /proc/sys/net/ipv4/ip_local_port_range once. Returns (low, high);
-// falls back to the kernel's compiled-in defaults if anything goes wrong.
-std::pair<quint16, quint16> readEphemeralRange()
-{
-    QFile f(QStringLiteral("/proc/sys/net/ipv4/ip_local_port_range"));
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        const QString s = QString::fromLatin1(f.readAll()).trimmed();
-        static const QRegularExpression ws(QStringLiteral("\\s+"));
-        const QStringList parts = s.split(ws, Qt::SkipEmptyParts);
-        if (parts.size() == 2) {
-            bool ok1 = false, ok2 = false;
-            const int lo = parts[0].toInt(&ok1);
-            const int hi = parts[1].toInt(&ok2);
-            if (ok1 && ok2 && lo > 0 && hi >= lo && hi <= 65535)
-                return {static_cast<quint16>(lo), static_cast<quint16>(hi)};
-        }
-    }
-    return {32768, 60999};
-}
 
 } // namespace
 
@@ -39,7 +18,7 @@ ConnectionModel::ConnectionModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
     m_elapsed.start();
-    std::tie(m_ephemeralLow, m_ephemeralHigh) = readEphemeralRange();
+    std::tie(m_ephemeralLow, m_ephemeralHigh) = qiftop::platform::ephemeralPortRange();
     m_loopbackAddrs.insert(QHostAddress(QHostAddress::LocalHost));
     m_loopbackAddrs.insert(QHostAddress(QHostAddress::LocalHostIPv6));
 }

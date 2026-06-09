@@ -2,18 +2,12 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
-#include <QFile>
-#include <QRegularExpression>
-#include <QStringList>
 
 #include <algorithm>
 
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-
 #include "IdleManager.h"
 #include "backend/ConnectionMonitor.h"
+#include "backend/PlatformInfo.h"
 #include "util/ConnectionHeuristics.h"
 
 namespace qiftop::agent {
@@ -33,40 +27,11 @@ struct HostContext {
 HostContext gatherHostContext()
 {
     HostContext ctx;
-
-    struct ifaddrs *head = nullptr;
-    if (getifaddrs(&head) == 0) {
-        for (auto *p = head; p; p = p->ifa_next) {
-            if (!p->ifa_addr) continue;
-            const int fam = p->ifa_addr->sa_family;
-            if (fam != AF_INET && fam != AF_INET6) continue;
-            QHostAddress addr;
-            addr.setAddress(p->ifa_addr);
-            if (addr.isNull()) continue;
-            if (addr.isLoopback()) ctx.loopbackAddrs.insert(addr);
-            else                   ctx.localAddrs.insert(addr);
-        }
-        freeifaddrs(head);
-    }
-
-    // /proc/sys/net/ipv4/ip_local_port_range is two integers separated
-    // by whitespace (typically a single tab). The IPv6 ephemeral range
-    // mirrors the IPv4 one on Linux, so reading one file is enough.
-    QFile portRange(QStringLiteral("/proc/sys/net/ipv4/ip_local_port_range"));
-    if (portRange.open(QIODevice::ReadOnly)) {
-        const auto parts = QString::fromLatin1(portRange.readAll())
-                               .split(QRegularExpression(QStringLiteral("\\s+")),
-                                      Qt::SkipEmptyParts);
-        if (parts.size() >= 2) {
-            bool ok1 = false, ok2 = false;
-            const auto lo = parts[0].toUShort(&ok1);
-            const auto hi = parts[1].toUShort(&ok2);
-            if (ok1 && ok2 && hi > lo) {
-                ctx.ephemeralLow  = lo;
-                ctx.ephemeralHigh = hi;
-            }
-        }
-    }
+    ctx.localAddrs    = qiftop::platform::localAddresses();
+    ctx.loopbackAddrs = qiftop::platform::loopbackAddresses();
+    const auto [lo, hi] = qiftop::platform::ephemeralPortRange();
+    ctx.ephemeralLow  = lo;
+    ctx.ephemeralHigh = hi;
     return ctx;
 }
 
