@@ -133,7 +133,7 @@ Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 | Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
 |----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
 | `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged(t, a(...))`, `CadenceChanged(u)`         | `Version: s`, `Capabilities: as` |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uussssτ)`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uusssst)`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
 
 Both data signals carry a leading `quint64 monotonicMs` (a
 `QElapsedTimer`-based, agent-process-local monotonic millisecond
@@ -157,7 +157,7 @@ nesting, leaf entry equals `(containerRuntime, containerId, containerName)`
 when both are populated.
 
 **InterfaceStats wire signature** (16 fields per row):
-`(ssusasttttbbuytttt)` =
+`(ssuasttttbbuytttt)` =
 `(name, type, mtu, addresses, rxBytes, txBytes, rxPackets, txPackets,
 isUp, isLoopback, ifIndex, operState, rxErrors, txErrors, rxDropped,
 txDropped)`.
@@ -262,7 +262,7 @@ older agents. Tokens currently emitted:
 | `netns-scan`          | Resolver chain dumps sock_diag in every non-host network namespace (Linux `NetnsScanner`, requires `CAP_SYS_ADMIN`). |
 | `process-attribution-wire` | `ConnectionDto` carries `pid`, `uid`, `comm` populated server-side. Implies the agent has a `process-attribution`-capable resolver wired. Mirror token so non-resolver-aware clients gate UI on this rather than poking attribution fields blindly. |
 | `container-attribution-wire` | `ConnectionDto` carries `containerRuntime`, `containerId`, `containerName` populated server-side. Implies `container-attribution` resolver capability. |
-| `container-chain-wire` | `ConnectionDto.containerChain` is populated when applicable. Strict superset of `container-attribution-wire`: a flow with no nesting still yields a single-entry chain. Advertised together with `container-attribution-wire`. |
+| `container-chain-wire` | `ConnectionDto.containerChain` is populated when applicable. Strict superset of `container-attribution-wire`: a flow with no nesting still yields a single-entry chain. Advertised when the resolver provides BOTH `container-attribution` AND `container-chain` (see Application.cpp). Today CgroupClassifier always ships both, but the two flags must stay separable. |
 | `on-demand-process-details` | `Connections.GetProcessDetails(pid u) → (pid u, uid u, comm s, exe s, cmdline s, cwd s, startTimeJiffies t)` RPC is available. Returns an all-zero struct (pid=0) on unknown / disappeared PID, never a DBus error. Cache key for clients is `(pid, startTimeJiffies)` — startTime distinguishes PID reuse within one boot. Advertised unconditionally on Linux; non-Linux backends return empty. |
 
 Add a token here when shipping a new optional behaviour; **never remove

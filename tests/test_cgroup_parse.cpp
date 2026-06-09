@@ -74,6 +74,18 @@ private slots:
         QCOMPARE(info->id,      QStringLiteral("abcdef012345"));
     }
 
+    void dockerLegacyFallbackDoesNotDuplicateSystemdScope()
+    {
+        const QString scoped64(64, QLatin1Char('a'));
+        const QString legacy64(64, QLatin1Char('b'));
+        const auto chain = qiftop::backend::cgroup::classifyPathChain(
+            QStringLiteral("/system.slice/docker-%1.scope/docker/%2")
+                .arg(scoped64, legacy64));
+        QCOMPARE(chain.size(), 1);
+        QCOMPARE(chain[0].runtime, QStringLiteral("docker"));
+        QCOMPARE(chain[0].id, QString(12, QLatin1Char('a')));
+    }
+
     void containerdCriScope()
     {
         const auto info = classifyPath(QStringLiteral(

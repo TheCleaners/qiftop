@@ -1,5 +1,6 @@
 #include "SockDiagDump.h"
 
+#include <QAtomicInt>
 #include <QtEndian>
 
 #include <array>
@@ -102,11 +103,20 @@ bool dumpSocketsViaFd(int nlFd, quint8 family, quint8 proto,
 
     std::array<char, 16384> buf{};
     for (;;) {
-        ssize_t n = ::recv(nlFd, buf.data(), buf.size(), 0);
+        ssize_t n = ::recv(nlFd, buf.data(), buf.size(), MSG_TRUNC);
         if (n < 0) {
             if (errno == EINTR) continue;
             qCWarning(lcVerbose) << "sockdiag::dumpSocketsViaFd: recv:"
                                  << std::strerror(errno);
+            return false;
+        }
+        if (n > static_cast<ssize_t>(buf.size())) {
+            static QAtomicInt warnedOnce = 0;
+            if (warnedOnce.testAndSetRelaxed(0, 1)) {
+                qWarning() << "sockdiag::dumpSocketsViaFd: oversized netlink message"
+                           << n << "bytes exceeds buffer" << buf.size()
+                           << "bytes; skipping dump";
+            }
             return false;
         }
         if (n == 0) return true;

@@ -205,7 +205,7 @@ inline constexpr int kMaxContainerChainDepth = 16;
     // path-wise rather than appending blindly to the end.
     static const QRegularExpression rxDockerLegacy(
         QStringLiteral("/docker/([0-9a-f]{64})(?:/|$)"));
-    {
+    if (chain.isEmpty()) {
         auto it = rxDockerLegacy.globalMatch(path);
         while (it.hasNext()) {
             const auto m = it.next();
