@@ -35,16 +35,18 @@ target_link_libraries(qiftop-attribution-probe PRIVATE
 target_compile_definitions(qiftop-attribution-probe PRIVATE BACKEND_LINUX)
 qiftop_apply_attribution_defs(qiftop-attribution-probe)
 
-# Register a ctest entry with label "attribution-integration" only when a
-# runner is asked for explicitly. The runner scripts themselves know how
-# to bring up the container runtime, drive the probe, and tear down.
-add_test(
-    NAME    attribution_docker
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/runners/run-docker.sh
-)
-set_tests_properties(attribution_docker PROPERTIES
-    LABELS "attribution-integration"
-    ENVIRONMENT "QIFTOP_PROBE_BIN=$<TARGET_FILE:qiftop-attribution-probe>"
-    TIMEOUT 60
-    SKIP_RETURN_CODE 77
-)
+# Register a ctest entry per runtime, all labelled "attribution-integration".
+# Each runner script knows how to bring up its runtime, drive the probe,
+# and tear down. Exit 77 = ctest SKIP (runtime missing or unhealthy).
+foreach(runtime docker podman)
+    add_test(
+        NAME    attribution_${runtime}
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/runners/run-${runtime}.sh
+    )
+    set_tests_properties(attribution_${runtime} PROPERTIES
+        LABELS "attribution-integration"
+        ENVIRONMENT "QIFTOP_PROBE_BIN=$<TARGET_FILE:qiftop-attribution-probe>"
+        TIMEOUT 90
+        SKIP_RETURN_CODE 77
+    )
+endforeach()

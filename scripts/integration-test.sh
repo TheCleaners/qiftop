@@ -38,9 +38,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$RUNTIME" in
-    docker) ;;
-    podman|k3d|crio)
-        echo "runtime '$RUNTIME' planned but not yet implemented; only 'docker' is wired up" >&2
+    docker|podman) ;;
+    k3d|crio)
+        echo "runtime '$RUNTIME' planned but not yet implemented; supported: docker, podman" >&2
         exit 2 ;;
     *) echo "unknown runtime '$RUNTIME'" >&2; exit 2 ;;
 esac
@@ -62,7 +62,7 @@ cmake -S . -B "$BUILD_DIR" \
 echo ">> building qiftop-attribution-probe"
 cmake --build "$BUILD_DIR" --target qiftop-attribution-probe -j"$(nproc)"
 
-CTEST_ARGS=(--test-dir "$BUILD_DIR" -L attribution-integration --output-on-failure)
+CTEST_ARGS=(--test-dir "$BUILD_DIR" -R "attribution_${RUNTIME}" --output-on-failure)
 if [[ $VERBOSE -eq 1 ]]; then CTEST_ARGS+=(-V); fi
 
 if [[ $EUID -ne 0 ]]; then

@@ -13,12 +13,12 @@ against real runtimes.
 
 ## Status
 
-| Runner | Status                                         |
-|--------|------------------------------------------------|
-| docker | **Shipped** (`runners/run-docker.sh`)          |
-| podman | Planned                                        |
-| k3d    | Planned                                        |
-| cri-o  | Planned                                        |
+| Runner | Status                                                                            |
+|--------|-----------------------------------------------------------------------------------|
+| docker | **Shipped** (`runners/run-docker.sh`)                                             |
+| podman | **Shipped** (`runners/run-podman.sh` — rootful only; rootless+pasta defeats attribution by holding the flow in userspace) |
+| k3d    | Planned                                                                           |
+| cri-o  | Planned                                                                           |
 
 ## Layout
 

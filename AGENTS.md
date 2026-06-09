@@ -407,6 +407,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp |
 | `test_cgroup_real_fixtures` | Data-driven: 13 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, host scopes). Adding a runtime = drop a fixture + add one table row. |
 | `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |
+| `attribution_podman` (Tier-2) | Sibling of `attribution_docker` using rootful podman + netavark; exercises the `libpod-<id>.scope` cgroup hierarchy that the docker path never produces. SKIPs cleanly on hosts where rootful podman can't start a container (e.g. logind rlimit-delegation quirks). |
 
 ### 6.3 Gaps worth filling
 
@@ -415,10 +416,11 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
    live conntrack handle.
 2. **End-to-end with a real conntrack table** — requires root; needs a
    CI runner with `CAP_NET_ADMIN` or a privileged container.
-3. **Tier-2 attribution: more runtimes.** Docker runner is shipped
-   (`tests/integration/attribution/runners/run-docker.sh`). Podman,
-   k3d/k8s, and cri-o still need their own runners — the probe binary
-   contract is reusable, only the bring-up scripts differ.
+3. **Tier-2 attribution: more runtimes.** Docker and rootful podman
+   runners shipped (`tests/integration/attribution/runners/`); both run
+   in CI on push-to-main / dispatch / release. k3d (k8s) and cri-o
+   runners still pending — the probe binary contract is reusable, only
+   the bring-up scripts differ.
 
 ### 6.3a Validating against real-world container runtimes
 
