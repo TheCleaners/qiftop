@@ -1,0 +1,62 @@
+# -*- mode: ruby -*-
+# vi: ft=ruby
+#
+# Disposable ubuntu-24.04 VM that mirrors the GitHub Actions runner
+# image used by .github/workflows/integration.yml. Spin it up to run
+# the attribution Tier-2 harness without the host's logind / sudo /
+# kernel-module quirks affecting the result.
+#
+# Usage from the repo root:
+#   ./scripts/local-integration.sh                  # run all runtimes
+#   ./scripts/local-integration.sh --runtime podman # just podman
+#
+# Manual usage:
+#   cd tests/integration/vagrant
+#   vagrant up
+#   vagrant ssh -c 'cd /home/vagrant/qiftop && \
+#       cmake -S . -B build -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON && \
+#       cmake --build build --target qiftop-attribution-probe -j && \
+#       sudo ctest --test-dir build -L attribution-integration --output-on-failure -V'
+#
+# Tear down with `vagrant destroy -f` when done; the VM is intended to
+# be ephemeral.
+
+REPO_ROOT = File.expand_path("../../..", __dir__)
+
+Vagrant.configure("2") do |config|
+  # Ubuntu 24.04 LTS — exact same generation as the CI runner image.
+  # 'bento/ubuntu-24.04' supports libvirt and is actively maintained.
+  config.vm.box = "bento/ubuntu-24.04"
+  config.vm.hostname = "qiftop-integration"
+
+  config.vm.provider "libvirt" do |lv|
+    # Rootless libvirt: avoids the polkit prompt that qemu:///system
+    # triggers when the host user isn't in the 'libvirt' group. All
+    # VM state lives under ~/.local/share/libvirt/ instead of
+    # /var/lib/libvirt/. Override with LIBVIRT_DEFAULT_URI if you
+    # really want the system instance.
+    lv.uri = ENV.fetch("LIBVIRT_DEFAULT_URI", "qemu:///session")
+    lv.memory = 4096
+    lv.cpus   = 4
+    lv.machine_virtual_size = 20
+  end
+
+  # rsync the repo into the guest. NFS/9p would be faster but rsync
+  # works without any extra host config and matches what CI sees (a
+  # clean checkout, not a live-mounted dev tree).
+  config.vm.synced_folder REPO_ROOT, "/home/vagrant/qiftop",
+    type: "rsync",
+    rsync__exclude: [
+      ".git/",
+      "build/", "build-*/",
+      ".vagrant/",
+      "*.iso", "*.box",
+      "tests/integration/vagrant/.vagrant/",
+    ],
+    rsync__args: ["--archive", "--delete", "--compress"]
+
+  config.vm.provision "shell",
+    path: "provision.sh",
+    privileged: true,
+    keep_color: true
+end
