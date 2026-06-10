@@ -275,7 +275,7 @@ void Screen::render(const Frame &f)
         for (int c = 0; c < n; ++c) {
             QString h = cols[c].title;
             if (c == f.sortCol)
-                h += f.sortDesc ? QStringLiteral(" v") : QStringLiteral(" ^");
+                h += f.sortDesc ? QStringLiteral(" \u25bc") : QStringLiteral(" \u25b2");
             headers << h;
         }
         attrset(attrFor(Role::Header));
