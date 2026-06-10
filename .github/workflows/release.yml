@@ -183,9 +183,21 @@ jobs:
           draft: false
           # Mark as prerelease automatically for tags like v0.2-rc1, v0.2-beta.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # Auto-generated notes diff against the previous tag.
-          # Customizable via .github/release.yml if you want curated
-          # categories / excluded labels.
+          # Custom preamble (animated demo) prepended above the auto-generated
+          # notes. The GIF is uploaded to this same release as an asset (it is
+          # deliberately NOT committed to the repo, to keep it lean), so the
+          # self-referential URL resolves once the asset is attached.
+          body: |
+            ![qiftop demo](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/demo.gif)
+
+            *Animated walkthrough driven by synthetic data (reserved
+            documentation addresses + `example.*` hostnames). Build / usage
+            docs and a static frame are in the [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md).*
+
+            ---
+          # Auto-generated notes diff against the previous tag, appended below
+          # the body above. Customizable via .github/release.yml if you want
+          # curated categories / excluded labels.
           generate_release_notes: true
           files: |
             dist/*.deb

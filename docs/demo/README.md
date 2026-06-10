@@ -35,19 +35,27 @@ The capture renders with the **Adwaita-Dark** Qt style + the gnome
 platform theme (for themed toolbar icons); `qiftop-demo --dark` provides a
 built-in Fusion dark palette fallback for environments without those.
 
-## Regenerating the README assets
+## Regenerating the demo media
+
+The animated GIF shown in the README is **not committed to the repo** (to
+keep it lean) — it is attached as an asset to the GitHub Release and the
+README hot-links the release-download URL. The release workflow also
+embeds it in the release notes.
 
 ```sh
 cmake -B build -DQIFTOP_BUILD_DEMO=ON
 cmake --build build --target qiftop-demo -j"$(nproc)"
 
-# still → docs/screenshot.png
-bash docs/demo/capture-still.sh Adwaita-Dark /tmp/shot.png && cp /tmp/shot.png docs/screenshot.png
-
-# animated tour → docs/demo.gif
+# animated tour → /tmp/demo.gif
 bash docs/demo/capture-gif.sh /tmp/demo.gif Adwaita-Dark 26
-gifsicle -O3 --lossy=80 /tmp/demo.gif -o docs/demo.gif
+gifsicle -O3 --lossy=80 /tmp/demo.gif -o /tmp/demo.gif
+
+# attach to the (pre)release so the README + release-notes URLs resolve:
+gh release upload v0.2-rc1 /tmp/demo.gif
 ```
+
+`capture-still.sh` produces a single PNG frame — handy for iterating on
+the look or for a static thumbnail, though the README uses only the GIF.
 
 The `qiftop-demo` target is never built by default and is not installed —
 it exists purely for documentation media.

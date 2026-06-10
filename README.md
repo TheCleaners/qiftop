@@ -16,14 +16,12 @@ system-bus daemon (`qiftop-agent`) so the UI itself does not need elevated
 capabilities.
 
 ![qiftop grouping live synthetic traffic by process and touring the
-preferences dialog](docs/demo.gif)
+preferences dialog](https://github.com/TheCleaners/qiftop/releases/download/v0.2-rc1/demo.gif)
 
 > The capture above is driven entirely by **synthetic data** (reserved
 > documentation addresses + `example.*` hostnames) — see
-> [`docs/demo/`](docs/demo/). A static frame:
->
-> ![qiftop Connections view with the throughput gauge, direction tint,
-> DNS-resolved peers and the process / container columns](docs/screenshot.png)
+> [`docs/demo/`](docs/demo/). It's hosted as a release asset to keep the
+> repo lean.
 
 ## Features
 
