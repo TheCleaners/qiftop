@@ -198,7 +198,17 @@ int main(int argc, char *argv[])
 
     qiftop::tui::TuiApp tui(&screen, &ifaceAgg, &connAgg, sourceLabel,
                             parser.isSet(themeOpt) ? parser.value(themeOpt) : QString(),
-                            pollMs);
+                            parser.isSet(intervalOpt) ? pollMs : 0);
+
+    // The monitors live here, so give the controller a way to push a new poll
+    // interval (chosen at runtime in Settings) down to the data source. This
+    // also syncs the source to the effective (persisted/CLI) interval now.
+    tui.setPollApplier([&netMon, &connMon](int ms) {
+        netMon->setPollIntervalMs(ms);
+        connMon->setPollIntervalMs(ms);
+        netMon->setDesiredIntervalMs(ms);
+        connMon->setDesiredIntervalMs(ms);
+    });
 
     const auto drainInput = [&screen, &tui] {
         int ch;
@@ -245,10 +255,11 @@ int main(int argc, char *argv[])
         std::signal(SIGWINCH, signalHandler);
     }
 
-    // Keep the agent warm (its idle manager needs periodic hints).
+    // Keep the agent warm (its idle manager needs periodic hints). Use the
+    // controller's current interval so a runtime change is re-asserted.
     const auto warm = [&] {
-        netMon->setDesiredIntervalMs(pollMs);
-        connMon->setDesiredIntervalMs(pollMs);
+        netMon->setDesiredIntervalMs(tui.pollIntervalMs());
+        connMon->setDesiredIntervalMs(tui.pollIntervalMs());
     };
     warm();
     auto *heartbeat = new QTimer(&app);
@@ -256,8 +267,7 @@ int main(int argc, char *argv[])
     QObject::connect(heartbeat, &QTimer::timeout, &app, warm);
     heartbeat->start();
 
-    netMon->setPollIntervalMs(pollMs);
-    connMon->setPollIntervalMs(pollMs);
+    // Poll interval already applied to the monitors via setPollApplier above.
     netMon->start();
     connMon->start();
 

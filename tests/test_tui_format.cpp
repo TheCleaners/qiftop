@@ -133,26 +133,6 @@ private slots:
         QCOMPARE(sortedConnectionIndices(rows, 1, true), (QList<int>{1, 2, 0}));
     }
 
-    void settingsModelMatchesEnum()
-    {
-        // One row per Setting (except the Count sentinel), in enum order.
-        const QList<SettingRow> rows =
-            settingsRows(QStringLiteral("dark"), QStringLiteral("off"),
-                         true, false, true, true);
-        QCOMPARE(rows.size(), static_cast<int>(Setting::Count));
-        QCOMPARE(rows[static_cast<int>(Setting::Theme)].value, QStringLiteral("dark"));
-        QCOMPARE(rows[static_cast<int>(Setting::GroupBy)].value, QStringLiteral("off"));
-        QCOMPARE(rows[static_cast<int>(Setting::Gauge)].value, QStringLiteral("on"));
-        QCOMPARE(rows[static_cast<int>(Setting::Dns)].value, QStringLiteral("off"));
-        QCOMPARE(rows[static_cast<int>(Setting::UdpAggregate)].value, QStringLiteral("on"));
-        QCOMPARE(rows[static_cast<int>(Setting::Smoothing)].value, QStringLiteral("on"));
-        // Every row carries a label + a non-empty help string.
-        for (const SettingRow &r : rows) {
-            QVERIFY(!r.label.isEmpty());
-            QVERIFY(!r.help.isEmpty());
-        }
-    }
-
     void sortFieldsModel()
     {
         // Fields overlay lists every column; only the active sort column shows

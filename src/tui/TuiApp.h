@@ -2,6 +2,8 @@
 
 #include <QObject>
 
+#include <functional>
+
 #include "tui/Screen.h"
 #include "tui/TuiFormat.h"
 #include "util/ConnectionFilter.h"
@@ -36,10 +38,27 @@ public:
     // Schedule a throttled repaint (coalesces bursts of change signals).
     void requestRedraw();
 
+    // Install a callback that applies a new poll interval (ms) to the data
+    // source (the monitors live in main). Applies the current interval once.
+    void setPollApplier(std::function<void(int)> fn);
+    [[nodiscard]] int pollIntervalMs() const { return m_pollMs; }
+
 private:
+    // A single declarative, runtime-adjustable preference. value() renders the
+    // current value; adjust(dir) changes it (dir = -1 left, +1 right/activate).
+    // This keeps the settings modal extensible — add a row, not a switch case.
+    struct SettingItem {
+        QString                  label;
+        QString                  help;
+        std::function<QString()> value;
+        std::function<void(int)> adjust;
+    };
+
     void  doRedraw();
     Frame buildFrame();
     void  buildModal(Frame &f) const;          // fill f.modal for the open overlay
+    void  buildSettingItems();                 // (re)build the declarative list
+    void  applyPollInterval();                 // push m_pollMs to agg/timer/source
     void  handleSettingsKey(int key);          // key routing while Settings open
     void  handleFieldsKey(int key);            // key routing while Fields open
     void  handleInfoKey(int key);              // key routing while Help/About open
@@ -78,7 +97,10 @@ private:
     bool m_udpAggregate   = true;
     bool m_smoothing      = true;
     GroupBy m_groupBy     = GroupBy::None;
+    bool m_directionColors = true;   // colour rows by flow direction
     int  m_pollMs         = 1000;
+    std::function<void(int)> m_applyPollMs;  // set by main (owns the monitors)
+    QList<SettingItem> m_settings;           // declarative settings model
 
     // Pause: freeze live updates so the snapshot can be read.
     bool m_paused = false;
