@@ -702,7 +702,15 @@ QVariantList ConnectionGroupProxy::groupChips(const Group &g) const
             chips << chip(c.process.comm, "process");
         if (c.process.pid > 0 && m_showGroupDetails) {
             chips << chip(QStringLiteral("pid %1").arg(c.process.pid), "pid");
-            const QString user = qiftop::platform::userNameForUid(c.process.uid);
+            // Only resolve uid → name for HOST processes. A container's
+            // uid maps to ITS /etc/passwd, not the host's — resolving it
+            // against the host db would show a nonsensical (or wrong)
+            // name. Show the bare numeric uid for container flows.
+            const bool inContainer = !c.container.runtime.isEmpty()
+                                     || !c.container.id.isEmpty();
+            const QString user = inContainer
+                ? QString()
+                : qiftop::platform::userNameForUid(c.process.uid);
             chips << chip(user.isEmpty()
                               ? QStringLiteral("uid %1").arg(c.process.uid)
                               : QStringLiteral("%1 (uid %2)").arg(user).arg(c.process.uid),
@@ -768,7 +776,13 @@ QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
             if (!c.process.comm.isEmpty())
                 lines << QStringLiteral("Process: %1").arg(c.process.comm);
             lines << QStringLiteral("PID: %1").arg(c.process.pid);
-            const QString user = qiftop::platform::userNameForUid(c.process.uid);
+            // Host-only uid→name resolution (see groupChips): a
+            // container's uid is meaningless against the host passwd db.
+            const bool inContainer = !c.container.runtime.isEmpty()
+                                     || !c.container.id.isEmpty();
+            const QString user = inContainer
+                ? QString()
+                : qiftop::platform::userNameForUid(c.process.uid);
             lines << (user.isEmpty()
                           ? QStringLiteral("User: uid %1").arg(c.process.uid)
                           : QStringLiteral("User: %1 (uid %2)")

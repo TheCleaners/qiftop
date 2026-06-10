@@ -78,6 +78,44 @@ private slots:
         Settings s;
         QCOMPARE(s.rateSmoothingMs(), 0);
     }
+
+    void chip_colors_roundtrip_and_reset()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        redirectSettings(dir.path());
+
+        {
+            Settings s;
+            // Defaults present on a fresh store.
+            QCOMPARE(s.chipColorPrimary(), Settings::defaultChipColorPrimary());
+
+            s.setChipColorPrimary(QStringLiteral("#123456"));
+            s.setChipColorUser(QStringLiteral("#abcdef"));
+            // Invalid hex is rejected (value unchanged).
+            const QString beforeId = s.chipColorId();
+            s.setChipColorId(QStringLiteral("not-a-color"));
+            QCOMPARE(s.chipColorId(), beforeId);
+        }
+        {
+            // Persisted across reconstruction.
+            Settings s;
+            QCOMPARE(s.chipColorPrimary(), QStringLiteral("#123456"));
+            QCOMPARE(s.chipColorUser(),    QStringLiteral("#abcdef"));
+
+            // Reset restores all four defaults.
+            s.resetChipColors();
+            QCOMPARE(s.chipColorPrimary(), Settings::defaultChipColorPrimary());
+            QCOMPARE(s.chipColorUser(),    Settings::defaultChipColorUser());
+            QCOMPARE(s.chipColorId(),      Settings::defaultChipColorId());
+            QCOMPARE(s.chipColorDetail(),  Settings::defaultChipColorDetail());
+        }
+        {
+            // Reset persisted too.
+            Settings s;
+            QCOMPARE(s.chipColorPrimary(), Settings::defaultChipColorPrimary());
+        }
+    }
 };
 
 QTEST_MAIN(TestSettingsMigration)

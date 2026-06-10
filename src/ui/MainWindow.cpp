@@ -774,6 +774,14 @@ void MainWindow::applySettingsToUi()
             m_connFlowDelegate->setColorCodeEnabled(nowOn);
             if (m_connView) m_connView->viewport()->update();
         }
+        // Push the configurable group-header chip palette.
+        m_connFlowDelegate->setChipPalette(ChipPalette{
+            QColor(m_settings->chipColorPrimary()),
+            QColor(m_settings->chipColorUser()),
+            QColor(m_settings->chipColorId()),
+            QColor(m_settings->chipColorDetail()),
+        });
+        if (m_connView) m_connView->viewport()->update();
     }
     applyConnIfaceFilterToProxy();
     updateWindowTitle();

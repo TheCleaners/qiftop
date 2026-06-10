@@ -85,6 +85,23 @@ public:
     [[nodiscard]] bool showContainerColumn() const { return m_showContainerColumn; }
     [[nodiscard]] bool showContainerChainInTooltip() const { return m_showContainerChainInTooltip; }
     [[nodiscard]] bool showGroupHeaderDetails() const { return m_showGroupHeaderDetails; }
+
+    // --- Group-header chip palette (configurable; distinct from the
+    //     peer src/dst colours used in the flow column). Four semantic
+    //     roles map the chip kinds: primary (process/container/iface
+    //     name), user (uid→name), id (container id), detail (pid /
+    //     cmdline / flow count). Stored + returned as #rrggbb strings
+    //     (Settings stays Qt6::Core-only — the UI converts to QColor);
+    //     defaults are deliberately off the blue/amber peer palette. ---
+    [[nodiscard]] QString chipColorPrimary() const { return m_chipColorPrimary; }
+    [[nodiscard]] QString chipColorUser()    const { return m_chipColorUser; }
+    [[nodiscard]] QString chipColorId()      const { return m_chipColorId; }
+    [[nodiscard]] QString chipColorDetail()  const { return m_chipColorDetail; }
+
+    [[nodiscard]] static QString defaultChipColorPrimary() { return QStringLiteral("#b58bff"); } // violet
+    [[nodiscard]] static QString defaultChipColorUser()    { return QStringLiteral("#5fd0c5"); } // teal
+    [[nodiscard]] static QString defaultChipColorId()      { return QStringLiteral("#e08ab8"); } // rose
+    [[nodiscard]] static QString defaultChipColorDetail()  { return QStringLiteral("#9aa0a6"); } // grey
     [[nodiscard]] int  throughputWindowSecs() const          { return m_throughputWindowSecs; }
     // EMA time constant (milliseconds) for smoothing per-connection
     // instantaneous rx/tx rates. 0 = no smoothing (raw per-tick deltas).
@@ -146,6 +163,13 @@ public:
     void setShowContainerChainInTooltip(bool v);
     void setShowGroupHeaderDetails(bool v);
 
+    void setChipColorPrimary(const QString &hex);
+    void setChipColorUser(const QString &hex);
+    void setChipColorId(const QString &hex);
+    void setChipColorDetail(const QString &hex);
+    // Restore all four chip colours to their defaults (single changed()).
+    void resetChipColors();
+
 signals:
     void changed();
 
@@ -185,4 +209,8 @@ private:
     // attribution detail inline on the group header rows (pid, user,
     // container id, etc). On by default — it's the point of grouping.
     bool m_showGroupHeaderDetails        = true;
+    QString m_chipColorPrimary = defaultChipColorPrimary();
+    QString m_chipColorUser    = defaultChipColorUser();
+    QString m_chipColorId      = defaultChipColorId();
+    QString m_chipColorDetail  = defaultChipColorDetail();
 };

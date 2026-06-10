@@ -2,6 +2,7 @@
 #include "config/Settings.h"
 
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -348,6 +349,68 @@ SettingsDialog::SettingsDialog(Settings *settings,
 
     addNavPage(trayTab, tr("Tray"));
 
+    // --- Colors tab (group-header chip palette) ---
+    QFormLayout *colorsForm = nullptr;
+    QWidget     *colorsTab  = makeFormTab(colorsForm);
+
+    auto *colorsHeader = new QLabel(tr(
+        "<b>Grouping header colours</b><br>"
+        "<span style=\"color:gray;\">Colours for the process / container "
+        "info shown on group header rows. Deliberately separate from the "
+        "peer (source/destination) colours used in the Flow column.</span>"));
+    colorsHeader->setWordWrap(true);
+    colorsForm->addRow(colorsHeader);
+
+    m_chipPrimary = QColor(m_settings->chipColorPrimary());
+    m_chipUser    = QColor(m_settings->chipColorUser());
+    m_chipId      = QColor(m_settings->chipColorId());
+    m_chipDetail  = QColor(m_settings->chipColorDetail());
+
+    // Builds a swatch button bound to a working colour member. Clicking
+    // opens a colour picker; the swatch repaints to the chosen colour.
+    const auto makeSwatch = [this](QColor *working) {
+        auto *btn = new QPushButton;
+        btn->setFixedWidth(120);
+        const auto refresh = [btn, working] {
+            btn->setText(working->name());
+            const bool dark = working->lightness() < 128;
+            btn->setStyleSheet(QStringLiteral(
+                "background-color:%1; color:%2;")
+                .arg(working->name(), dark ? QStringLiteral("white")
+                                           : QStringLiteral("black")));
+        };
+        refresh();
+        connect(btn, &QPushButton::clicked, this, [this, working, refresh] {
+            const QColor c = QColorDialog::getColor(
+                *working, this, tr("Choose colour"));
+            if (c.isValid()) { *working = c; refresh(); }
+        });
+        // Stash the refresh so Reset can repaint every swatch.
+        m_chipSwatchRefreshers.append(refresh);
+        return btn;
+    };
+
+    m_chipPrimaryBtn = makeSwatch(&m_chipPrimary);
+    colorsForm->addRow(tr("Process / Container / Interface:"), m_chipPrimaryBtn);
+    m_chipUserBtn = makeSwatch(&m_chipUser);
+    colorsForm->addRow(tr("User:"), m_chipUserBtn);
+    m_chipIdBtn = makeSwatch(&m_chipId);
+    colorsForm->addRow(tr("Container ID:"), m_chipIdBtn);
+    m_chipDetailBtn = makeSwatch(&m_chipDetail);
+    colorsForm->addRow(tr("PID / cmdline / count:"), m_chipDetailBtn);
+
+    auto *resetChips = new QPushButton(tr("Reset to defaults"));
+    connect(resetChips, &QPushButton::clicked, this, [this] {
+        m_chipPrimary = Settings::defaultChipColorPrimary();
+        m_chipUser    = Settings::defaultChipColorUser();
+        m_chipId      = Settings::defaultChipColorId();
+        m_chipDetail  = Settings::defaultChipColorDetail();
+        for (const auto &r : std::as_const(m_chipSwatchRefreshers)) r();
+    });
+    colorsForm->addRow(QString(), resetChips);
+
+    addNavPage(colorsTab, tr("Colors"));
+
     // --- Buttons ---
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply);
@@ -393,6 +456,10 @@ void SettingsDialog::apply()
     m_settings->setShowContainerColumn(m_showContainerColumnBox->isChecked());
     m_settings->setShowContainerChainInTooltip(m_showChainInTooltipBox->isChecked());
     m_settings->setShowGroupHeaderDetails(m_showGroupHeaderDetailsBox->isChecked());
+    m_settings->setChipColorPrimary(m_chipPrimary.name());
+    m_settings->setChipColorUser(m_chipUser.name());
+    m_settings->setChipColorId(m_chipId.name());
+    m_settings->setChipColorDetail(m_chipDetail.name());
     m_settings->setCloseToTray(m_closeToTrayBox->isChecked());
     m_settings->setStartOnLogin(m_startOnLoginBox->isChecked());
 }

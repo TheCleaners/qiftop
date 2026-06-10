@@ -2,6 +2,20 @@
 
 #include "util/Autostart.h"
 
+#include <QRegularExpression>
+
+namespace {
+// Validate a #rrggbb / #rgb / #aarrggbb hex colour string WITHOUT
+// pulling QtGui (QColor) into config/ — Settings must stay Qt6::Core
+// only so the lightweight test targets link cleanly.
+bool isHexColor(const QString &s)
+{
+    static const QRegularExpression re(
+        QStringLiteral("^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"));
+    return re.match(s).hasMatch();
+}
+} // namespace
+
 namespace {
 constexpr auto kPollIntervalMs   = "monitor/pollIntervalMs";
 constexpr auto kShowLoopback     = "display/showLoopback";
@@ -31,6 +45,10 @@ constexpr auto kShowProcessColumn         = "connections/showProcessColumn";
 constexpr auto kShowContainerColumn       = "connections/showContainerColumn";
 constexpr auto kShowContainerChainInTooltip = "connections/showContainerChainInTooltip";
 constexpr auto kShowGroupHeaderDetails      = "connections/showGroupHeaderDetails";
+constexpr auto kChipColorPrimary = "connections/chipColorPrimary";
+constexpr auto kChipColorUser    = "connections/chipColorUser";
+constexpr auto kChipColorId      = "connections/chipColorId";
+constexpr auto kChipColorDetail  = "connections/chipColorDetail";
 } // namespace
 
 Settings::Settings(QObject *parent)
@@ -100,6 +118,15 @@ void Settings::load()
                                                   m_showContainerChainInTooltip).toBool();
     m_showGroupHeaderDetails = m_store.value(kShowGroupHeaderDetails,
                                              m_showGroupHeaderDetails).toBool();
+
+    const auto loadColor = [this](const char *key, const QString &def) {
+        const QString s = m_store.value(QString::fromLatin1(key), def).toString();
+        return isHexColor(s) ? s : def;
+    };
+    m_chipColorPrimary = loadColor(kChipColorPrimary, defaultChipColorPrimary());
+    m_chipColorUser    = loadColor(kChipColorUser,    defaultChipColorUser());
+    m_chipColorId      = loadColor(kChipColorId,      defaultChipColorId());
+    m_chipColorDetail  = loadColor(kChipColorDetail,  defaultChipColorDetail());
 }
 
 void Settings::store(const char *key, const QVariant &value)
@@ -348,5 +375,50 @@ void Settings::setShowGroupHeaderDetails(bool v)
     if (v == m_showGroupHeaderDetails) return;
     m_showGroupHeaderDetails = v;
     store(kShowGroupHeaderDetails, v);
+    emit changed();
+}
+
+void Settings::setChipColorPrimary(const QString &hex)
+{
+    if (!isHexColor(hex) || hex == m_chipColorPrimary) return;
+    m_chipColorPrimary = hex;
+    store(kChipColorPrimary, hex);
+    emit changed();
+}
+
+void Settings::setChipColorUser(const QString &hex)
+{
+    if (!isHexColor(hex) || hex == m_chipColorUser) return;
+    m_chipColorUser = hex;
+    store(kChipColorUser, hex);
+    emit changed();
+}
+
+void Settings::setChipColorId(const QString &hex)
+{
+    if (!isHexColor(hex) || hex == m_chipColorId) return;
+    m_chipColorId = hex;
+    store(kChipColorId, hex);
+    emit changed();
+}
+
+void Settings::setChipColorDetail(const QString &hex)
+{
+    if (!isHexColor(hex) || hex == m_chipColorDetail) return;
+    m_chipColorDetail = hex;
+    store(kChipColorDetail, hex);
+    emit changed();
+}
+
+void Settings::resetChipColors()
+{
+    m_chipColorPrimary = defaultChipColorPrimary();
+    m_chipColorUser    = defaultChipColorUser();
+    m_chipColorId      = defaultChipColorId();
+    m_chipColorDetail  = defaultChipColorDetail();
+    store(kChipColorPrimary, m_chipColorPrimary);
+    store(kChipColorUser,    m_chipColorUser);
+    store(kChipColorId,      m_chipColorId);
+    store(kChipColorDetail,  m_chipColorDetail);
     emit changed();
 }

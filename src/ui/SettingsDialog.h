@@ -1,12 +1,17 @@
 #pragma once
 
+#include <QColor>
 #include <QDialog>
+#include <QList>
+
+#include <functional>
 
 class Settings;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QListWidget;
+class QPushButton;
 class QSpinBox;
 class QStackedWidget;
 
@@ -55,4 +60,12 @@ private:
     // Left-hand category navigation (KiCad/VSCode style) → page stack.
     QListWidget    *m_navList = nullptr;
     QStackedWidget *m_stack   = nullptr;
+
+    // Group-header chip palette working copies + their swatch buttons.
+    QColor m_chipPrimary, m_chipUser, m_chipId, m_chipDetail;
+    QPushButton *m_chipPrimaryBtn = nullptr;
+    QPushButton *m_chipUserBtn    = nullptr;
+    QPushButton *m_chipIdBtn      = nullptr;
+    QPushButton *m_chipDetailBtn  = nullptr;
+    QList<std::function<void()>> m_chipSwatchRefreshers;
 };
