@@ -36,6 +36,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTabWidget>
 #include <QToolButton>
 #include <QTreeView>
 
@@ -867,6 +868,182 @@ private slots:
         QTest::qWait(30);
         QVERIFY(connView->isColumnHidden(rxMax));
         QVERIFY(connView->isColumnHidden(txMax));
+    }
+
+    // ---- batch 4 (remaining feasible scenarios) -------------------------
+
+    // #12 udpAggregateByPeerCollapsesEphemeralPorts. Three outbound UDP
+    // flows from distinct ephemeral local ports to the SAME peer:53
+    // collapse into one aggregated row (local port masked to *) when
+    // the setting is on; toggling off splits them back to three.
+    // Direction is set explicitly to Outbound so the test doesn't
+    // depend on this host's ephemeral-port range (inferDirection).
+    void udpAggregateByPeerCollapsesEphemeralPorts()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        settings.setUdpAggregateByPeer(true);
+        // Zero stale retention so the aggregated row (local port masked
+        // to 0) prunes immediately when we toggle aggregation off —
+        // otherwise it lingers as a stale row and inflates the count.
+        settings.setConnectionStaleRetentionSecs(0);
+        settings.setConnectionStaleRetentionSecsUdp(0);
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(connView);
+
+        const auto udp = [](quint16 lport) {
+            return mkFlow("eth0", "10.0.0.10", lport, "8.8.8.8", 53,
+                          L4Proto::Udp, 100, 50, Direction::Outbound);
+        };
+        connMon.emitSnapshot({udp(40000), udp(40001), udp(40002)});
+        QTest::qWait(50);
+        // Aggregated: one row for the 8.8.8.8:53 peer.
+        QCOMPARE(connView->model()->rowCount(), 1);
+
+        // Turn aggregation off → three distinct ephemeral-port rows.
+        settings.setUdpAggregateByPeer(false);
+        QTest::qWait(20);
+        connMon.emitSnapshot({udp(40000), udp(40001), udp(40002)});
+        QTest::qWait(50);
+        QCOMPARE(connView->model()->rowCount(), 3);
+    }
+
+    // #13 escClearsFilterAndCtrlFFocuses. Esc in the filter bar is a
+    // WidgetShortcut (reliable offscreen once the widget has focus).
+    // Ctrl+F is an ApplicationShortcut that switches to the Connections
+    // tab and focuses the bar — that half needs an active window, so
+    // it's gated on qWaitForWindowActive and skipped (not failed) when
+    // the offscreen platform won't activate.
+    void escClearsFilterAndCtrlFFocuses()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        w.selectConnectionsTab();
+        QTest::qWait(20);
+
+        auto *edit = w.findChild<QLineEdit*>(QStringLiteral("connFilterEdit"));
+        QVERIFY(edit);
+
+        // Esc-clears half: give the bar focus, type, press Esc.
+        edit->setFocus();
+        QTest::keyClicks(edit, QStringLiteral("proto:tcp"));
+        QTest::qWait(20);
+        QCOMPARE(edit->text(), QStringLiteral("proto:tcp"));
+        QTest::keyClick(edit, Qt::Key_Escape);
+        QTest::qWait(20);
+        QVERIFY2(edit->text().isEmpty(), "Esc did not clear the filter bar");
+
+        // Ctrl+F half (best-effort): only assert if the window actually
+        // became active under the offscreen platform.
+        w.activateWindow();
+        if (QTest::qWaitForWindowActive(&w, 500)) {
+            edit->clearFocus();
+            // Switch to the Interfaces tab first so we can prove Ctrl+F
+            // brings us back to Connections AND focuses the bar.
+            if (auto *tabs = w.findChild<QTabWidget*>(QStringLiteral("mainTabs")))
+                tabs->setCurrentIndex(0);
+            QTest::qWait(20);
+            QTest::keyClick(&w, Qt::Key_F, Qt::ControlModifier);
+            QTest::qWait(20);
+            QVERIFY(edit->hasFocus());
+        } else {
+            QWARN("offscreen platform did not activate window; "
+                  "skipping Ctrl+F focus assertion");
+        }
+    }
+
+    // #16 selectConnectionsTabSwitchesTab. The -i CLI path and the
+    // Ctrl+2 shortcut both route through selectConnectionsTab(), a
+    // public method. Drive it directly (no shortcut-activation caveat)
+    // and assert the tab actually changed.
+    void selectConnectionsTabSwitchesTab()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *tabs = w.findChild<QTabWidget*>(QStringLiteral("mainTabs"));
+        QVERIFY(tabs);
+
+        // Default is the Interfaces tab (index 0).
+        tabs->setCurrentIndex(0);
+        QTest::qWait(20);
+        QCOMPARE(tabs->currentIndex(), 0);
+
+        w.selectConnectionsTab();
+        QTest::qWait(20);
+        QCOMPARE(tabs->tabText(tabs->currentIndex()), QStringLiteral("Connections"));
+    }
+
+    // #14 agentCadenceTintAndSuffixRoundTrip. notifyAgentCadence appends
+    // a " — paused" / " — slowed (N ms)" suffix to the backend status
+    // label and tints it; returning to nominal cadence strips both. The
+    // suffix logic re-parses the label by searching for " — " — string
+    // munging that silently corrupts if it ever drifts. setBackendInfo
+    // must reset the tint.
+    void agentCadenceTintAndSuffixRoundTrip()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.setBackendInfo(true, QStringLiteral("0.5"),
+                         QStringList{QStringLiteral("cadence-signal")});
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *label = w.findChild<QLabel*>(QStringLiteral("statusBackend"));
+        QVERIFY(label);
+        const QString base = label->text();
+        QVERIFY(base.contains(QStringLiteral("agent")));
+        QVERIFY(label->styleSheet().isEmpty());
+
+        // Paused: red tint + " — paused" suffix appended to the base.
+        w.notifyAgentCadence(0);
+        QVERIFY(label->text().startsWith(base));
+        QVERIFY(label->text().contains(QStringLiteral("paused")));
+        QVERIFY(!label->styleSheet().isEmpty());
+
+        // Slowed: amber tint + "slowed (N ms)" suffix; base preserved
+        // (the suffix from the prior call must be stripped, not stacked).
+        w.notifyAgentCadence(2000);
+        QVERIFY(label->text().startsWith(base));
+        QVERIFY(label->text().contains(QStringLiteral("slowed")));
+        QVERIFY(!label->text().contains(QStringLiteral("paused")));
+
+        // Nominal: suffix + tint cleared, back to exactly the base text.
+        w.notifyAgentCadence(1000);
+        QCOMPARE(label->text(), base);
+        QVERIFY(label->styleSheet().isEmpty());
+
+        // setBackendInfo resets a leftover tint even mid-degradation.
+        w.notifyAgentCadence(0);
+        QVERIFY(!label->styleSheet().isEmpty());
+        w.setBackendInfo(true, QStringLiteral("0.5"), QStringList{});
+        QVERIFY(label->styleSheet().isEmpty());
     }
 };
 
