@@ -469,6 +469,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `attribution_podman` (Tier-2) | Sibling of `attribution_docker` using rootful podman + netavark; exercises the `libpod-<id>.scope` cgroup hierarchy that the docker path never produces. SKIPs cleanly on hosts where rootful podman can't start a container (e.g. logind rlimit-delegation quirks). |
 | `attribution_k3d` (Tier-2) | k3s-in-docker (k3d). Exercises the **nested** container chain (`docker → kubernetes → containerd`, depth 3) — the leaf-wins segment-walk has to land on the innermost containerd CID, not on the outer k3s node container. Local-only (Vagrant); not in CI (cold k3d image pull is ~3–4 min, the chain shape is already pinned by Tier-1 fixtures). |
 | `attribution_k8s` (Tier-2) | "Naked" k8s via **k0s --single** (single-binary, no docker wrapper). Distinguishing assertion vs. k3d: chain depth is exactly 2 (`kubernetes → containerd`) and the JSON MUST NOT contain `"runtime":"docker"`. Catches phantom-wrapper bugs in `classifyPathChain`. Local-only (Vagrant). |
+| `attribution_systemd_dbus` (Tier-2) | The ONLY runner that exercises the deployed **systemd unit + DBus policy** instead of the in-process probe. Installs the freshly-built `qiftop-agent` component (`cmake --install --component qiftop-agent --prefix /usr`), starts it under systemd, runs a docker container holding ONE long-lived external flow (`sleep 3600 \| nc <host> 22`), then asserts over DBus (`sudo busctl … GetConnections`, JSON parsed in `run-systemd-dbus.sh`) that the flow attributes to `runtime=docker` + CID prefix. Guards the sandbox surface (`RestrictNamespaces`, `CapabilityBoundingSet`) that the probe runners bypass — e.g. the `RestrictNamespaces=yes` regression in §8a rule 5. DESTRUCTIVE / VM-CI-only (needs passwordless sudo + `QIFTOP_BUILD_DIR`). Run via `scripts/local-integration.sh --runtime systemd-dbus`. See §6.5b for the container-flow-generation wisdom it encodes. |
 
 ### 6.3 Gaps worth filling
 
@@ -608,6 +609,81 @@ remember when iterating:
   fighting the rules. Don't be tempted to flush iptables manually —
   netavark's chain references go stale and you'll spend an hour
   debugging zombie veths.
+
+### 6.5b The systemd + DBus runner, and container-flow generation wisdom
+
+`tests/integration/attribution/runners/run-systemd-dbus.sh`
+(ctest: `attribution_systemd_dbus`, label `attribution-integration`) is
+the **only** test that exercises the agent the way users actually run it:
+installed as a systemd unit, sandboxed, queried over the system DBus.
+Every other attribution runner drives `qiftop-attribution-probe`, which
+builds the resolver chain *in-process* as root with no sandbox — so it
+structurally cannot catch regressions in the unit's hardening
+directives, capability set, or the DBus policy. The motivating bug:
+`RestrictNamespaces=yes` silently seccomp-blocked `setns(CLONE_NEWNET)`
+so the systemd agent attributed every container flow as host, while the
+probe passed (§8a rule 5). The runner installs the freshly-built
+`qiftop-agent` component with `cmake --install --component qiftop-agent
+--prefix /usr` (the `/usr` prefix is mandatory — the unit's
+`ExecStart=/usr/bin/qiftop-agent` is absolute and won't pick up a
+`/usr/local` install), restarts the unit, runs a container, and asserts
+attribution over `busctl ... GetConnections`. DESTRUCTIVE + needs
+passwordless sudo ⇒ VM/CI-only; not on default ctest. Validate in the
+Vagrant VM (`scripts/local-integration.sh --runtime systemd-dbus`), the
+authoritative venue — not on a dev box.
+
+**Generating a container flow the agent will ATTRIBUTE is the hard part,
+and most "obvious" recipes silently fail.** Attribution needs a flow
+that is BOTH (a) tracked in the host conntrack table AND (b) backed by a
+*live socket* at query time (the NetnsScanner attributes via the owning
+process's socket; a conntrack husk with no live socket is unattributable
+by design). The traps, all hit during this work:
+
+* **container → docker0 / any host-local IP** — delivered locally
+  (INPUT), so docker's `MASQUERADE` (which only fires `! -o docker0`)
+  never tracks it. Not in conntrack ⇒ the agent never sees it.
+* **container → container on the same bridge** — L2-switched, never
+  hits the netfilter forward path ⇒ not conntracked.
+* **busybox `wget https://…`** (alpine default) — no TLS support, so the
+  download never happens; the container silently falls through to its
+  fallback (`sleep`) with *no socket at all*. Use a plain-TCP generator
+  or install `ca-certificates`.
+* **`nc host port` in a reconnect loop** — each iteration is a new PID,
+  so by the time the data thread resolves the flow the socket-owning PID
+  has changed; the PID-reuse `starttime` guard (§8a rule 2) correctly
+  rejects it ⇒ `pid=0`, unattributed.
+* **detached `nc host port` with closed stdin** — busybox nc EOFs
+  immediately and exits; the container dies or the socket is gone.
+
+The recipe that works: **`sleep 3600 | nc <external-host> 22`** — the
+`sleep` keeps nc's stdin open so the single, stable-PID nc process holds
+ONE connection, and an SSH server holds the pre-auth connection for its
+LoginGraceTime (~120 s), far longer than the test. External ⇒
+masqueraded ⇒ conntracked; single long-lived process ⇒ stable socket ⇒
+attributable. Resolve the target to an IP on the host and dial the IP
+(not the name) to dodge busybox DNS flakiness and to pin the remote so
+stale husks to other round-robin IPs can't be mistaken for the flow.
+
+Two more sharp edges the runner encodes:
+
+* **`GetConnections` returns the cached `m_last`**, refreshed only on a
+  poll tick (`src/agent/ConnectionsService.cpp`). You MUST send a
+  `SetDesiredIntervalMs` cadence hint AND wait a tick before reading, or
+  you get a stale snapshot that predates your flow. The runner warms
+  *then* sleeps *then* reads.
+* **`busctl --json=short | python3 - <<'PY'` is a stdin trap**: the
+  heredoc IS python's stdin (`python3 -` reads the program from stdin),
+  so a piped JSON never reaches `sys.stdin`. Write the JSON to a temp
+  file and pass the path as `argv`.
+
+Diagnostics gotcha: the **`conntrack -L` CLI can disagree with the
+agent's `libnetfilter_conntrack` dump** on a busy host (we saw the CLI
+return nothing for docker flows the agent happily reported). Trust the
+agent's `GetConnections`, not the CLI, when deciding whether a flow is
+visible. Also note that **hammering the agent with many rapid
+restarts degrades conntrack/netns state** enough to make attribution
+flap — another reason this runner belongs in a disposable VM, one clean
+boot per run.
 
 ---
 

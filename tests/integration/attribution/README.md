@@ -19,6 +19,39 @@ against real runtimes.
 | podman | **Shipped** (`runners/run-podman.sh` — rootful only; rootless+pasta defeats attribution by holding the flow in userspace) |
 | k3d    | Planned                                                                           |
 | cri-o  | Planned                                                                           |
+| systemd-dbus | **Shipped** (`runners/run-systemd-dbus.sh`) — see "Systemd + DBus runner" below |
+
+### Systemd + DBus runner
+
+Every runner above drives `qiftop-attribution-probe`, which builds the
+resolver chain **in-process** — no systemd unit, no sandbox. That cannot
+catch regressions in the agent's *execution environment*: systemd
+hardening directives, the capability bounding set, or the DBus policy.
+
+`run-systemd-dbus.sh` closes that gap. It installs the freshly-built
+`qiftop-agent` component (prefix `/usr`, so the binary matches the unit's
+`ExecStart=/usr/bin/qiftop-agent`), starts it under systemd, runs a docker
+container that opens an outbound flow, then queries the agent **over DBus**
+(`sudo busctl … GetConnections`) and asserts the flow attributes to
+`runtime=docker` + the right CID prefix.
+
+This is the only test that exercises the systemd sandbox. It guards
+against bugs like the `RestrictNamespaces=yes` regression (AGENTS.md
+§8a rule 5) that silently seccomp-blocked `NetnsScanner`'s
+`setns(CLONE_NEWNET)` — invisible to the in-process probe (run directly
+as root, no sandbox) yet broke container attribution for every real
+user. It **complements, not replaces** the probe runners: Tier-1
+fixtures protect the parsers, the probe runners protect the resolver
+chain, and this runner protects the deployed unit.
+
+DESTRUCTIVE (installs system files, (re)starts a unit): VM/CI-only. It
+refuses to run without passwordless sudo and needs `QIFTOP_BUILD_DIR`
+pointing at a build dir with the `qiftop-agent` target built. Run it via:
+
+```
+scripts/local-integration.sh --runtime systemd-dbus   # inside the Vagrant VM
+scripts/integration-test.sh   --runtime systemd-dbus   # on a disposable host
+```
 
 ## Layout
 

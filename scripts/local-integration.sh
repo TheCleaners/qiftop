@@ -84,6 +84,7 @@ if [[ -z $RUNTIME ]]; then
 else
     case "$RUNTIME" in
         docker|podman|k3d|k8s) CTEST_FILTER="attribution_${RUNTIME}\$" ;;
+        systemd-dbus|systemd_dbus) CTEST_FILTER='attribution_systemd_dbus$' ;;
         *) echo "unknown runtime: $RUNTIME" >&2; exit 2 ;;
     esac
 fi
@@ -100,7 +101,7 @@ vagrant ssh -c "set -euo pipefail
         -DQIFTOP_BUILD_TESTS=ON \\
         -DQIFTOP_BUILD_INTEGRATION_TESTS=OFF \\
         -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON
-    cmake --build build --target qiftop-attribution-probe -j
+    cmake --build build --target qiftop-attribution-probe qiftop-agent -j
     sudo --preserve-env=PATH ctest --test-dir build \\
         -R '$CTEST_FILTER' --output-on-failure $CTEST_VERBOSE
 "

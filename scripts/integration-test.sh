@@ -38,17 +38,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$RUNTIME" in
-    docker|podman|k3d|k8s) ;;
+    docker|podman|k3d|k8s|systemd-dbus) ;;
     crio)
-        echo "runtime '$RUNTIME' planned but not yet implemented; supported: docker, podman, k3d, k8s" >&2
+        echo "runtime '$RUNTIME' planned but not yet implemented; supported: docker, podman, k3d, k8s, systemd-dbus" >&2
         exit 2 ;;
     *) echo "unknown runtime '$RUNTIME'" >&2; exit 2 ;;
 esac
 
 # `k8s` is satisfied by `k0s` on the host; the binary on PATH check below
 # uses the runner-side tool name, so map and skip the host check for it.
+# `systemd-dbus` brings up a docker container but also needs systemctl/busctl.
 HOST_TOOL="$RUNTIME"
 if [[ "$RUNTIME" == "k8s" ]]; then HOST_TOOL="k0s"; fi
+if [[ "$RUNTIME" == "systemd-dbus" ]]; then HOST_TOOL="docker"; fi
 if ! command -v "$HOST_TOOL" >/dev/null 2>&1; then
     echo "$HOST_TOOL not in PATH" >&2; exit 2
 fi
@@ -63,10 +65,17 @@ cmake -S . -B "$BUILD_DIR" \
     -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON \
     ${VERBOSE:+--log-level=VERBOSE}
 
-echo ">> building qiftop-attribution-probe"
-cmake --build "$BUILD_DIR" --target qiftop-attribution-probe -j"$(nproc)"
+# The systemd-dbus runner installs + drives the real qiftop-agent unit, so
+# it needs that target built (not the in-process probe). Build both to keep
+# the invocation uniform.
+BUILD_TARGETS=(qiftop-attribution-probe)
+if [[ "$RUNTIME" == "systemd-dbus" ]]; then BUILD_TARGETS+=(qiftop-agent); fi
+echo ">> building ${BUILD_TARGETS[*]}"
+cmake --build "$BUILD_DIR" --target "${BUILD_TARGETS[@]}" -j"$(nproc)"
 
-CTEST_ARGS=(--test-dir "$BUILD_DIR" -R "attribution_${RUNTIME}" --output-on-failure)
+# ctest test names use underscores; the runtime selector uses hyphens.
+CTEST_NAME="attribution_${RUNTIME//-/_}"
+CTEST_ARGS=(--test-dir "$BUILD_DIR" -R "$CTEST_NAME" --output-on-failure)
 if [[ $VERBOSE -eq 1 ]]; then CTEST_ARGS+=(-V); fi
 
 if [[ $EUID -ne 0 ]]; then

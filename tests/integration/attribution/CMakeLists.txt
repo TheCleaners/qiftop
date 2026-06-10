@@ -56,3 +56,20 @@ foreach(runtime docker podman k3d k8s)
         SKIP_RETURN_CODE 77
     )
 endforeach()
+
+# Systemd + DBus end-to-end runner. Unlike the probe runners above, this one
+# installs the freshly-built qiftop-agent component, starts it under systemd,
+# and queries it over DBus — so it exercises the unit's sandbox directives
+# (RestrictNamespaces, CapabilityBoundingSet) and the DBus policy, which the
+# in-process probe deliberately bypasses. Needs the qiftop-agent target built
+# (local-integration.sh / integration-test.sh build it before invoking ctest).
+add_test(
+    NAME    attribution_systemd_dbus
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/runners/run-systemd-dbus.sh
+)
+set_tests_properties(attribution_systemd_dbus PROPERTIES
+    LABELS "attribution-integration"
+    ENVIRONMENT "QIFTOP_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    TIMEOUT 120
+    SKIP_RETURN_CODE 77
+)
