@@ -23,6 +23,7 @@
 #include "util/Units.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QClipboard>
 #include <QCloseEvent>
@@ -692,6 +693,37 @@ void MainWindow::setupMenuAndToolbar()
     viewMenu->addSeparator();
     viewMenu->addAction(m_pauseAction);
     viewMenu->addSeparator();
+
+    // "Group Connections" radio submenu — mirrors the toolbar's view-mode
+    // dropdown so the grouping modes are reachable from the menu bar too
+    // (e.g. when the toolbar is hidden). Exclusive QActionGroup; each
+    // action carries its ConnectionViewMode in data(). Enabled only on the
+    // Connections tab (see updateConnIfaceFilterVisibility) and kept in
+    // sync with the dropdown / Settings via applySettingsToUi().
+    m_connViewModeMenu  = new QMenu(tr("&Group Connections"), this);
+    m_connViewModeMenu->setObjectName(QStringLiteral("connViewModeMenu"));
+    m_connViewModeGroup = new QActionGroup(this);
+    m_connViewModeGroup->setExclusive(true);
+    auto addViewModeAction = [this](const QString &text,
+                                    Settings::ConnectionViewMode mode) {
+        QAction *act = m_connViewModeMenu->addAction(text);
+        act->setCheckable(true);
+        act->setData(static_cast<int>(mode));
+        act->setChecked(m_settings->connectionViewMode() == mode);
+        m_connViewModeGroup->addAction(act);
+    };
+    addViewModeAction(tr("&Flat"),         Settings::ConnectionViewMode::Flat);
+    addViewModeAction(tr("by &Interface"), Settings::ConnectionViewMode::ByInterface);
+    addViewModeAction(tr("by &Container"), Settings::ConnectionViewMode::ByContainer);
+    addViewModeAction(tr("by &Process"),   Settings::ConnectionViewMode::ByProcess);
+    connect(m_connViewModeGroup, &QActionGroup::triggered, this,
+            [this](QAction *act) {
+                if (!act) return;
+                m_settings->setConnectionViewMode(
+                    static_cast<Settings::ConnectionViewMode>(act->data().toInt()));
+            });
+    m_connViewModeMenuAct = viewMenu->addMenu(m_connViewModeMenu);
+
     m_connIfaceFilterMenuAct = viewMenu->addMenu(m_connIfaceFilterMenu);
 
     // --- Help menu: About qiftop + About Qt -----------------------------
@@ -789,6 +821,18 @@ void MainWindow::applySettingsToUi()
             const QSignalBlocker block(m_connViewModeCombo);
             m_connViewModeCombo->setCurrentIndex(static_cast<int>(mode));
         }
+        // Same for the View → Group Connections radio submenu. setChecked on
+        // an exclusive-group action only emits toggled(), not the group's
+        // triggered(), so this doesn't loop back into setConnectionViewMode.
+        if (m_connViewModeGroup) {
+            for (QAction *act : m_connViewModeGroup->actions()) {
+                if (act->data().toInt() == static_cast<int>(mode)) {
+                    if (!act->isChecked())
+                        act->setChecked(true);
+                    break;
+                }
+            }
+        }
     }
     if (m_connFlowDelegate) {
         const bool wasOn = m_connFlowDelegate->colorCodeEnabled();
@@ -865,6 +909,8 @@ void MainWindow::updateConnIfaceFilterVisibility()
         m_connFilterToolbarAct->setVisible(onConn);
     if (m_connIfaceFilterMenuAct)
         m_connIfaceFilterMenuAct->setEnabled(onConn);
+    if (m_connViewModeMenuAct)
+        m_connViewModeMenuAct->setEnabled(onConn);
 }
 
 void MainWindow::onConnFilterTextChanged(const QString & /*text*/)

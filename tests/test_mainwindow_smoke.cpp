@@ -25,13 +25,17 @@
 // No real network, no DBus, no kernel work. Everything is
 // deterministic and finishes in <1s per scenario.
 
+#include <algorithm>
+
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QComboBox>
 #include <QFrame>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -766,6 +770,76 @@ private slots:
         QCOMPARE(combo->currentIndex(),
                  static_cast<int>(Settings::ConnectionViewMode::Flat));
         QCOMPARE(connView->indentation(), 0);
+    }
+
+    // #8c viewModeMenuMirrorsComboAndSettings. The View → "Group
+    // Connections" radio submenu must (a) expose exactly the four view
+    // modes as checkable, exclusive actions, (b) drive
+    // Settings::connectionViewMode when triggered, and (c) re-check the
+    // correct action when the mode changes by any other path (combo /
+    // Settings dialog). Guards the menu-bar mirror of the toolbar dropdown.
+    void viewModeMenuMirrorsComboAndSettings()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *menu  = w.findChild<QMenu*>(QStringLiteral("connViewModeMenu"));
+        auto *combo = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        QVERIFY(menu && combo);
+
+        // Exactly the four modes, all checkable and mutually exclusive.
+        const QList<QAction*> acts = menu->actions();
+        QCOMPARE(acts.size(), 4);
+        QList<int> modeData;
+        for (QAction *a : acts) {
+            QVERIFY(a->isCheckable());
+            modeData << a->data().toInt();
+        }
+        std::sort(modeData.begin(), modeData.end());
+        QCOMPARE(modeData, (QList<int>{
+            static_cast<int>(Settings::ConnectionViewMode::Flat),
+            static_cast<int>(Settings::ConnectionViewMode::ByInterface),
+            static_cast<int>(Settings::ConnectionViewMode::ByContainer),
+            static_cast<int>(Settings::ConnectionViewMode::ByProcess)}));
+
+        auto actionFor = [&acts](Settings::ConnectionViewMode m) -> QAction* {
+            for (QAction *a : acts)
+                if (a->data().toInt() == static_cast<int>(m)) return a;
+            return nullptr;
+        };
+        auto checkedCount = [&acts] {
+            int n = 0;
+            for (QAction *a : acts) if (a->isChecked()) ++n;
+            return n;
+        };
+
+        // Default Flat is checked, and only it.
+        QCOMPARE(checkedCount(), 1);
+        QVERIFY(actionFor(Settings::ConnectionViewMode::Flat)->isChecked());
+
+        // Triggering a menu action drives the setting + combo (menu→Settings).
+        actionFor(Settings::ConnectionViewMode::ByContainer)->trigger();
+        QTest::qWait(30);
+        QCOMPARE(settings.connectionViewMode(),
+                 Settings::ConnectionViewMode::ByContainer);
+        QCOMPARE(combo->currentIndex(),
+                 static_cast<int>(Settings::ConnectionViewMode::ByContainer));
+        QCOMPARE(checkedCount(), 1);
+        QVERIFY(actionFor(Settings::ConnectionViewMode::ByContainer)->isChecked());
+
+        // Changing the mode by another path re-checks the right action
+        // (Settings→menu sync) without leaving stale checks behind.
+        settings.setConnectionViewMode(Settings::ConnectionViewMode::ByProcess);
+        QTest::qWait(30);
+        QCOMPARE(checkedCount(), 1);
+        QVERIFY(actionFor(Settings::ConnectionViewMode::ByProcess)->isChecked());
     }
 
     // #9 pollIntervalChangePropagatesDesiredCadenceToBackends. A poll-
