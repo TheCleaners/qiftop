@@ -1,7 +1,9 @@
 #include "ConnectionsService.h"
 
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QDBusReply>
 
 #include <algorithm>
 #include <limits>
@@ -82,17 +84,39 @@ dbus::ProcessDetailsDto ConnectionsService::GetProcessDetails(uint pid)
 #ifdef BACKEND_LINUX
     const auto d = backend::linux_::readProcessDetails(static_cast<qint32>(pid));
     if (!d.valid) return out;
+    // Low-sensitivity bulk fields (already exposed via GetConnections) go to
+    // every netdev caller. The privileged symlink/argv fields (exe/cwd/cmdline)
+    // — readable only because the root agent holds CAP_SYS_PTRACE /
+    // CAP_DAC_READ_SEARCH, and able to leak cross-UID paths and secrets passed
+    // on the command line — are disclosed only to root or the PID's owner.
     out.pid              = quint32(d.pid);
     out.uid              = d.uid;
     out.comm             = d.comm;
-    out.exe              = d.exe;
-    out.cmdline          = d.cmdline;
-    out.cwd              = d.cwd;
     out.startTimeJiffies = d.startTimeJiffies;
+    if (callerMaySeeProcessFields(d.uid)) {
+        out.exe          = d.exe;
+        out.cmdline      = d.cmdline;
+        out.cwd          = d.cwd;
+    }
 #else
     Q_UNUSED(pid);
 #endif
     return out;
+}
+
+bool ConnectionsService::callerMaySeeProcessFields(quint32 targetUid) const
+{
+    // Not a D-Bus call (in-process embedding / unit test): the caller is the
+    // agent itself — no privilege boundary to enforce.
+    if (!calledFromDBus())
+        return true;
+    auto *iface = connection().interface();
+    if (!iface)
+        return false;                       // fail safe: can't verify the caller
+    const QDBusReply<uint> uid = iface->serviceUid(message().service());
+    if (!uid.isValid())
+        return false;                       // fail safe
+    return uid.value() == 0 || uid.value() == targetUid;
 }
 
 void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)

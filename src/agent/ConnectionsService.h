@@ -74,6 +74,12 @@ private slots:
     void onAccountingUnavailable(const QString &detail);
 
 private:
+    // True if the D-Bus caller may see a process's privileged detail fields
+    // (exe/cwd/cmdline): caller is root or owns the target PID. Fails safe
+    // (false) when the caller uid can't be established. In-process callers
+    // (no D-Bus context) are the agent itself and always allowed.
+    [[nodiscard]] bool callerMaySeeProcessFields(quint32 targetUid) const;
+
     ConnectionMonitor       *m_monitor = nullptr;
     IdleManager             *m_idle    = nullptr;
     backend::ProcessResolver*m_resolver= nullptr;

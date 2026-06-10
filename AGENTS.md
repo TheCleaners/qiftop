@@ -376,17 +376,24 @@ open:
   conntrack table — every flow on the host, including other users'
   source ports and peer IPs. `/proc/net/nf_conntrack` is root-only on
   most distros; the agent must not demote that.
-* **`GetProcessDetails` exposure tradeoff.** The on-demand RPC returns
-  `comm`/`exe`/`cmdline`/`cwd` for any reachable PID. `/proc/<pid>/exe`
-  and `/proc/<pid>/cwd` symlinks are normally mode-0700 (readable
-  only by the process owner and root), and `/proc/<pid>/cmdline` is
-  world-readable but can leak credentials passed on the command line.
-  The root agent reads these and ships them to any netdev-group caller.
-  We accept this as trust-equivalent on top of the existing bulk
-  pid/uid/comm exposure in `GetConnections` — netdev membership is
-  already a "network admin" capability. Distros that want a stricter
-  gate should narrow `GetProcessDetails` in the bus policy file rather
-  than disabling the whole interface.
+* **`GetProcessDetails` exposure tradeoff.** The on-demand RPC always
+  returns the low-sensitivity bulk fields (`pid`/`uid`/`comm`/
+  `startTimeJiffies`, the same already exposed per-flow by
+  `GetConnections`) to any netdev-group caller. The privileged fields —
+  `exe`/`cwd` symlink targets (normally mode-0700, readable only by the
+  process owner and root, followed here only because the agent holds
+  `CAP_SYS_PTRACE` / `CAP_DAC_READ_SEARCH`) and `cmdline` (world-readable
+  but can leak credentials passed on the command line) — are disclosed
+  **only when the D-Bus caller is root or owns the target PID**
+  (`ConnectionsService::callerMaySeeProcessFields`, via
+  `QDBusConnectionInterface::serviceUid`, fail-safe to redaction when the
+  caller uid can't be established). A netdev user inspecting their own
+  processes (and the GUI run as that user) sees everything; a netdev user
+  probing *another* user's PID gets only pid/uid/comm. This keeps the
+  attribution UX intact while not letting netdev membership alone
+  escalate into cross-UID `exe`/`cwd`/`cmdline` disclosure. Distros that
+  want an even stricter gate can still narrow `GetProcessDetails` in the
+  bus policy file.
 
 `dist/debian/postinst` ensures the `netdev` group exists and, when
 installed via `sudo apt install` / `pkexec`, automatically adds the
