@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <limits>
 
 // ncurses last (KEY_* constants); after Qt to avoid macro clashes.
 #include <ncurses.h>
@@ -209,16 +210,31 @@ void TuiApp::handleKey(int key)
         }
         break;
     case 'g':
-    case 'G':
         m_groupBy = static_cast<GroupBy>((static_cast<int>(m_groupBy) + 1)
                                          % static_cast<int>(GroupBy::Count));
         m_connScroll = 0;
         break;
+    // --- vim-style navigation ---
+    case 'k':
     case KEY_UP:
         if (scroll > 0) --scroll;
         break;
+    case 'j':
     case KEY_DOWN:
         ++scroll; // clamped in buildFrame
+        break;
+    case 'h':                       // previous tab
+    case 'l':                       // next tab (only two tabs: both toggle)
+        m_view = (m_view == View::Interfaces) ? View::Connections : View::Interfaces;
+        break;
+    case 'G':                       // vim: jump to bottom
+        scroll = std::numeric_limits<int>::max() / 2; // clamped in buildFrame
+        break;
+    case 4:                         // Ctrl-D: half page down
+        scroll += std::max(1, (m_screen ? m_screen->bodyHeight() : 2) / 2);
+        break;
+    case 21:                        // Ctrl-U: half page up
+        scroll = std::max(0, scroll - std::max(1, (m_screen ? m_screen->bodyHeight() : 2) / 2));
         break;
     case KEY_PPAGE:
         scroll = std::max(0, scroll - std::max(1, m_screen ? m_screen->bodyHeight() : 1));
@@ -228,6 +244,9 @@ void TuiApp::handleKey(int key)
         break;
     case KEY_HOME:
         scroll = 0;
+        break;
+    case KEY_END:
+        scroll = std::numeric_limits<int>::max() / 2; // clamped in buildFrame
         break;
     case KEY_RESIZE:
         break; // Screen reads the new size on the next render
@@ -445,9 +464,10 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.title      = QStringLiteral("Help — key bindings");
         f.modal.items = {
             row(QStringLiteral("Tab / 1 / 2"), QStringLiteral("Switch view (Interfaces / Connections)")),
-            row(QStringLiteral("↑ ↓"),         QStringLiteral("Scroll one row")),
-            row(QStringLiteral("PgUp / PgDn"),  QStringLiteral("Scroll one page")),
-            row(QStringLiteral("Home / End"),   QStringLiteral("Jump to top / bottom")),
+            row(QStringLiteral("↑↓ / j k"),    QStringLiteral("Scroll one row (vim keys too)")),
+            row(QStringLiteral("h / l"),        QStringLiteral("Previous / next view tab")),
+            row(QStringLiteral("PgUp/PgDn ^U/^D"), QStringLiteral("Scroll one page / half page")),
+            row(QStringLiteral("Home/End  G"),  QStringLiteral("Jump to top / bottom")),
             row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
             row(QStringLiteral("f"),            QStringLiteral("Fields: pick sort column & direction")),
             row(QStringLiteral("r"),            QStringLiteral("Reverse the sort order")),
@@ -639,15 +659,19 @@ void TuiApp::handleSettingsKey(int key)
         m_overlay = Overlay::None;
         break;
     case KEY_UP:
+    case 'k':
         m_settingsSel = (m_settingsSel - 1 + n) % n;
         break;
     case KEY_DOWN:
+    case 'j':
         m_settingsSel = (m_settingsSel + 1) % n;
         break;
     case KEY_LEFT:
+    case 'h':
         activate(-1);
         break;
     case KEY_RIGHT:
+    case 'l':
     case ' ':
     case '\n':
     case '\r':
@@ -767,9 +791,11 @@ void TuiApp::handleFieldsKey(int key)
         m_overlay = Overlay::None;
         break;
     case KEY_UP:
+    case 'k':
         m_fieldsSel = (m_fieldsSel - 1 + nCols) % nCols;
         break;
     case KEY_DOWN:
+    case 'j':
         m_fieldsSel = (m_fieldsSel + 1) % nCols;
         break;
     case ' ':
