@@ -1,0 +1,106 @@
+name: Publish package repos (Pages)
+
+# Builds the signed apt + dnf repositories from the .deb / .rpm assets
+# attached to GitHub Releases and deploys them to GitHub Pages at
+# https://thecleaners.github.io/qiftop/ . The package files live as
+# Release assets (not in git), so this keeps the repo lean.
+#
+# Triggers:
+#   * release: published  — auto-publish when a release is created via the
+#                           UI or a PAT. NOTE: releases created by the
+#                           Release workflow's GITHUB_TOKEN do NOT fire this
+#                           event (GitHub's recursion guard), so after a
+#                           tag-driven release run this manually once:
+#                               gh workflow run pages.yml
+#   * workflow_dispatch   — rebuild the repos on demand (e.g. right after
+#                           enabling Pages, or to re-index existing releases).
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read     # download release assets
+  pages: write       # deploy to Pages
+  id-token: write    # OIDC for actions/deploy-pages
+
+# Never run two Pages deploys at once; let an in-flight deploy finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build + deploy apt/dnf repos
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install repo tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            apt-utils createrepo-c gnupg
+
+      - name: Download all release packages (cumulative)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p pkgs
+          # Index every published release's .deb/.rpm so older versions stay
+          # installable. --pattern keeps it to packages only (no SHA256SUMS,
+          # no demo.gif). --skip-existing makes re-runs idempotent.
+          for tag in $(gh release list -R "$GITHUB_REPOSITORY" --limit 100 \
+                         --json tagName -q '.[].tagName'); do
+            echo "==> $tag"
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" \
+              --pattern '*.deb' --pattern '*.rpm' \
+              --dir pkgs --skip-existing || true
+          done
+          echo "collected:"; ls -1 pkgs 2>/dev/null || true
+          ls pkgs/*.deb >/dev/null 2>&1 \
+            || { echo "::error::no .deb assets found in any release"; exit 1; }
+          ls pkgs/*.rpm >/dev/null 2>&1 \
+            || echo "::warning::no .rpm assets found yet (older releases predate RPM support)"
+
+      - name: Import package-signing key
+        id: gpg
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "${GPG_PRIVATE_KEY}" ]; then
+            echo "::warning::GPG_PRIVATE_KEY secret not set — publishing UNSIGNED repo"
+            echo "key_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+          key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')"
+          [ -n "$key_id" ] || { echo "::error::failed to import GPG_PRIVATE_KEY"; exit 1; }
+          echo "key_id=${key_id}" >> "$GITHUB_OUTPUT"
+          echo "imported signing key ${key_id}"
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build signed apt + dnf repository tree
+        env:
+          GPG_KEY_ID: ${{ steps.gpg.outputs.key_id }}
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: bash dist/repo/build-pages.sh pkgs public
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
