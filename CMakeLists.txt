@@ -174,13 +174,75 @@ endif()
 
 # --- Install rules ----------------------------------------------------------
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-# Shared core library. Full -dev component (headers + CMake/pkg-config) and
-# the inter-package dependency wiring land in Phase 2 packaging; for now this
-# ships the runtime .so so the installed binaries resolve it.
+# --- libqiftop: runtime + development packaging -----------------------------
+# The shared core library is split across two install components:
+#   libqiftop      — the runtime .so + SONAME symlink (libqiftop.so.0[.x.y])
+#   libqiftop-dev  — the dev symlink (libqiftop.so), public headers, the
+#                    CMake package config, and the pkg-config file.
+# This is what makes libqiftop a reusable "batch/stream raw-data facility":
+# external consumers (a Prometheus exporter, an alerting daemon, language
+# bindings, an NDJSON CLI) link the runtime and build against -dev. They get
+# the DBus client proxies (DBus*Monitor) to stream from the agent, the
+# aggregators for the smoothed/derived view, the filter mini-language, the
+# DTOs, and the JSON/CSV exporter — all Widgets-free.
 install(TARGETS qiftoplib
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT libqiftop)
+            COMPONENT libqiftop
+            NAMELINK_COMPONENT libqiftop-dev)
+
+# Public headers — the Widgets-free API surface. Installed under
+# include/qiftop/ preserving the source subdirectory layout (the dev CMake
+# config / pkg-config add include/qiftop to the search path so the headers'
+# own "backend/..."-style cross-includes resolve). The GUI (ui/) and the
+# agent are not shipped, and the platform capture impls (backend/linux) are
+# excluded — consumers stream from the agent over DBus, they don't link the
+# privileged in-process path.
+foreach(_hdr_dir aggregate dbus config dns util)
+    install(DIRECTORY src/${_hdr_dir}/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qiftop/${_hdr_dir}
+            COMPONENT libqiftop-dev
+            FILES_MATCHING PATTERN "*.h")
+endforeach()
+# backend/ recursively (dbus client proxies + abstract ifaces + null), but
+# NOT backend/linux (the libnl/conntrack capture impl).
+install(DIRECTORY src/backend/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qiftop/backend
+        COMPONENT libqiftop-dev
+        FILES_MATCHING PATTERN "*.h"
+        PATTERN "linux" EXCLUDE)
+
+# CMake package config (find_package(qiftop) -> qiftop::qiftop).
+configure_package_config_file(
+    "${CMAKE_SOURCE_DIR}/dist/cmake/qiftopConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/qiftopConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/qiftop"
+    PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/qiftopConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    # Pre-1.0 the ABI is unstable; require an exact version match so a
+    # consumer built against 0.2.1 doesn't silently load a different one.
+    COMPATIBILITY ExactVersion)
+install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/qiftopConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/qiftopConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/qiftop"
+        COMPONENT libqiftop-dev)
+
+# pkg-config (for non-CMake / C / Rust / scripting consumers).
+# Compute a relocatable prefix: each path segment of <libdir>/pkgconfig
+# becomes a ".." so the .pc's prefix is derived from ${pcfiledir} at use
+# time (correct under /usr/local dev installs AND /usr CPack packages).
+string(REGEX REPLACE "[^/]+" ".." QIFTOP_PC_PREFIX_UP "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+set(QIFTOP_PC_PREFIX "\${pcfiledir}/${QIFTOP_PC_PREFIX_UP}")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/dist/pkgconfig/qiftop.pc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/qiftop.pc" @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qiftop.pc"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+        COMPONENT libqiftop-dev)
 
 install(TARGETS qiftop
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -272,7 +334,7 @@ set(CPACK_DEBIAN_PACKAGE_PRIORITY   "optional")
 
 # --- GUI package ------------------------------------------------------------
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_NAME         "qiftop")
-set(CPACK_DEBIAN_QIFTOP_PACKAGE_DEPENDS      "libc6, libqt6core6t64 | libqt6core6, libqt6widgets6, libqt6network6, libqt6dbus6")
+set(CPACK_DEBIAN_QIFTOP_PACKAGE_DEPENDS      "libc6, libqt6core6t64 | libqt6core6, libqt6widgets6, libqt6network6, libqt6dbus6, libqiftop0 (= ${CPACK_PACKAGE_VERSION})")
 # Pin to the exact package version built in this run (incl. any ~rcN suffix)
 # so the GUI Recommends matches the agent .deb produced alongside it.
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_RECOMMENDS   "qiftop-agent (= ${CPACK_PACKAGE_VERSION})")
@@ -285,7 +347,7 @@ fall back to running with elevated privileges on demand.")
 
 # --- Agent package ----------------------------------------------------------
 set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_NAME       "qiftop-agent")
-set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_DEPENDS    "libc6, libnl-3-200, libnl-route-3-200, libnetfilter-conntrack3, libqt6core6t64 | libqt6core6, libqt6network6, libqt6dbus6, dbus")
+set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_DEPENDS    "libc6, libnl-3-200, libnl-route-3-200, libnetfilter-conntrack3, libqt6core6t64 | libqt6core6, libqt6network6, libqt6dbus6, dbus, libqiftop0 (= ${CPACK_PACKAGE_VERSION})")
 # nftables is used by the systemd unit's ExecStartPre to wire up per-family
 # conntrack so IPv6 flows actually show up. Soft-recommend so the package
 # still installs on hosts that don't have it (the unit fails the
@@ -301,6 +363,28 @@ with CAP_NET_ADMIN only.")
 # Run systemctl/dbus reload hooks on install/remove + declare /etc conffiles.
 set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_CONTROL_EXTRA
     "${CMAKE_SOURCE_DIR}/dist/debian/postinst;${CMAKE_SOURCE_DIR}/dist/debian/postrm;${CMAKE_SOURCE_DIR}/dist/debian/conffiles")
+
+# --- libqiftop runtime + dev packages ---------------------------------------
+# Debian shared-library convention: lib<name><soversion> for the runtime
+# (libqiftop0) and lib<name>-dev for the headers.
+set(CPACK_DEBIAN_LIBQIFTOP_PACKAGE_NAME    "libqiftop0")
+set(CPACK_DEBIAN_LIBQIFTOP_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_LIBQIFTOP_DESCRIPTION
+"Qt6 network-monitoring data library (runtime).
+libqiftop carries the qiftop wire DTOs, the DBus client proxies for the
+qiftop-agent, the per-interface / per-connection aggregators, the filter
+mini-language, IEC unit formatters, and JSON/CSV export — everything a
+non-GUI consumer (metrics exporter, alerting daemon, language bindings,
+NDJSON CLI) needs to stream and process qiftop data. No Qt Widgets
+dependency, so it runs headless.")
+
+set(CPACK_DEBIAN_LIBQIFTOP-DEV_PACKAGE_NAME    "libqiftop-dev")
+set(CPACK_DEBIAN_LIBQIFTOP-DEV_PACKAGE_SECTION "libdevel")
+set(CPACK_DEBIAN_LIBQIFTOP-DEV_PACKAGE_DEPENDS "libqiftop0 (= ${CPACK_PACKAGE_VERSION}), qt6-base-dev")
+set(CPACK_DEBIAN_LIBQIFTOP-DEV_DESCRIPTION
+"Qt6 network-monitoring data library (development files).
+Public headers, the CMake package config (find_package(qiftop) ->
+qiftop::qiftop), and the pkg-config file for building against libqiftop.")
 
 # --- RPM generator (Fedora / openSUSE etc.) ---------------------------------
 # Mirrors the DEB config above. Built with `cpack -G RPM` (needs rpmbuild +
@@ -331,6 +415,15 @@ set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_NAME    "qiftop-agent")
 set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_SUMMARY "Privileged DBus agent for qiftop")
 set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_REQUIRES   "dbus, shadow-utils")
 set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables")
+
+# libqiftop runtime + dev subpackages. RPM auto-req resolves the SONAME
+# (qiftop-libs Provides libqiftop.so.0()(64bit); qiftop/qiftop-agent
+# auto-Require it via their ELF NEEDED), so no explicit lib dep is declared.
+set(CPACK_RPM_LIBQIFTOP_PACKAGE_NAME    "qiftop-libs")
+set(CPACK_RPM_LIBQIFTOP_PACKAGE_SUMMARY "Qt6 network-monitoring data library (runtime)")
+set(CPACK_RPM_LIBQIFTOP-DEV_PACKAGE_NAME     "qiftop-devel")
+set(CPACK_RPM_LIBQIFTOP-DEV_PACKAGE_SUMMARY  "Development files for qiftop-libs")
+set(CPACK_RPM_LIBQIFTOP-DEV_PACKAGE_REQUIRES "qiftop-libs = ${CPACK_PACKAGE_VERSION}, qt6-qtbase-devel")
 # Preserve user edits to the config file across upgrades (Fedora %config(noreplace)).
 set(CPACK_RPM_QIFTOP-AGENT_USER_FILELIST "%config(noreplace) /etc/qiftop/agent.conf")
 # Group creation + user enrollment + systemd reload, mirroring the DEB
@@ -345,7 +438,7 @@ set(CPACK_RPM_QIFTOP-AGENT_POST_UNINSTALL_SCRIPT_FILE
 # symlink owned by `filesystem`). The package-specific dirs (/etc/qiftop,
 # /usr/share/qiftop) are deliberately NOT excluded so we keep owning them.
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
-    "/lib;/lib/systemd;/lib/systemd/system;/usr/share/dbus-1;/usr/share/dbus-1/system.d;/usr/share/dbus-1/system-services;/usr/share/applications;/usr/share/icons;/usr/share/icons/hicolor;/usr/share/icons/hicolor/scalable;/usr/share/icons/hicolor/scalable/apps")
+    "/lib;/lib/systemd;/lib/systemd/system;/usr/share/dbus-1;/usr/share/dbus-1/system.d;/usr/share/dbus-1/system-services;/usr/share/applications;/usr/share/icons;/usr/share/icons/hicolor;/usr/share/icons/hicolor/scalable;/usr/share/icons/hicolor/scalable/apps;/usr/lib/cmake;/usr/lib/pkgconfig;/usr/lib64/cmake;/usr/lib64/pkgconfig")
 
 # Pre-release RPMs keep inline debug info (unstripped), mirroring the
 # unstripped pre-release .deb so user-reported crash backtraces are
@@ -372,6 +465,13 @@ cpack_add_component(qiftop
 cpack_add_component(qiftop-agent
     DISPLAY_NAME "qiftop privileged agent"
     DESCRIPTION  "DBus system-bus daemon exposing privileged network statistics")
+cpack_add_component(libqiftop
+    DISPLAY_NAME "libqiftop runtime"
+    DESCRIPTION  "Shared Qt6 data library (DTOs, DBus client, aggregators, filter, export)")
+cpack_add_component(libqiftop-dev
+    DISPLAY_NAME "libqiftop development files"
+    DESCRIPTION  "Headers, CMake config and pkg-config for building against libqiftop"
+    DEPENDS libqiftop)
 
 # --- Auto-rebuild .deb packages on every build ------------------------------
 # Convenience for developers: keep the per-component .debs in the build dir

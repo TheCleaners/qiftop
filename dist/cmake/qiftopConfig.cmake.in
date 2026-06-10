@@ -1,0 +1,32 @@
+@PACKAGE_INIT@
+
+# CMake package config for libqiftop — the Qt6::Core-based data library
+# behind qiftop (DTOs, DBus client proxies, aggregators, filter
+# mini-language, unit formatters, JSON/CSV export). Consumers:
+#
+#   find_package(qiftop REQUIRED)
+#   target_link_libraries(my_exporter PRIVATE qiftop::qiftop)
+#
+# then include headers as e.g.  #include <qiftop/aggregate/ConnectionAggregator.h>
+# (the include dir is added twice so the library's own internal
+#  "backend/..." cross-includes also resolve).
+
+include(CMakeFindDependencyMacro)
+find_dependency(Qt6 COMPONENTS Core Network DBus)
+
+if(NOT TARGET qiftop::qiftop)
+    set_and_check(_qiftop_incdir "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+    set_and_check(_qiftop_libdir "@PACKAGE_CMAKE_INSTALL_LIBDIR@")
+
+    add_library(qiftop::qiftop SHARED IMPORTED)
+    set_target_properties(qiftop::qiftop PROPERTIES
+        IMPORTED_LOCATION             "${_qiftop_libdir}/libqiftop.so"
+        IMPORTED_SONAME               "libqiftop.so.0"
+        INTERFACE_INCLUDE_DIRECTORIES "${_qiftop_incdir}/qiftop;${_qiftop_incdir}"
+        INTERFACE_LINK_LIBRARIES      "Qt6::Core;Qt6::Network;Qt6::DBus")
+
+    unset(_qiftop_incdir)
+    unset(_qiftop_libdir)
+endif()
+
+check_required_components(qiftop)
