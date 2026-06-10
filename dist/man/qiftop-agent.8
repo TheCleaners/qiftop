@@ -1,0 +1,175 @@
+.TH QIFTOP\-AGENT 8 "2026-06-10" "qiftop 0.2.1" "System Administration"
+.SH NAME
+qiftop\-agent \- privileged D\-Bus agent exposing network statistics
+.SH SYNOPSIS
+.B qiftop\-agent
+.RI [ options ]
+.SH DESCRIPTION
+.B qiftop\-agent
+is the only qiftop component that touches the kernel. It runs as a
+.B CAP_NET_ADMIN
+daemon (normally as root under systemd), collects per\-interface counters
+via libnl\-3 and per\-connection flows via libnetfilter_conntrack, and
+re\-publishes them on the system D\-Bus under the well\-known name
+.BR org.qiftop.NetworkAgent1 .
+The unprivileged
+.BR qiftop (1)
+and
+.BR nqiftop (1)
+clients consume those signals so they never need privileges themselves.
+.PP
+The agent is normally
+.B activated on demand
+(D\-Bus / systemd) and winds itself down when idle \(em see
+.BR "CADENCE & IDLE" .
+You rarely run it by hand except for development with
+.BR \-\-session .
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIpath\fR
+Path to the configuration file (default
+.IR /etc/qiftop/agent.conf ).
+See
+.BR qiftop\-agent.conf (5).
+.TP
+.B \-\-session
+Use the session bus instead of the system bus. Development only; the
+production policy and activation target the system bus.
+.TP
+.B \-\-verbose
+Enable verbose tracing on stderr.
+.TP
+.BR \-h ", " \-\-help ", " \-v ", " \-\-version
+Show help / version and exit.
+.SH D-BUS INTERFACE
+Well\-known name:
+.BR org.qiftop.NetworkAgent1 .
+.TP
+.B /org/qiftop/NetworkAgent1/Interfaces
+Interface
+.BR org.qiftop.NetworkAgent1.Interfaces :
+methods
+.BR GetInterfaces() ", " SetDesiredIntervalMs(u) ;
+signals
+.BR StatsChanged ", " CadenceChanged ;
+properties
+.BR Version ", " Capabilities .
+.TP
+.B /org/qiftop/NetworkAgent1/Connections
+Interface
+.BR org.qiftop.NetworkAgent1.Connections :
+methods
+.BR GetConnections() ", " GetProcessDetails(u) ", " SetDesiredIntervalMs(u) ;
+signals
+.BR ConnectionsChanged ", " PermissionDenied ", " AccountingChanged .
+.PP
+.B Capabilities
+is a list of dash\-separated feature tokens (e.g.
+.BR iana\-proto ", " direction\-on\-wire ", " process\-attribution\-wire ", "
+.BR container\-attribution\-wire ).
+Clients gate optional behaviour on token presence, never on a
+.B Version
+comparison.
+.SH SECURITY
+.SS Access control
+The system\-bus policy
+.RI ( org.qiftop.NetworkAgent1.conf )
+restricts all method calls and signal reception to members of the
+.B netdev
+group. This protects the conntrack table (every host's flows, normally
+root\-only) and prevents cadence\-hint abuse. The Debian/RPM
+.B postinst
+ensures the group exists and adds the installing user; log out and back in
+(or run
+.BR "newgrp netdev" )
+for membership to take effect. Clients that lack access fall back cleanly
+to their in\-process backend.
+.SS Capabilities
+The unit grants only
+.BR CAP_NET_ADMIN " (netlink/conntrack), " CAP_SYS_PTRACE
+and
+.B CAP_DAC_READ_SEARCH
+(read other users'
+.I /proc/<pid>/fd
+and
+.IR exe / cwd
+for process attribution), and
+.B CAP_SYS_ADMIN
+.RB ( setns (2)
+into container network namespaces). It runs with
+.BR NoNewPrivileges " and " RestrictNamespaces=net
+(the latter is required \(em
+.B =yes
+silently blocks the attribution
+.BR setns (2)).
+.SS Process\-detail disclosure
+.BR GetProcessDetails (pid)
+always returns the low\-sensitivity bulk fields
+.RB ( pid ", " uid ", " comm ", " "start time" )
+to any netdev caller, but the privileged
+.IR exe ", " cwd " and " cmdline
+fields are gated by the
+.B [process_details] disclosure
+policy (default:
+.BR owner " \(em root or the process owner only)."
+See
+.BR qiftop\-agent.conf (5).
+.SH CADENCE & IDLE
+The agent polls at a base cadence and accepts client hints via
+.BR SetDesiredIntervalMs(u) ,
+using the minimum across live hints clamped to a floor. Hints expire
+after a TTL, so clients re\-assert at roughly half\-TTL while they want a
+boost. With no method calls for the idle timeout the agent pauses polling
+entirely (near\-zero CPU); the next call wakes it. All cadence parameters
+are configurable \(em see
+.BR qiftop\-agent.conf (5).
+.SH ACTIVATION
+.PP
+Installed via the
+.B qiftop\-agent
+package, the daemon is D\-Bus\-activatable and ships a systemd unit. To
+manage it manually:
+.PP
+.RS 4
+.nf
+sudo systemctl daemon\-reload
+sudo systemctl start qiftop\-agent
+.fi
+.RE
+.SH VERIFICATION
+Confirm the agent is reachable and serving data:
+.PP
+.RS 4
+.nf
+busctl \-\-system call org.qiftop.NetworkAgent1 \\
+    /org/qiftop/NetworkAgent1/Interfaces \\
+    org.qiftop.NetworkAgent1.Interfaces GetInterfaces
+.fi
+.RE
+.PP
+.B GetConnections
+returns the last emitted snapshot, refreshed on a poll tick; send a
+.B SetDesiredIntervalMs
+hint and wait one tick before reading if you need a fresh capture.
+.SH FILES
+.TP
+.I /etc/qiftop/agent.conf
+Configuration (conffile; preserved across upgrades). See
+.BR qiftop\-agent.conf (5).
+.TP
+.I /usr/share/dbus\-1/system.d/org.qiftop.NetworkAgent1.conf
+System\-bus access policy (netdev gate).
+.TP
+.I /lib/systemd/system/qiftop\-agent.service
+systemd unit (capabilities + sandbox).
+.SH SEE ALSO
+.BR qiftop\-agent.conf (5),
+.BR qiftop (1),
+.BR nqiftop (1),
+.BR busctl (1),
+.BR systemctl (1),
+.BR capabilities (7)
+.SH HOMEPAGE
+https://github.com/TheCleaners/qiftop
+.SH BUGS
+Report issues at https://github.com/TheCleaners/qiftop/issues

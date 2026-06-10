@@ -283,6 +283,24 @@ if(TARGET nqiftop)
             COMPONENT nqiftop)
 endif()
 
+# Man pages. Installed uncompressed under <prefix>/share/man/manN; man(1)
+# reads them as-is and packagers may recompress. Grouped by component so
+# each binary ships its own page(s).
+install(FILES dist/man/qiftop.1
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+        COMPONENT qiftop)
+install(FILES dist/man/qiftop-agent.8
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man8
+        COMPONENT qiftop-agent)
+install(FILES dist/man/qiftop-agent.conf.5
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man5
+        COMPONENT qiftop-agent)
+if(TARGET nqiftop)
+    install(FILES dist/man/nqiftop.1
+            DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+            COMPONENT nqiftop)
+endif()
+
 install(FILES LICENSE README.md
         DESTINATION ${CMAKE_INSTALL_DOCDIR}
         COMPONENT qiftop)
