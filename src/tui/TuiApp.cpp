@@ -160,6 +160,15 @@ void TuiApp::handleKey(int key)
         m_filterEditing = true;
         m_filterDraft = m_filterText;   // edit the current filter in place
         break;
+    case 27: // Esc — clear an active filter
+        if (!m_filterText.isEmpty()) {
+            m_filterText.clear();
+            m_filterExpr.reset();
+            m_connScroll = 0;
+        } else {
+            return; // nothing to do; no repaint
+        }
+        break;
     case '\t':
     case KEY_BTAB:
         m_view = (m_view == View::Interfaces) ? View::Connections : View::Interfaces;
@@ -368,11 +377,26 @@ Frame TuiApp::buildFrame()
             ? QStringLiteral(" /%1\u2588   (Enter apply · Esc cancel)").arg(m_filterDraft)
             : QStringLiteral(" /%1\u2588   ! %2").arg(m_filterDraft, m_filterError);
     } else if (!m_filterText.isEmpty()) {
-        f.footer = QStringLiteral(" filter: %1 · / edit · q quit · Tab view · s/f sort · ? help ")
-                       .arg(m_filterText);
+        // Active filter: "filter:" chip + the expression, then edit/clear keys.
+        f.footerHints = {
+            {QStringLiteral("filter:"), m_filterText},
+            {QStringLiteral("/"),   QStringLiteral("edit")},
+            {QStringLiteral("Esc"), QStringLiteral("clear")},
+            {QStringLiteral("q"),   QStringLiteral("quit")},
+            {QStringLiteral("?"),   QStringLiteral("help")},
+        };
     } else {
-        f.footer = QStringLiteral(
-            " q quit · Tab view · s/f sort · g group · / filter · p pause · z theme · S settings · ? help ");
+        f.footerHints = {
+            {QStringLiteral("q"),   QStringLiteral("quit")},
+            {QStringLiteral("Tab"), QStringLiteral("view")},
+            {QStringLiteral("s/f"), QStringLiteral("sort")},
+            {QStringLiteral("g"),   QStringLiteral("group")},
+            {QStringLiteral("/"),   QStringLiteral("filter")},
+            {QStringLiteral("p"),   QStringLiteral("pause")},
+            {QStringLiteral("z"),   QStringLiteral("theme")},
+            {QStringLiteral("S"),   QStringLiteral("settings")},
+            {QStringLiteral("?"),   QStringLiteral("help")},
+        };
     }
 
     buildModal(f);

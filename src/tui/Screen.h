@@ -26,6 +26,11 @@ struct ModalPanel {
 };
 
 // Everything Screen needs to paint one frame. TuiApp builds this each redraw.
+struct KeyHint {
+    QString key;    // e.g. "q", "Tab", "s/f" — rendered in the MenuKey colour
+    QString desc;   // e.g. "quit"            — rendered in the Footer colour
+};
+
 struct Frame {
     QStringList   tabs;              // e.g. {"Interfaces", "Connections"}
     int           activeTab = 0;
@@ -37,7 +42,8 @@ struct Frame {
     QList<Role>   rowRoles;          // per-row colour role (parallel to rows)
     QList<double> rowGauge;          // per-row bandwidth fraction [0,1] (parallel)
     int           scrollOffset = 0;  // index of the first visible body row
-    QString       footer;            // key help line
+    QString       footer;            // plain key-help line (filter modes)
+    QList<KeyHint> footerHints;      // structured menu bar: keys pop vs labels
     ModalPanel    modal;             // when .visible, painted over the body
 };
 

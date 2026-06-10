@@ -231,7 +231,25 @@ void Screen::render(const Frame &f)
 
     // --- line 1: menu / key-help bar (UI chrome) ---
     fillLine(1, Role::Footer);
-    {
+    if (!f.footerHints.isEmpty()) {
+        // Structured menu bar: each key glyph pops in the MenuKey colour, its
+        // label follows in the Footer colour. Stops cleanly at the right edge.
+        int x = 1;
+        for (const KeyHint &h : f.footerHints) {
+            if (x + h.key.size() + 1 >= width)
+                break;
+            attrset(attrFor(Role::MenuKey));
+            mvaddstr(1, x, h.key.toUtf8().constData());
+            x += h.key.size();
+            QString lbl = QStringLiteral(" %1  ").arg(h.desc);
+            if (x + lbl.size() > width)
+                lbl = lbl.left(width - x);
+            attrset(attrFor(Role::Footer));
+            mvaddstr(1, x, lbl.toUtf8().constData());
+            x += lbl.size();
+        }
+        attrset(A_NORMAL);
+    } else {
         attrset(attrFor(Role::Footer));
         mvaddstr(1, 0, fitCell(f.footer, width, false).toUtf8().constData());
         attrset(A_NORMAL);

@@ -29,6 +29,7 @@ enum class Role {
     Accent,        // source label, hints
     TitleBar,      // line 0 chrome fill (tab/title bar)
     GroupHeader,   // grouped-view aggregate header row
+    MenuKey,       // key glyphs in the line-1 menu bar (pop vs the labels)
     Count
 };
 
@@ -109,6 +110,7 @@ inline QList<Theme> builtinThemes()
             {Role::Accent,        {Blue,    Default, Bold}},
             {Role::TitleBar,      {White,   Blue,    Bold}},
             {Role::GroupHeader,   {Cyan,    Default, Bold}},
+            {Role::MenuKey,       {Blue,    Default, Reverse | Bold}},
         }),
         makeTheme(QStringLiteral("light"), {
             {Role::Header,        {Black,   Yellow,  Bold}},
@@ -123,6 +125,7 @@ inline QList<Theme> builtinThemes()
             {Role::Accent,        {Blue,    Default, Bold}},
             {Role::TitleBar,      {White,   Blue,    Bold}},
             {Role::GroupHeader,   {Blue,    Default, Bold}},
+            {Role::MenuKey,       {Blue,    Default, Reverse | Bold}},
         }),
         makeTheme(QStringLiteral("colorblind"), {
             {Role::Header,        {Black,   Yellow,  Bold}},
@@ -137,6 +140,7 @@ inline QList<Theme> builtinThemes()
             {Role::Accent,        {Cyan,    Default, Bold}},
             {Role::TitleBar,      {White,   Blue,    Bold}},
             {Role::GroupHeader,   {Cyan,    Default, Bold}},
+            {Role::MenuKey,       {Cyan,    Default, Reverse | Bold}},
         }),
         makeTheme(QStringLiteral("mono"), {
             {Role::Header,        {Default, Default, Reverse}},
@@ -151,6 +155,7 @@ inline QList<Theme> builtinThemes()
             {Role::Accent,        {Default, Default, Bold}},
             {Role::TitleBar,      {Default, Default, Reverse | Bold}},
             {Role::GroupHeader,   {Default, Default, Bold | Underline}},
+            {Role::MenuKey,       {Default, Default, Reverse | Bold}},
         }),
     };
     // Row-spanning gauge fill tint (256-colour only; -1 -> reverse fallback).
