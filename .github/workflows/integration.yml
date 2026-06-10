@@ -16,6 +16,12 @@ on:
   release:
     types: [published]
 
+# Default to the minimum: read-only access to repository contents. These
+# jobs only checkout + build + run tests; they never write to the repo,
+# packages, or releases. Pinned per CodeQL `actions/missing-workflow-permissions`.
+permissions:
+  contents: read
+
 jobs:
   attribution-docker:
     name: attribution / docker / ubuntu-24.04
