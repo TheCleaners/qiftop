@@ -194,6 +194,19 @@ if(QIFTOP_BUILD_DEMO)
     target_include_directories(qiftop-demo PRIVATE
         ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
     qiftop_apply_attribution_defs(qiftop-demo)
+
+    # Terminal (ncurses) demo harness — only when the TUI itself is built.
+    if(TARGET nqiftop)
+        add_executable(nqiftop-demo
+            docs/demo/nqiftop-demo.cpp
+            src/tui/Screen.cpp
+            src/tui/TuiApp.cpp
+            tests/fakes/FakeMonitors.h)
+        target_link_libraries(nqiftop-demo PRIVATE qiftoplib ${CURSES_LIBRARIES})
+        target_include_directories(nqiftop-demo PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests ${CURSES_INCLUDE_DIRS})
+        qiftop_apply_attribution_defs(nqiftop-demo)
+    endif()
 endif()
 
 # --- Install rules ----------------------------------------------------------
