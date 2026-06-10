@@ -69,7 +69,40 @@ sudo apt install \
     libnetfilter-conntrack-dev
 ```
 
-## Install
+## Install from the package repository (recommended)
+
+Signed **apt** (Debian/Ubuntu) and **dnf** (Fedora) repositories are
+hosted at <https://thecleaners.github.io/qiftop/>.
+
+**Debian / Ubuntu:**
+
+```sh
+curl -fsSL https://thecleaners.github.io/qiftop/qiftop-archive-keyring.asc \
+  | sudo gpg --dearmor -o /usr/share/keyrings/qiftop-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/qiftop-archive-keyring.gpg] https://thecleaners.github.io/qiftop/deb stable main" \
+  | sudo tee /etc/apt/sources.list.d/qiftop.list
+sudo apt update && sudo apt install qiftop qiftop-agent
+```
+
+**Fedora:**
+
+```sh
+sudo curl -fsSL https://thecleaners.github.io/qiftop/rpm/qiftop.repo \
+  -o /etc/yum.repos.d/qiftop.repo
+sudo rpm --import https://thecleaners.github.io/qiftop/qiftop-archive-keyring.asc
+sudo dnf install qiftop qiftop-agent
+```
+
+Both repos are GPG-signed (key
+`7AC658ABFADD1AAF6E0EDA6F6DD33D47032BD42D`). The dnf repo uses the
+metadata-signature trust model (`repo_gpgcheck=1`): the signed
+`repomd.xml` authenticates package checksums, exactly like apt's signed
+`Release`. Per-package RPM signatures (`gpgcheck=1`) are a planned
+post-stable addition. Don't have repo access? Grab a `.deb`/`.rpm`
+directly from the
+[releases page](https://github.com/TheCleaners/qiftop/releases).
+
+## Install from a local build
 
 ```sh
 sudo cmake --install build
@@ -77,7 +110,7 @@ sudo cmake --install build
 sudo systemctl start qiftop-agent
 ```
 
-## Packaging (.deb / .rpm)
+## Building the packages yourself (.deb / .rpm)
 
 CPack produces two packages — one for the daemon (+ systemd / DBus
 units) and one for the GUI. Debian/Ubuntu (`.deb`):

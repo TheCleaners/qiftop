@@ -904,6 +904,35 @@ can be dropped with `vagrant destroy default`.
   are fine, removals/renames are not. Always keep loader code tolerant
   of unknown keys.
 
+### Package distribution (apt / dnf repos)
+
+* Signed **apt** + **dnf** repos are hosted on **GitHub Pages** at
+  `https://thecleaners.github.io/qiftop/`. GitHub Packages (ghcr)
+  cannot serve apt/dnf, and the `TheCleaners` org has Pages creation
+  behind an org setting — it must stay enabled for deploys to work.
+* `.github/workflows/pages.yml` (triggers: `workflow_dispatch` +
+  `release: published`) downloads every release's `.deb`/`.rpm` assets
+  and runs `dist/repo/build-pages.sh` (`apt-ftparchive` + `createrepo_c`),
+  then deploys via `actions/deploy-pages`. The package files live as
+  **release assets, never in git** — do not commit `.deb`/`.rpm` blobs
+  (keeps clones lean, same reason we purged the demo gif).
+* **GITHUB_TOKEN event gotcha:** a release created by the Release
+  workflow's token does NOT fire `release: published` (recursion
+  guard), so the first publish after a tag-driven release needs a
+  manual `gh workflow run pages.yml`. Manual UI/PAT releases trigger it
+  automatically.
+* **Signing:** repos are GPG-signed by the project key
+  `7AC658ABFADD1AAF6E0EDA6F6DD33D47032BD42D` ("qiftop package
+  signing"). The private half lives in the `GPG_PRIVATE_KEY` Actions
+  secret (passphraseless); the public half is committed at
+  `dist/repo/qiftop-archive-keyring.asc` and published at the Pages
+  root. The dnf repo uses the metadata-signature model
+  (`repo_gpgcheck=1`, `gpgcheck=0`) — the signed `repomd.xml`
+  authenticates package checksums, the exact analog of apt's signed
+  `Release`. Per-package `rpm --addsign` is a deliberate post-stable
+  TODO. If `GPG_PRIVATE_KEY` is absent the workflow publishes unsigned
+  (forks).
+
 ---
 
 ## 8a. Lifetime & races in process / container attribution
