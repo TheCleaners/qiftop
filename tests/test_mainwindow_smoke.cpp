@@ -36,12 +36,15 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QListWidget>
+#include <QStackedWidget>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QTreeView>
 
 #include "config/Settings.h"
 #include "ui/ConnectionModel.h"
+#include "ui/SettingsDialog.h"
 #include "ui/MainWindow.h"
 #include "fakes/FakeMonitors.h"
 
@@ -1133,6 +1136,30 @@ private slots:
         QVERIFY(chromeRow2 >= 0);
         QVERIFY2(connView->isExpanded(m->index(chromeRow2, 0)),
                  "chrome group collapsed across attribution flap");
+    }
+
+    // SettingsDialog uses a left category nav-list + stacked pages
+    // (KiCad/VSCode style) rather than horizontal tabs. Pin: it
+    // constructs, the nav list has the expected categories, and
+    // selecting a row switches the stacked page.
+    void settingsDialogSideNavSwitchesPages()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        SettingsDialog dlg(&settings, QStringList{});
+
+        auto *nav = dlg.findChild<QListWidget*>(QStringLiteral("settingsNavList"));
+        QVERIFY(nav);
+        QVERIFY(nav->count() >= 4);   // Monitoring/Display/DNS/Tray (+more)
+        auto *stack = dlg.findChild<QStackedWidget*>();
+        QVERIFY(stack);
+        QCOMPARE(stack->count(), nav->count());
+
+        // Selecting a nav row switches the visible page.
+        nav->setCurrentRow(0);
+        QCOMPARE(stack->currentIndex(), 0);
+        nav->setCurrentRow(2);
+        QCOMPARE(stack->currentIndex(), 2);
     }
 
     // Companion to the flap test targeting the OTHER collapse cause: the

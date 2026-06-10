@@ -6,7 +6,9 @@ class Settings;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QListWidget;
 class QSpinBox;
+class QStackedWidget;
 
 // Modal preferences dialog. Edits a working copy and writes to Settings only
 // when the user accepts.
@@ -49,4 +51,8 @@ private:
     QCheckBox *m_showContainerColumnBox = nullptr;
     QCheckBox *m_showChainInTooltipBox  = nullptr;
     QCheckBox *m_showGroupHeaderDetailsBox = nullptr;
+
+    // Left-hand category navigation (KiCad/VSCode style) → page stack.
+    QListWidget    *m_navList = nullptr;
+    QStackedWidget *m_stack   = nullptr;
 };

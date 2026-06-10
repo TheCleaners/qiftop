@@ -10,15 +10,16 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QTabWidget>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QWidget>
 
 namespace {
-// Small helper: build a tab page whose content is a single QFormLayout
-// (the common shape of every Preferences tab here). Returns the new
+// Small helper: build a page whose content is a single QFormLayout
+// (the common shape of every Preferences page here). Returns the new
 // page widget and outputs the form layout to fill.
 QWidget *makeFormTab(QFormLayout *&form)
 {
@@ -39,7 +40,20 @@ SettingsDialog::SettingsDialog(Settings *settings,
     setWindowTitle(tr("Preferences"));
     setModal(true);
 
-    auto *tabs = new QTabWidget(this);
+    // Category navigation on the left (KiCad / VSCode style), pages in a
+    // stack on the right. addNavPage() keeps list index == stack index.
+    m_navList = new QListWidget;
+    m_navList->setObjectName(QStringLiteral("settingsNavList"));
+    m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_navList->setMaximumWidth(180);
+    m_navList->setMinimumWidth(130);
+    m_stack = new QStackedWidget;
+    const auto addNavPage = [this](QWidget *page, const QString &title) {
+        m_stack->addWidget(page);
+        m_navList->addItem(title);
+    };
+    connect(m_navList, &QListWidget::currentRowChanged,
+            m_stack, &QStackedWidget::setCurrentIndex);
 
     // --- Monitoring tab ---
     QFormLayout *monitorForm = nullptr;
@@ -86,7 +100,7 @@ SettingsDialog::SettingsDialog(Settings *settings,
     m_udpAggregateBox->setChecked(m_settings->udpAggregateByPeer());
     monitorForm->addRow(m_udpAggregateBox);
 
-    tabs->addTab(monitorTab, tr("Monitoring"));
+    addNavPage(monitorTab, tr("Monitoring"));
 
     // --- Display tab ---
     QFormLayout *displayForm = nullptr;
@@ -294,7 +308,7 @@ SettingsDialog::SettingsDialog(Settings *settings,
         "the grouped view modes."));
     displayForm->addRow(m_showGroupHeaderDetailsBox);
 
-    tabs->addTab(displayTab, tr("Display"));
+    addNavPage(displayTab, tr("Display"));
 
     // --- DNS tab ---
     QFormLayout *dnsForm = nullptr;
@@ -314,7 +328,7 @@ SettingsDialog::SettingsDialog(Settings *settings,
     m_aliasIfaceBox->setChecked(m_settings->resolveIfaceAddrsAsLocalhost());
     dnsForm->addRow(m_aliasIfaceBox);
 
-    tabs->addTab(dnsTab, tr("DNS"));
+    addNavPage(dnsTab, tr("DNS"));
 
     // --- Tray tab ---
     QFormLayout *trayForm = nullptr;
@@ -332,7 +346,7 @@ SettingsDialog::SettingsDialog(Settings *settings,
         "in the system tray rather than popping a window."));
     trayForm->addRow(m_startOnLoginBox);
 
-    tabs->addTab(trayTab, tr("Tray"));
+    addNavPage(trayTab, tr("Tray"));
 
     // --- Buttons ---
     auto *buttons = new QDialogButtonBox(
@@ -343,8 +357,14 @@ SettingsDialog::SettingsDialog(Settings *settings,
             this, &SettingsDialog::apply);
 
     auto *root = new QVBoxLayout(this);
-    root->addWidget(tabs);
+    auto *split = new QHBoxLayout;
+    split->addWidget(m_navList);
+    split->addWidget(m_stack, /*stretch*/ 1);
+    root->addLayout(split, /*stretch*/ 1);
     root->addWidget(buttons);
+
+    // Start on the first category.
+    m_navList->setCurrentRow(0);
 }
 
 void SettingsDialog::apply()
