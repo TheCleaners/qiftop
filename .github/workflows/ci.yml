@@ -110,14 +110,43 @@ jobs:
       - name: Install build dependencies (fedora family)
         if: matrix.family == 'fedora'
         run: |
-          dnf -y install \
-            cmake ninja-build gcc-c++ pkgconf-pkg-config \
+          # Disable weak deps (the dnf analog of apt's --no-install-recommends)
+          # so we don't drag in optional Qt multimedia/audio bloat
+          # (e.g. pipewire-jack-audio-connection-kit) that this build never
+          # uses. Fewer packages also means fewer requests, so fewer chances
+          # to hit a dead Fedora mirror.
+          #
+          # The metalink occasionally hands out unreachable mirrors (curl 7
+          # "could not connect" / HTTP 500), and dnf will otherwise sit there
+          # retrying until the job's overall timeout cancels it. Cap per-server
+          # connect time + minimum transfer rate so a bad mirror is abandoned
+          # quickly, and retry the whole transaction a few times — each retry
+          # re-resolves the metalink and usually lands on a healthy mirror.
+          dnf_install() {
+            dnf -y \
+              --setopt=install_weak_deps=False \
+              --setopt=fastestmirror=True \
+              --setopt=retries=10 \
+              --setopt=timeout=30 \
+              --setopt=minrate=1k \
+              install "$@"
+          }
+          pkgs="cmake ninja-build gcc-c++ pkgconf-pkg-config \
             qt6-qtbase-devel qt6-qtbase-private-devel \
             mesa-libGL-devel \
             libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
             dbus-daemon dbus-tools \
             libasan libubsan \
-            shadow-utils
+            shadow-utils"
+          ok=0
+          for attempt in 1 2 3; do
+            if dnf_install $pkgs; then ok=1; break; fi
+            echo "::warning::dnf install attempt ${attempt} failed (mirror?); " \
+                 "cleaning metadata and retrying" >&2
+            dnf clean all || true
+            sleep $((attempt * 15))
+          done
+          [ "$ok" = 1 ] || { echo "::error::dnf install failed after 3 attempts"; exit 1; }
 
       - name: Configure
         run: |
