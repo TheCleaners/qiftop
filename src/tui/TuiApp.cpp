@@ -183,6 +183,12 @@ void TuiApp::handleKey(int key)
                 m_screen->setTheme(m_themes[m_themeIdx]);
         }
         break;
+    case 'g':
+    case 'G':
+        m_groupBy = static_cast<GroupBy>((static_cast<int>(m_groupBy) + 1)
+                                         % static_cast<int>(GroupBy::Count));
+        m_connScroll = 0;
+        break;
     case KEY_UP:
         if (scroll > 0) --scroll;
         break;
@@ -238,26 +244,81 @@ Frame TuiApp::buildFrame()
         const auto &rows = m_connAgg->rows();
         const QList<int> order =
             sortedConnectionIndices(rows, m_connSortCol, m_connSortDesc);
-        for (int i : order) {
-            const auto &row = rows[i];
-            // Connections-view filter (mini-language). Null expr = match-all.
-            if (m_filterExpr) {
-                const Connection &c = row.current;
-                const qiftop::filter::Context ctx{
-                    c, row.rxRate, row.txRate,
-                    m_connAgg->cachedHostname(c.local.address),
-                    m_connAgg->cachedHostname(c.remote.address),
-                };
-                if (!qiftop::filter::matches(m_filterExpr, ctx))
-                    continue;
+
+        const auto passesFilter = [&](const aggregate::ConnectionAggregator::Row &row) {
+            if (!m_filterExpr)
+                return true;
+            const Connection &c = row.current;
+            const qiftop::filter::Context ctx{
+                c, row.rxRate, row.txRate,
+                m_connAgg->cachedHostname(c.local.address),
+                m_connAgg->cachedHostname(c.remote.address),
+            };
+            return qiftop::filter::matches(m_filterExpr, ctx);
+        };
+
+        // Filtered indices in the current sort order.
+        QList<int> matched;
+        for (int i : order)
+            if (passesFilter(rows[i]))
+                matched << i;
+
+        if (m_groupBy == GroupBy::None) {
+            for (int i : matched) {
+                const auto &row = rows[i];
+                f.rows     << cellsForConnection(*m_connAgg, row);
+                f.rowRoles << rowRoleForConnection(*m_connAgg, row);
+                const double cr = combinedRate(row);
+                rates << cr;
+                maxRate = std::max(maxRate, cr);
+                aggRx += row.rxRate;
+                aggTx += row.txRate;
             }
-            f.rows     << cellsForConnection(*m_connAgg, row);
-            f.rowRoles << rowRoleForConnection(*m_connAgg, row);
-            const double cr = combinedRate(row);
-            rates << cr;
-            maxRate = std::max(maxRate, cr);
-            aggRx += row.rxRate;
-            aggTx += row.txRate;
+        } else {
+            // Bucket by group key, preserving first-appearance order (which is
+            // the sort order — so loudest-first when sorting by rate desc).
+            QList<QString> groupOrder;
+            QHash<QString, QList<int>> buckets;
+            for (int i : matched) {
+                const QString k = groupKeyFor(m_groupBy, rows[i].current);
+                if (!buckets.contains(k))
+                    groupOrder << k;
+                buckets[k] << i;
+            }
+            for (const QString &k : std::as_const(groupOrder)) {
+                const QList<int> &members = buckets[k];
+                double grx = 0, gtx = 0;
+                quint64 grb = 0, gtb = 0;
+                for (int i : members) {
+                    grx += rows[i].rxRate;
+                    gtx += rows[i].txRate;
+                    grb += rows[i].current.rxBytes;
+                    gtb += rows[i].current.txBytes;
+                }
+                // Group header row (aggregated).
+                const QString label = groupLabelFor(m_groupBy, rows[members.first()].current);
+                f.rows << QStringList{
+                    QStringLiteral("%1  (%2)").arg(label).arg(members.size()),
+                    util::formatByteRate(grx), util::formatByteRate(gtx),
+                    util::formatBytes(grb), util::formatBytes(gtb)};
+                f.rowRoles << Role::GroupHeader;
+                const double gcr = grx + gtx;
+                rates << gcr;
+                maxRate = std::max(maxRate, gcr);
+                aggRx += grx;
+                aggTx += gtx;
+                // Member rows (indented in the flow column).
+                for (int i : members) {
+                    const auto &row = rows[i];
+                    QStringList mc = cellsForConnection(*m_connAgg, row);
+                    mc[0] = QStringLiteral("  ") + mc[0];
+                    f.rows << mc;
+                    f.rowRoles << rowRoleForConnection(*m_connAgg, row);
+                    const double cr = combinedRate(row);
+                    rates << cr;
+                    maxRate = std::max(maxRate, cr);
+                }
+            }
         }
     }
 
@@ -301,7 +362,7 @@ Frame TuiApp::buildFrame()
                        .arg(m_filterText);
     } else {
         f.footer = QStringLiteral(
-            " q quit · Tab/1/2 view · s/f sort · r reverse · z theme · / filter · p pause · S settings · ? help ");
+            " q quit · Tab view · s/f sort · g group · / filter · p pause · z theme · S settings · ? help ");
     }
 
     buildModal(f);
@@ -315,6 +376,7 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.title    = QStringLiteral("Settings");
         f.modal.items    = settingsRows(m_themes.isEmpty() ? QString()
                                                            : m_themes[m_themeIdx].name,
+                                         groupByName(m_groupBy),
                                          m_gaugeEnabled, m_dnsEnabled,
                                          m_udpAggregate, m_smoothing);
         f.modal.selected = m_settingsSel;
@@ -344,6 +406,7 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("f"),            QStringLiteral("Fields: pick sort column & direction")),
             row(QStringLiteral("r"),            QStringLiteral("Reverse the sort order")),
             row(QStringLiteral("/"),            QStringLiteral("Filter connections (mini-language; Esc clears)")),
+            row(QStringLiteral("g"),            QStringLiteral("Group connections by interface / process / container")),
             row(QStringLiteral("p"),            QStringLiteral("Pause / resume live updates")),
             row(QStringLiteral("z"),            QStringLiteral("Cycle the colour theme")),
             row(QStringLiteral("S / F2"),       QStringLiteral("Settings (gauge, DNS, smoothing…)")),
@@ -467,6 +530,11 @@ void TuiApp::loadSettings()
     m_dnsEnabled    = s.value(QStringLiteral("dns"), m_dnsEnabled).toBool();
     m_udpAggregate  = s.value(QStringLiteral("udpAggregate"), m_udpAggregate).toBool();
     m_smoothing     = s.value(QStringLiteral("smoothing"), m_smoothing).toBool();
+    {
+        const int g = s.value(QStringLiteral("groupBy"), int(m_groupBy)).toInt();
+        m_groupBy = (g >= 0 && g < int(GroupBy::Count)) ? static_cast<GroupBy>(g)
+                                                        : GroupBy::None;
+    }
     const QString themeName = s.value(QStringLiteral("theme")).toString();
     s.endGroup();
 
@@ -497,6 +565,7 @@ void TuiApp::saveSettings() const
     s.setValue(QStringLiteral("dns"), m_dnsEnabled);
     s.setValue(QStringLiteral("udpAggregate"), m_udpAggregate);
     s.setValue(QStringLiteral("smoothing"), m_smoothing);
+    s.setValue(QStringLiteral("groupBy"), int(m_groupBy));
     if (!m_themes.isEmpty())
         s.setValue(QStringLiteral("theme"), m_themes[m_themeIdx].name);
     s.endGroup();
@@ -512,6 +581,11 @@ void TuiApp::handleSettingsKey(int key)
                 m_themeIdx = (m_themeIdx + 1) % m_themes.size();
                 if (m_screen) m_screen->setTheme(m_themes[m_themeIdx]);
             }
+            break;
+        case Setting::GroupBy:
+            m_groupBy = static_cast<GroupBy>((static_cast<int>(m_groupBy) + 1)
+                                             % static_cast<int>(GroupBy::Count));
+            m_connScroll = 0;
             break;
         case Setting::Gauge:        m_gaugeEnabled = !m_gaugeEnabled; break;
         case Setting::Dns:          m_dnsEnabled   = !m_dnsEnabled;   break;

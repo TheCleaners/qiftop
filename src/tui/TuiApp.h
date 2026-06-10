@@ -77,6 +77,7 @@ private:
     bool m_dnsEnabled     = false;
     bool m_udpAggregate   = true;
     bool m_smoothing      = true;
+    GroupBy m_groupBy     = GroupBy::None;
     int  m_pollMs         = 1000;
 
     // Pause: freeze live updates so the snapshot can be read.

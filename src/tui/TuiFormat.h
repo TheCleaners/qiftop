@@ -196,6 +196,70 @@ inline QList<int> sortedConnectionIndices(const QList<aggregate::ConnectionAggre
     return idx;
 }
 
+// --- grouping (Connections view) --------------------------------------------
+// Group flows by interface / process / container (the GUI's ConnectionGroupProxy
+// modes), computed TUI-side over the aggregator rows.
+
+enum class GroupBy { None, Interface, Process, Container, Count };
+
+inline QString groupByName(GroupBy g)
+{
+    switch (g) {
+    case GroupBy::Interface: return QStringLiteral("interface");
+    case GroupBy::Process:   return QStringLiteral("process");
+    case GroupBy::Container: return QStringLiteral("container");
+    case GroupBy::None:      return QStringLiteral("off");
+    case GroupBy::Count:     break;
+    }
+    return QStringLiteral("off");
+}
+
+// Stable bucket key. Empty string is a valid key (the "unattributed" bucket).
+inline QString groupKeyFor(GroupBy g, const Connection &c)
+{
+    switch (g) {
+    case GroupBy::Interface:
+        return c.iface;
+    case GroupBy::Process:
+        return c.process.valid()
+                   ? QStringLiteral("%1\u0001%2").arg(c.process.pid).arg(c.process.comm)
+                   : QString();
+    case GroupBy::Container:
+        // Include runtime so the same id under docker vs podman never collapses.
+        return c.container.valid()
+                   ? QStringLiteral("%1\u0001%2").arg(c.container.runtime, c.container.id)
+                   : QString();
+    case GroupBy::None:
+    case GroupBy::Count:
+        break;
+    }
+    return QString();
+}
+
+inline QString groupLabelFor(GroupBy g, const Connection &c)
+{
+    switch (g) {
+    case GroupBy::Interface:
+        return c.iface.isEmpty() ? QStringLiteral("(unattributed)") : c.iface;
+    case GroupBy::Process:
+        if (!c.process.valid())
+            return QStringLiteral("(unattributed)");
+        return QStringLiteral("%1 [%2]")
+            .arg(c.process.comm.isEmpty() ? QStringLiteral("?") : c.process.comm)
+            .arg(c.process.pid);
+    case GroupBy::Container:
+        if (!c.container.valid())
+            return QStringLiteral("(no container)");
+        return QStringLiteral("%1 (%2)")
+            .arg(c.container.name.isEmpty() ? c.container.id : c.container.name,
+                 c.container.runtime);
+    case GroupBy::None:
+    case GroupBy::Count:
+        break;
+    }
+    return QString();
+}
+
 // --- settings model ---------------------------------------------------------
 // A small, pure description of the runtime-toggleable settings, shared by the
 // controller (which mutates the flags) and Screen (which paints the modal).
@@ -205,6 +269,7 @@ inline QList<int> sortedConnectionIndices(const QList<aggregate::ConnectionAggre
 
 enum class Setting {
     Theme,          // cycles through the built-in palettes
+    GroupBy,        // group connections by interface / process / container
     Gauge,          // row-spanning bandwidth gauge on/off
     Dns,            // reverse-DNS hostname resolution on/off
     UdpAggregate,   // collapse UDP flows per peer on/off
@@ -225,12 +290,14 @@ inline QString onOff(bool v)
 
 // Build the settings list for the modal. Order matches the Setting enum so the
 // selected index maps straight onto a Setting.
-inline QList<SettingRow> settingsRows(const QString &theme, bool gauge, bool dns,
-                                      bool udp, bool smoothing)
+inline QList<SettingRow> settingsRows(const QString &theme, const QString &groupBy,
+                                      bool gauge, bool dns, bool udp, bool smoothing)
 {
     return {
         {QStringLiteral("Theme"), theme,
          QStringLiteral("Colour palette. ←/→ or Space cycles dark / light / colourblind / mono.")},
+        {QStringLiteral("Group connections"), groupBy,
+         QStringLiteral("Group flows by interface / process / container (or off). Also: g.")},
         {QStringLiteral("Bandwidth gauge"), onOff(gauge),
          QStringLiteral("Row-spanning background bar scaled to the loudest flow (iftop-style).")},
         {QStringLiteral("Resolve hostnames"), onOff(dns),

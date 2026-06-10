@@ -137,9 +137,11 @@ private slots:
     {
         // One row per Setting (except the Count sentinel), in enum order.
         const QList<SettingRow> rows =
-            settingsRows(QStringLiteral("dark"), true, false, true, true);
+            settingsRows(QStringLiteral("dark"), QStringLiteral("off"),
+                         true, false, true, true);
         QCOMPARE(rows.size(), static_cast<int>(Setting::Count));
         QCOMPARE(rows[static_cast<int>(Setting::Theme)].value, QStringLiteral("dark"));
+        QCOMPARE(rows[static_cast<int>(Setting::GroupBy)].value, QStringLiteral("off"));
         QCOMPARE(rows[static_cast<int>(Setting::Gauge)].value, QStringLiteral("on"));
         QCOMPARE(rows[static_cast<int>(Setting::Dns)].value, QStringLiteral("off"));
         QCOMPARE(rows[static_cast<int>(Setting::UdpAggregate)].value, QStringLiteral("on"));
@@ -165,6 +167,34 @@ private slots:
         const QList<SettingRow> asc = sortFieldRows(cols, 0, false);
         QVERIFY(asc[0].value.contains(QStringLiteral("asc")));
         QVERIFY(asc[1].value.isEmpty());
+    }
+
+    void groupingKeysAndLabels()
+    {
+        Connection c;
+        c.iface = QStringLiteral("eth0");
+        // Interface grouping keys off the iface name.
+        QCOMPARE(groupKeyFor(GroupBy::Interface, c), QStringLiteral("eth0"));
+        QCOMPARE(groupLabelFor(GroupBy::Interface, c), QStringLiteral("eth0"));
+        Connection bare;  // no iface -> unattributed bucket (empty key)
+        QVERIFY(groupKeyFor(GroupBy::Interface, bare).isEmpty());
+        QCOMPARE(groupLabelFor(GroupBy::Interface, bare), QStringLiteral("(unattributed)"));
+
+        // Container grouping includes the runtime so docker/podman never collide.
+        Connection d; d.container = {QStringLiteral("docker"), QStringLiteral("abc123"), QStringLiteral("web")};
+        Connection p; p.container = {QStringLiteral("podman"), QStringLiteral("abc123"), QStringLiteral("web")};
+        QVERIFY(groupKeyFor(GroupBy::Container, d) != groupKeyFor(GroupBy::Container, p));
+        QVERIFY(groupLabelFor(GroupBy::Container, d).contains(QStringLiteral("docker")));
+        QCOMPARE(groupLabelFor(GroupBy::Container, bare), QStringLiteral("(no container)"));
+
+        // Process grouping uses pid+comm; unattributed when pid==0.
+        Connection pr; pr.process = {1234, QStringLiteral("curl"), {}, {}, 0};
+        QVERIFY(groupLabelFor(GroupBy::Process, pr).contains(QStringLiteral("curl")));
+        QVERIFY(groupLabelFor(GroupBy::Process, pr).contains(QStringLiteral("1234")));
+        QCOMPARE(groupLabelFor(GroupBy::Process, bare), QStringLiteral("(unattributed)"));
+
+        QCOMPARE(groupByName(GroupBy::None), QStringLiteral("off"));
+        QCOMPARE(groupByName(GroupBy::Container), QStringLiteral("container"));
     }
 };
 
