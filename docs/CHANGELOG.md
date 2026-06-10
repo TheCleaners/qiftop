@@ -122,6 +122,14 @@ human-readable summary for *shipping* releases.
   runners exist for local Vagrant runs — cold bring-up is ~3-4 min
   each so they're not in CI; the chain shapes they cover are
   pinned by Tier-1 unit tests.
+- **Fedora SELinux VM** (`scripts/local-integration.sh --distro
+  fedora`) — the Vagrant harness is now multi-machine (`ubuntu` +
+  `fedora`). The Fedora VM runs the `systemd-dbus` runner under
+  SELinux **enforcing**, installs the agent from the real `.rpm`, and
+  audits `ausearch` for qiftop AVC denials after the attribution
+  assertion. Covers what the Ubuntu/AppArmor VM can't: the agent's
+  systemd sandbox under SELinux and the Fedora packaging path.
+  VM-only (containers can't `setenforce`); see AGENTS.md §6.5c.
 
 ## [0.1] — 2026-06-08
 

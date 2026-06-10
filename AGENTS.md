@@ -498,7 +498,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `attribution_podman` (Tier-2) | Sibling of `attribution_docker` using rootful podman + netavark; exercises the `libpod-<id>.scope` cgroup hierarchy that the docker path never produces. SKIPs cleanly on hosts where rootful podman can't start a container (e.g. logind rlimit-delegation quirks). |
 | `attribution_k3d` (Tier-2) | k3s-in-docker (k3d). Exercises the **nested** container chain (`docker → kubernetes → containerd`, depth 3) — the leaf-wins segment-walk has to land on the innermost containerd CID, not on the outer k3s node container. Local-only (Vagrant); not in CI (cold k3d image pull is ~3–4 min, the chain shape is already pinned by Tier-1 fixtures). |
 | `attribution_k8s` (Tier-2) | "Naked" k8s via **k0s --single** (single-binary, no docker wrapper). Distinguishing assertion vs. k3d: chain depth is exactly 2 (`kubernetes → containerd`) and the JSON MUST NOT contain `"runtime":"docker"`. Catches phantom-wrapper bugs in `classifyPathChain`. Local-only (Vagrant). |
-| `attribution_systemd_dbus` (Tier-2) | The ONLY runner that exercises the deployed **systemd unit + DBus policy** instead of the in-process probe. Installs the freshly-built `qiftop-agent` component (`cmake --install --component qiftop-agent --prefix /usr`), starts it under systemd, runs a docker container holding ONE long-lived external flow (`sleep 3600 \| nc <host> 22`), then asserts over DBus (`sudo busctl … GetConnections`, JSON parsed in `run-systemd-dbus.sh`) that the flow attributes to `runtime=docker` + CID prefix. Guards the sandbox surface (`RestrictNamespaces`, `CapabilityBoundingSet`) that the probe runners bypass — e.g. the `RestrictNamespaces=yes` regression in §8a rule 5. DESTRUCTIVE / VM-CI-only (needs passwordless sudo + `QIFTOP_BUILD_DIR`). Run via `scripts/local-integration.sh --runtime systemd-dbus`. See §6.5b for the container-flow-generation wisdom it encodes. |
+| `attribution_systemd_dbus` (Tier-2) | The ONLY runner that exercises the deployed **systemd unit + DBus policy** instead of the in-process probe. Installs the freshly-built `qiftop-agent` component (`cmake --install --component qiftop-agent --prefix /usr`), starts it under systemd, runs a docker container holding ONE long-lived external flow (`sleep 3600 \| nc <host> 22`), then asserts over DBus (`sudo busctl … GetConnections`, JSON parsed in `run-systemd-dbus.sh`) that the flow attributes to `runtime=docker` + CID prefix. Guards the sandbox surface (`RestrictNamespaces`, `CapabilityBoundingSet`) that the probe runners bypass — e.g. the `RestrictNamespaces=yes` regression in §8a rule 5. DESTRUCTIVE / VM-CI-only (needs passwordless sudo + `QIFTOP_BUILD_DIR`). Run via `scripts/local-integration.sh --runtime systemd-dbus`. See §6.5b for the container-flow-generation wisdom it encodes. On the Fedora VM (`--distro fedora`) it also installs the real `.rpm` and audits SELinux AVCs — see §6.5c. |
 
 ### 6.3 Gaps worth filling
 
@@ -619,9 +619,9 @@ already pinned by Tier-1 unit tests
 
 ### 6.5a Vagrant runner ordering (local Tier-2)
 
-The Vagrant VM at `tests/integration/vagrant/` is the supported home
-for the heavyweight runners (k3d, naked k8s). One sharp edge to
-remember when iterating:
+The Vagrant VM at `tests/integration/vagrant/` (the `ubuntu` machine —
+see §6.5c for the `fedora` one) is the supported home for the heavyweight
+runners (k3d, naked k8s). One sharp edge to remember when iterating:
 
 * **k0s bundles kube-router**, which inserts persistent rules into
   the host's `INPUT` (`KUBE-FIREWALL`, `KUBE-ROUTER-INPUT`) and
@@ -732,6 +732,53 @@ now encodes/works around):
   FIRST**, then the agent + probe. (On an incremental tree where the GUI
   already exists, as on the devbox, the ordering is moot — which is why
   this only bit on the VM's clean build.)
+
+### 6.5c The Fedora SELinux VM
+
+The Vagrant harness is **multi-machine**: `ubuntu` (primary, full runner
+set) and `fedora` (opt-in, `autostart: false`). The Fedora VM exists for
+the two things the Ubuntu VM structurally cannot cover:
+
+1. **SELinux.** Ubuntu uses AppArmor with permissive-ish profiles;
+   Fedora ships SELinux **enforcing**. The agent does exactly the things
+   SELinux likes to deny on a sandboxed root service — `setns(CLONE_NEWNET)`,
+   `NETLINK_SOCK_DIAG` sockets, cross-netns `/proc/<pid>/{ns,cgroup}`
+   reads. The probe runners (in-process, no sandbox) cannot catch an
+   SELinux denial; only the deployed systemd unit can.
+2. **The real `.rpm` install path.** The Fedora path installs the agent
+   from the freshly-built `.rpm` (`dnf remove` + `install`, exercising
+   both scriptlets and `restorecon` file labels) instead of
+   `cmake --install`.
+
+Run it with `scripts/local-integration.sh --distro fedora` (defaults to
+the `systemd-dbus` runner; the Fedora VM has no k3d/k8s provisioned).
+The driver additionally `cpack -G RPM`s in the guest and exports
+`QIFTOP_AGENT_RPM_DIR` + `QIFTOP_SELINUX_AUDIT=1`, forwarded through
+`sudo --preserve-env` so the runner picks them up.
+
+`run-systemd-dbus.sh` honours those two env vars (off by default, so the
+Ubuntu path is byte-for-byte unchanged):
+
+* `QIFTOP_AGENT_RPM_DIR=<dir>` → install the agent from `<dir>/qiftop-agent-*.rpm`.
+* `QIFTOP_SELINUX_AUDIT=1` → after the attribution assertion, `ausearch
+  -m avc` for **qiftop** denials since the agent started. Under the
+  default `unconfined_service_t` domain (we ship no SELinux policy
+  module yet) there should be **zero** — so a hit means the agent
+  tripped SELinux. A clean run is the reassuring answer ("qiftop runs
+  fine under Fedora targeted policy"); a denial is the signal that a
+  policy module is needed before the agent can run *confined*. Denials
+  are fatal to the test (`exit 1`) and are also dumped on the
+  FOUND-UNATTRIBUTED failure path (where a setns denial would be the
+  smoking gun, mirroring the seccomp `RestrictNamespaces` regression in
+  §8a rule 5).
+
+SELinux enforcing is inherently a **VM-only** thing — GitHub Actions
+containers share the host kernel and can't `setenforce`, so there is no
+CI job for this; validate in the Fedora VM. The box defaults to
+`generic/fedora41` (good rsync/libvirt compat) and is overridable via
+`QIFTOP_FEDORA_BOX`. Multi-machine note: the machines are now named
+`ubuntu` / `fedora`; an old unnamed `default` VM from before this split
+can be dropped with `vagrant destroy default`.
 
 ---
 

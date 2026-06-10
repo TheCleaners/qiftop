@@ -1,35 +1,44 @@
 # -*- mode: ruby -*-
 # vi: ft=ruby
 #
-# Disposable ubuntu-24.04 VM that mirrors the GitHub Actions runner
-# image used by .github/workflows/integration.yml. Spin it up to run
-# the attribution Tier-2 harness without the host's logind / sudo /
-# kernel-module quirks affecting the result.
+# Disposable VMs for the qiftop attribution Tier-2 harness. Two machines:
 #
-# Usage from the repo root:
-#   ./scripts/local-integration.sh                  # run all runtimes
-#   ./scripts/local-integration.sh --runtime podman # just podman
+#   ubuntu  (primary, default)  bento/ubuntu-24.04
+#       Mirrors the GitHub Actions runner image used by
+#       .github/workflows/integration.yml. Runs the full set of
+#       attribution runners (docker, podman, k3d, k8s, systemd-dbus).
+#
+#   fedora  (autostart: false)  generic/fedora41
+#       SELinux-ENFORCING host. Exists to exercise the two things the
+#       Ubuntu VM cannot: (a) the agent's systemd unit + DBus policy
+#       under SELinux, and (b) the real .rpm install path on Fedora.
+#       Scoped to the systemd-dbus runner. Override the box with
+#       QIFTOP_FEDORA_BOX (e.g. fedora/41-cloud-base — note: must
+#       include rsync for the synced folder).
+#
+# Usage from the repo root (see scripts/local-integration.sh):
+#   ./scripts/local-integration.sh                       # ubuntu, all runtimes
+#   ./scripts/local-integration.sh --distro fedora       # fedora, systemd-dbus + SELinux
+#   ./scripts/local-integration.sh --runtime podman      # ubuntu, just podman
 #
 # Manual usage:
 #   cd tests/integration/vagrant
-#   vagrant up
-#   vagrant ssh -c 'cd /home/vagrant/qiftop && \
-#       cmake -S . -B build -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON && \
-#       cmake --build build --target qiftop-attribution-probe -j && \
-#       sudo ctest --test-dir build -L attribution-integration --output-on-failure -V'
+#   vagrant up ubuntu                # or: vagrant up fedora
+#   vagrant ssh fedora -c '...'
 #
-# Tear down with `vagrant destroy -f` when done; the VM is intended to
-# be ephemeral.
+# Tear down with `vagrant destroy -f` when done; the VMs are ephemeral.
+#
+# NOTE: this file was previously single-machine (the default 'default'
+# machine). After this change the machines are named 'ubuntu' and
+# 'fedora'. If you have an old 'default' VM lying around, drop it with
+# `vagrant destroy default` (its state dir is gitignored).
 
 REPO_ROOT = File.expand_path("../../..", __dir__)
 
-Vagrant.configure("2") do |config|
-  # Ubuntu 24.04 LTS — exact same generation as the CI runner image.
-  # 'bento/ubuntu-24.04' supports libvirt and is actively maintained.
-  config.vm.box = "bento/ubuntu-24.04"
-  config.vm.hostname = "qiftop-integration"
-
-  config.vm.provider "libvirt" do |lv|
+# Shared per-machine setup (provider sizing + rsync share + provisioner).
+# Kept in a lambda so the two define blocks below stay DRY.
+configure_node = lambda do |node, provision_script|
+  node.vm.provider "libvirt" do |lv|
     # Default to the system libvirt instance — vagrant-libvirt's
     # session mode forces qemu-bridge-helper for the management
     # network, which needs both /etc/qemu/bridge.conf ACL edits AND
@@ -40,25 +49,17 @@ Vagrant.configure("2") do |config|
     # Polkit lets members of the 'libvirt' group access qemu:///system
     # without a password. If you get a polkit prompt, add yourself once:
     #   sudo usermod -aG libvirt $USER && newgrp libvirt
-    #
-    # Override via LIBVIRT_DEFAULT_URI if you really want session mode
-    # (you'll also need /etc/qemu/bridge.conf + setuid helper).
     lv.uri = ENV.fetch("LIBVIRT_DEFAULT_URI", "qemu:///system")
     lv.memory = 4096
     lv.cpus   = 4
     lv.machine_virtual_size = 20
   end
 
-  # Disable vagrant's default /vagrant synced folder — it tries NFS by
-  # default with libvirt, which needs host-side nfsd config we don't
-  # want to require. Our explicit rsync share below is the only one
-  # we actually use.
-  config.vm.synced_folder ".", "/vagrant", disabled: true
-
   # rsync the repo into the guest. NFS/9p would be faster but rsync
   # works without any extra host config and matches what CI sees (a
-  # clean checkout, not a live-mounted dev tree).
-  config.vm.synced_folder REPO_ROOT, "/home/vagrant/qiftop",
+  # clean checkout, not a live-mounted dev tree). The guest box MUST
+  # ship rsync for this to work at `vagrant up` time.
+  node.vm.synced_folder REPO_ROOT, "/home/vagrant/qiftop",
     type: "rsync",
     rsync__exclude: [
       ".git/",
@@ -69,8 +70,33 @@ Vagrant.configure("2") do |config|
     ],
     rsync__args: ["--archive", "--delete", "--compress"]
 
-  config.vm.provision "shell",
-    path: "provision.sh",
+  node.vm.provision "shell",
+    path: provision_script,
     privileged: true,
     keep_color: true
+end
+
+Vagrant.configure("2") do |config|
+  # Disable vagrant's default /vagrant synced folder — it tries NFS by
+  # default with libvirt, which needs host-side nfsd config we don't
+  # want to require. The explicit rsync share above is the only one used.
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  # --- Ubuntu (primary): full attribution runner set --------------------
+  config.vm.define "ubuntu", primary: true do |node|
+    # Ubuntu 24.04 LTS — exact same generation as the CI runner image.
+    node.vm.box      = "bento/ubuntu-24.04"
+    node.vm.hostname = "qiftop-ubuntu"
+    configure_node.call(node, "provision.sh")
+  end
+
+  # --- Fedora (opt-in): SELinux-enforcing systemd-dbus + rpm path -------
+  # autostart: false so a bare `vagrant up` only brings up Ubuntu; the
+  # Fedora VM is summoned explicitly (`vagrant up fedora` /
+  # `local-integration.sh --distro fedora`).
+  config.vm.define "fedora", autostart: false do |node|
+    node.vm.box      = ENV.fetch("QIFTOP_FEDORA_BOX", "generic/fedora41")
+    node.vm.hostname = "qiftop-fedora"
+    configure_node.call(node, "provision-fedora.sh")
+  end
 end

@@ -71,6 +71,60 @@ readonly IFACE_IFACE="org.qiftop.NetworkAgent1.Interfaces"
 skip() { echo "harness: $1; SKIPPING" >&2; exit 77; }
 die()  { echo "harness: $1" >&2; exit 70; }
 
+# Install the agent either from a freshly-built .rpm (Fedora SELinux VM
+# path) or via `cmake --install` (default Ubuntu path). The rpm path
+# additionally exercises the package scriptlets + correct SELinux file
+# labels (restorecon on install), which `cmake --install` does not give.
+# Set QIFTOP_AGENT_RPM_DIR to a dir containing qiftop-agent-*.rpm to opt in.
+install_agent() {
+    if [[ -n "${QIFTOP_AGENT_RPM_DIR:-}" ]]; then
+        local rpm
+        rpm="$(ls "${QIFTOP_AGENT_RPM_DIR}"/qiftop-agent-*.rpm 2>/dev/null | head -1 || true)"
+        [[ -n "$rpm" ]] \
+            || die "QIFTOP_AGENT_RPM_DIR=${QIFTOP_AGENT_RPM_DIR} but no qiftop-agent-*.rpm there"
+        echo "harness: installing qiftop-agent via rpm: $rpm"
+        # remove-then-install so a rebuilt SAME-version rpm is actually
+        # reinstalled (dnf install of an already-present version is a
+        # no-op) AND both scriptlets (postun on remove, post on install)
+        # get exercised every run.
+        sudo dnf -y remove qiftop-agent >/dev/null 2>&1 || true
+        sudo dnf -y --setopt=install_weak_deps=False install "$rpm" >/dev/null \
+            || die "dnf install of $rpm failed"
+    else
+        echo "harness: installing qiftop-agent component from ${BUILD_DIR}"
+        sudo cmake --install "$BUILD_DIR" --component qiftop-agent --prefix /usr >/dev/null \
+            || die "cmake --install of qiftop-agent failed (is the target built?)"
+    fi
+}
+
+# SELinux AVC audit. Gated by QIFTOP_SELINUX_AUDIT=1 (off => no-op, so the
+# Ubuntu/AppArmor path is unaffected). Greps the audit log for AVC denials
+# mentioning qiftop since AUDIT_SINCE (captured just before the agent
+# starts). Returns non-zero (and prints the denials) if any are found —
+# under the default unconfined_service_t domain there should be NONE, so a
+# hit means the agent tripped SELinux and likely needs a policy tweak.
+selinux_report() {
+    [[ "${QIFTOP_SELINUX_AUDIT:-0}" == "0" ]] && return 0
+    local mode denials
+    mode="$(getenforce 2>/dev/null || echo Unknown)"
+    echo "harness: SELinux mode: ${mode}"
+    if ! command -v ausearch >/dev/null 2>&1; then
+        echo "harness: ausearch not present; cannot audit SELinux (auditd installed?)" >&2
+        return 0
+    fi
+    denials="$(sudo ausearch -m avc,user_avc -ts "${AUDIT_SINCE:-recent}" 2>/dev/null \
+        | grep -i 'qiftop' || true)"
+    if [[ -n "$denials" ]]; then
+        echo "harness: ==== SELinux AVC denials involving qiftop ====" >&2
+        echo "$denials" >&2
+        echo "harness: =============================================" >&2
+        echo "harness: (inspect with: sudo ausearch -m avc -ts recent | audit2allow -R)" >&2
+        return 1
+    fi
+    echo "harness: SELinux audit clean — no qiftop AVC denials since ${AUDIT_SINCE:-recent}"
+    return 0
+}
+
 # --- env-supplied value guards ---------------------------------------------
 # These values are interpolated into `docker run` argv and an in-container
 # `sh -c` string. Minimal sanity guards: reject an image ref that could be
@@ -99,13 +153,15 @@ if ! timeout 5 bash -c "exec 3<>/dev/tcp/${TARGET_HOST}/${TARGET_PORT}" 2>/dev/n
 fi
 
 # --- install + start the agent under systemd ------------------------------
-# Install the qiftop-agent component with prefix /usr so the binary lands
-# at /usr/bin/qiftop-agent (matching the unit's hard-coded ExecStart) and
-# the systemd unit + DBus policy install to their absolute/datadir paths.
-echo "harness: installing qiftop-agent component from ${BUILD_DIR}"
-if ! sudo cmake --install "$BUILD_DIR" --component qiftop-agent --prefix /usr >/dev/null; then
-    die "cmake --install of qiftop-agent failed (is the target built?)"
-fi
+# Install the qiftop-agent component (prefix /usr so the binary lands at
+# /usr/bin/qiftop-agent, matching the unit's hard-coded ExecStart) — or,
+# on the Fedora SELinux path, from the freshly-built .rpm. See install_agent.
+install_agent
+
+# Capture the audit cursor JUST before the agent starts so selinux_report
+# only considers denials produced by THIS run.
+AUDIT_SINCE="$(date '+%T' 2>/dev/null || echo recent)"
+
 sudo systemctl daemon-reload
 sudo systemctl restart "$SVC" || die "systemctl restart $SVC failed"
 
@@ -255,6 +311,14 @@ for _ in $(seq 1 40); do
         if out="$(parse_and_check "$JSON_FILE")"; then
             echo "harness: $out"
             echo "PASS: systemd agent attributed the container flow over DBus"
+            # Attribution worked; now make sure SELinux didn't merely *warn*
+            # while letting it through (gated; no-op off the Fedora path).
+            if ! selinux_report; then
+                echo "FAIL: attribution succeeded but SELinux logged qiftop AVC" \
+                     "denials (see above) — the agent needs an SELinux policy" \
+                     "adjustment before it can run confined." >&2
+                exit 1
+            fi
             exit 0
         fi
         last="$out"
@@ -296,6 +360,10 @@ if [[ "$last" == FOUND-UNATTRIBUTED* ]]; then
         echo "      but UNATTRIBUTED (${last}). The systemd sandbox almost" >&2
         echo "      certainly blocked NetnsScanner — check RestrictNamespaces /" >&2
         echo "      CAP_SYS_ADMIN in the unit (AGENTS.md §8a)." >&2
+        # On the Fedora path this is the smoking gun: SELinux (not the
+        # seccomp RestrictNamespaces filter) may be denying setns/sock_diag.
+        # Dump any qiftop AVC denials to pinpoint which.
+        selinux_report || true
         exit 1
     fi
     skip "flow visible but its socket already closed (SSH grace expired?) — \
