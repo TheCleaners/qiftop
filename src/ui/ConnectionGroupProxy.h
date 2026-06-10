@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QAbstractItemModel>
+#include <QHash>
 #include <QList>
+#include <QPair>
 #include <QObject>
 #include <QPersistentModelIndex>
 #include <QString>
@@ -109,9 +111,23 @@ private:
     // instead of snapping back to insertion order.
     void applyCurrentSort();
 
+    // Rebuilds m_srcIndex from m_groups in one O(N) pass. Called after
+    // every STRUCTURAL change (rebuild / sort / incremental insert /
+    // incremental remove) — i.e. O(1) times per polling tick — so that
+    // the per-row hot paths (mapFromSource, groupIndexForSourceRow,
+    // forwardSourceDataChanged) become O(1) hash lookups instead of
+    // O(N) linear scans across every group's srcRows. On a saturated
+    // router (4096 flows) the old per-tick cost was O(rows²); now it's
+    // O(rows). No-op in Flat mode (m_srcIndex stays empty there —
+    // Flat's mapFromSource has its own direct 1:1 branch).
+    void refreshSrcIndex();
+
     QAbstractItemModel *m_src = nullptr;
     ViewMode m_mode = ViewMode::Flat;
     QList<Group> m_groups;     // empty when mode==Flat
+    // Reverse index: source row → (group index, child row in group).
+    // Empty in Flat mode. Rebuilt en masse by refreshSrcIndex().
+    QHash<int, QPair<int, int>> m_srcIndex;
     int m_sortColumn = -1;     // -1 = no sort applied yet
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
     // Snapshot of the pre-removal source-row span captured in

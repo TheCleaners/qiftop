@@ -153,8 +153,9 @@ void ConnectionGroupProxy::onSourceRowsInserted(const QModelIndex &, int first, 
     // 3. Re-apply current sort. applyCurrentSort emits no signals so
     //    this re-orders in place; the view will pick up the new order
     //    on its next paint. Skipped when no sort has been requested
-    //    yet.
+    //    yet. Then rebuild the O(1) reverse index for the new layout.
     applyCurrentSort();
+    refreshSrcIndex();
 }
 
 void ConnectionGroupProxy::onSourceRowsAboutToBeRemoved(const QModelIndex &parent, int first, int last)
@@ -225,6 +226,10 @@ void ConnectionGroupProxy::onSourceRowsRemoved(const QModelIndex &, int first, i
         endRemoveRows();
     }
 
+    // The childRow positions within touched groups and the group
+    // indices after any pruning have shifted — rebuild the O(1) index.
+    refreshSrcIndex();
+
     m_pendingRemovalFirst = -1;
     m_pendingRemovalLast  = -1;
 }
@@ -260,6 +265,7 @@ void ConnectionGroupProxy::onSourceDataChanged(const QModelIndex &topLeft,
 void ConnectionGroupProxy::rebuild()
 {
     m_groups.clear();
+    m_srcIndex.clear();
     if (!m_src || m_mode == ViewMode::Flat)
         return;
 
@@ -280,6 +286,7 @@ void ConnectionGroupProxy::rebuild()
     }
 
     applyCurrentSort();
+    refreshSrcIndex();
 }
 
 void ConnectionGroupProxy::applyCurrentSort()
@@ -388,6 +395,10 @@ void ConnectionGroupProxy::sort(int column, Qt::SortOrder order)
     }
 
     applyCurrentSort();
+    // Rebuild the O(1) reverse index for the post-sort layout; the
+    // persistent-index remap below then uses it instead of an O(N)
+    // indexOf per persistent.
+    refreshSrcIndex();
 
     // Re-build the key→index lookup once for the post-sort group order.
     QHash<QString, int> keyToIdx;
@@ -404,10 +415,10 @@ void ConnectionGroupProxy::sort(int column, Qt::SortOrder order)
         if (id.srcRow < 0) {
             newList.append(createIndex(gi, id.col, kTopLevelId));
         } else {
-            const int childRow = static_cast<int>(
-                m_groups[gi].srcRows.indexOf(id.srcRow));
-            newList.append(childRow >= 0
-                               ? createIndex(childRow, id.col, static_cast<quintptr>(gi))
+            const auto it = m_srcIndex.constFind(id.srcRow);
+            newList.append(it != m_srcIndex.constEnd()
+                               ? createIndex(it->second, id.col,
+                                             static_cast<quintptr>(it->first))
                                : QModelIndex{});
         }
     }
@@ -496,13 +507,12 @@ QModelIndex ConnectionGroupProxy::mapFromSource(const QModelIndex &src) const
     if (!src.isValid() || !m_src) return {};
     if (m_mode == ViewMode::Flat)
         return index(src.row(), src.column());
-    // Locate the group containing this source row.
-    for (int gi = 0; gi < m_groups.size(); ++gi) {
-        const int childRow = static_cast<int>(m_groups[gi].srcRows.indexOf(src.row()));
-        if (childRow >= 0)
-            return createIndex(childRow, src.column(), static_cast<quintptr>(gi));
-    }
-    return {};
+    // O(1) reverse lookup (was an O(N) scan across every group).
+    const auto it = m_srcIndex.constFind(src.row());
+    if (it == m_srcIndex.constEnd()) return {};
+    const int gi       = it->first;
+    const int childRow = it->second;
+    return createIndex(childRow, src.column(), static_cast<quintptr>(gi));
 }
 
 QModelIndex ConnectionGroupProxy::index(int row, int column,
@@ -615,11 +625,24 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
 
 int ConnectionGroupProxy::groupIndexForSourceRow(int srcRow) const
 {
+    // O(1) reverse lookup (was an O(N) scan calling contains() on
+    // every group's srcRows).
+    const auto it = m_srcIndex.constFind(srcRow);
+    return it == m_srcIndex.constEnd() ? -1 : it->first;
+}
+
+void ConnectionGroupProxy::refreshSrcIndex()
+{
+    m_srcIndex.clear();
+    if (m_mode == ViewMode::Flat) return;
+    int total = 0;
+    for (const Group &g : m_groups) total += g.srcRows.size();
+    m_srcIndex.reserve(total);
     for (int gi = 0; gi < m_groups.size(); ++gi) {
-        if (m_groups[gi].srcRows.contains(srcRow))
-            return gi;
+        const QList<int> &rows = m_groups[gi].srcRows;
+        for (int childRow = 0; childRow < rows.size(); ++childRow)
+            m_srcIndex.insert(rows[childRow], qMakePair(gi, childRow));
     }
-    return -1;
 }
 
 void ConnectionGroupProxy::forwardSourceDataChanged(const QModelIndex &topLeft,
