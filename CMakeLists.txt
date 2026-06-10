@@ -90,6 +90,7 @@ add_library(qiftoplib SHARED
     src/util/Exporter.cpp
     src/util/Logging.cpp
     src/util/Autostart.cpp
+    src/aggregate/InterfaceAggregator.cpp
 )
 set_target_properties(qiftoplib PROPERTIES
     OUTPUT_NAME qiftop
