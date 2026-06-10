@@ -93,6 +93,7 @@ void signalHandler(int sig)
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("qiftop"));
     QCoreApplication::setApplicationName(QStringLiteral("nqiftop"));
     QCoreApplication::setApplicationVersion(QStringLiteral(QIFTOP_VERSION));
 
@@ -196,7 +197,8 @@ int main(int argc, char *argv[])
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [&screen] { screen.shutdown(); });
 
     qiftop::tui::TuiApp tui(&screen, &ifaceAgg, &connAgg, sourceLabel,
-                            parser.value(themeOpt), pollMs);
+                            parser.isSet(themeOpt) ? parser.value(themeOpt) : QString(),
+                            pollMs);
 
     const auto drainInput = [&screen, &tui] {
         int ch;

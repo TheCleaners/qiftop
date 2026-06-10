@@ -334,7 +334,7 @@ set(CPACK_PACKAGE_VENDOR            "qiftop project")
 set(CPACK_PACKAGE_CONTACT           "qiftop maintainers <noreply@example.com>")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
     "Qt6 iftop-style network monitor")
-set(CPACK_PACKAGE_HOMEPAGE_URL      "https://github.com/ebenali/qiftop")
+set(CPACK_PACKAGE_HOMEPAGE_URL      "https://github.com/TheCleaners/qiftop")
 # Strip ELF binaries during packaging — lintian flags unstripped binaries
 # as an error, and stripped binaries are ~10× smaller on disk. Symbol
 # files for debugging are still available in the build/ tree.

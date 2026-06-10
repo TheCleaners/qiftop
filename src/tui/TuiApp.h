@@ -43,6 +43,8 @@ private:
     void  handleFieldsKey(int key);            // key routing while Fields open
     void  handleInfoKey(int key);              // key routing while Help/About open
     void  applyAggregatorSettings();           // push flags into the aggregator
+    void  loadSettings();                      // restore view/sort/toggles/theme
+    void  saveSettings() const;                // persist them (QSettings)
 
     Screen                           *m_screen   = nullptr;
     aggregate::InterfaceAggregator   *m_ifaceAgg = nullptr;

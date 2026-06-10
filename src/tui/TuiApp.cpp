@@ -4,6 +4,7 @@
 #include "aggregate/InterfaceAggregator.h"
 
 #include <QCoreApplication>
+#include <QSettings>
 #include <QSysInfo>
 #include <QTimer>
 
@@ -16,6 +17,7 @@ namespace qiftop::tui {
 
 namespace {
 constexpr int kRedrawThrottleMs = 33; // ~30 fps cap
+constexpr auto kRepoUrl = "https://github.com/TheCleaners/qiftop";
 }
 
 TuiApp::TuiApp(Screen *screen,
@@ -33,14 +35,25 @@ TuiApp::TuiApp(Screen *screen,
 {
     m_pollMs = std::max(1, pollMs);
     m_themes = builtinThemes();
-    for (int i = 0; i < m_themes.size(); ++i) {
-        if (m_themes[i].name.compare(themeName, Qt::CaseInsensitive) == 0) {
-            m_themeIdx = i;
-            break;
+
+    // Restore persisted view/sort/toggles/theme first, then let an explicit
+    // --theme on the command line override the saved theme.
+    loadSettings();
+    if (!themeName.isEmpty()) {
+        for (int i = 0; i < m_themes.size(); ++i) {
+            if (m_themes[i].name.compare(themeName, Qt::CaseInsensitive) == 0) {
+                m_themeIdx = i;
+                break;
+            }
         }
     }
     if (m_screen)
         m_screen->setTheme(m_themes[m_themeIdx]);
+    applyAggregatorSettings();   // push restored DNS/UDP/smoothing toggles
+
+    // Persist on any exit path (q, SIGINT, SIGTERM all route through quit()).
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+            this, [this] { saveSettings(); });
 
     m_redrawTimer = new QTimer(this);
     m_redrawTimer->setSingleShot(true);
@@ -294,6 +307,9 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("? / F1"),       QStringLiteral("This help")),
             row(QStringLiteral("a"),            QStringLiteral("About (app & system info)")),
             row(QStringLiteral("q"),            QStringLiteral("Quit")),
+            SettingRow{QString(), QString(), QString()}, // spacer
+            SettingRow{QStringLiteral("Online docs: ") + QString::fromLatin1(kRepoUrl),
+                       QString(), QString()},
         };
         f.modal.footer = QStringLiteral("any key / Esc closes");
     } else if (m_overlay == Overlay::About) {
@@ -326,6 +342,7 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("Arch"),        QSysInfo::currentCpuArchitecture()),
             row(QStringLiteral("Host"),        QSysInfo::machineHostName()),
             row(QStringLiteral("Terminal"),    term),
+            row(QStringLiteral("Project"),     QString::fromLatin1(kRepoUrl)),
         };
         f.modal.footer = QStringLiteral("any key / Esc closes · iftop-style net monitor");
     }
@@ -338,6 +355,55 @@ void TuiApp::applyAggregatorSettings()
     m_connAgg->setUdpAggregateByPeer(m_udpAggregate);
     m_connAgg->setRateSmoothingMs(m_smoothing ? 300 : 0);
     m_connAgg->setHostnameResolutionEnabled(m_dnsEnabled);
+}
+
+void TuiApp::loadSettings()
+{
+    QSettings s;
+    s.beginGroup(QStringLiteral("nqiftop"));
+    m_view = (s.value(QStringLiteral("view"), int(m_view)).toInt() == int(View::Interfaces))
+                 ? View::Interfaces : View::Connections;
+    m_ifaceSortCol  = s.value(QStringLiteral("ifaceSortCol"), m_ifaceSortCol).toInt();
+    m_ifaceSortDesc = s.value(QStringLiteral("ifaceSortDesc"), m_ifaceSortDesc).toBool();
+    m_connSortCol   = s.value(QStringLiteral("connSortCol"), m_connSortCol).toInt();
+    m_connSortDesc  = s.value(QStringLiteral("connSortDesc"), m_connSortDesc).toBool();
+    m_gaugeEnabled  = s.value(QStringLiteral("gauge"), m_gaugeEnabled).toBool();
+    m_dnsEnabled    = s.value(QStringLiteral("dns"), m_dnsEnabled).toBool();
+    m_udpAggregate  = s.value(QStringLiteral("udpAggregate"), m_udpAggregate).toBool();
+    m_smoothing     = s.value(QStringLiteral("smoothing"), m_smoothing).toBool();
+    const QString themeName = s.value(QStringLiteral("theme")).toString();
+    s.endGroup();
+
+    if (!themeName.isEmpty()) {
+        for (int i = 0; i < m_themes.size(); ++i)
+            if (m_themes[i].name.compare(themeName, Qt::CaseInsensitive) == 0) {
+                m_themeIdx = i;
+                break;
+            }
+    }
+    // Clamp persisted sort columns in case the column set changed across versions.
+    const int ifaceCols = static_cast<int>(columnsFor(View::Interfaces).size());
+    const int connCols  = static_cast<int>(columnsFor(View::Connections).size());
+    m_ifaceSortCol = std::clamp(m_ifaceSortCol, 0, ifaceCols - 1);
+    m_connSortCol  = std::clamp(m_connSortCol, 0, connCols - 1);
+}
+
+void TuiApp::saveSettings() const
+{
+    QSettings s;
+    s.beginGroup(QStringLiteral("nqiftop"));
+    s.setValue(QStringLiteral("view"), int(m_view));
+    s.setValue(QStringLiteral("ifaceSortCol"), m_ifaceSortCol);
+    s.setValue(QStringLiteral("ifaceSortDesc"), m_ifaceSortDesc);
+    s.setValue(QStringLiteral("connSortCol"), m_connSortCol);
+    s.setValue(QStringLiteral("connSortDesc"), m_connSortDesc);
+    s.setValue(QStringLiteral("gauge"), m_gaugeEnabled);
+    s.setValue(QStringLiteral("dns"), m_dnsEnabled);
+    s.setValue(QStringLiteral("udpAggregate"), m_udpAggregate);
+    s.setValue(QStringLiteral("smoothing"), m_smoothing);
+    if (!m_themes.isEmpty())
+        s.setValue(QStringLiteral("theme"), m_themes[m_themeIdx].name);
+    s.endGroup();
 }
 
 void TuiApp::handleSettingsKey(int key)
