@@ -228,11 +228,19 @@ if(NOT DEFINED CPACK_STRIP_FILES)
 endif()
 set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_SOURCE_DIR}/LICENSE")
 set(CPACK_RESOURCE_FILE_README      "${CMAKE_SOURCE_DIR}/README.md")
-set(CPACK_PACKAGE_VERSION           "${PROJECT_VERSION}")
+# Defaults to the project() version. Overridable: pre-release tags
+# (release.yml) pass e.g. -DCPACK_PACKAGE_VERSION=0.2~rc1 so the .deb
+# version + filename carry the full tag. The Debian "~" makes a prerelease
+# sort BEFORE the final (0.2~rc1 < 0.2), so apt upgrades rc → final cleanly;
+# a literal "-rc1" would sort NEWER than 0.2 and block the upgrade.
+if(NOT DEFINED CPACK_PACKAGE_VERSION)
+    set(CPACK_PACKAGE_VERSION       "${PROJECT_VERSION}")
+endif()
 
 set(CPACK_DEB_COMPONENT_INSTALL ON)
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS ON)
-# One file per component, named e.g. qiftop_0.1_amd64.deb
+# One file per component, named e.g. qiftop_0.2_amd64.deb (or, for a
+# pre-release tag, qiftop_0.2~rc1_amd64.deb).
 set(CPACK_DEBIAN_FILE_NAME          "DEB-DEFAULT")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS  ON)
 set(CPACK_DEBIAN_PACKAGE_SECTION    "net")
@@ -241,7 +249,9 @@ set(CPACK_DEBIAN_PACKAGE_PRIORITY   "optional")
 # --- GUI package ------------------------------------------------------------
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_NAME         "qiftop")
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_DEPENDS      "libc6, libqt6core6t64 | libqt6core6, libqt6widgets6, libqt6network6, libqt6dbus6")
-set(CPACK_DEBIAN_QIFTOP_PACKAGE_RECOMMENDS   "qiftop-agent (= ${PROJECT_VERSION})")
+# Pin to the exact package version built in this run (incl. any ~rcN suffix)
+# so the GUI Recommends matches the agent .deb produced alongside it.
+set(CPACK_DEBIAN_QIFTOP_PACKAGE_RECOMMENDS   "qiftop-agent (= ${CPACK_PACKAGE_VERSION})")
 set(CPACK_DEBIAN_QIFTOP_DESCRIPTION
 "Qt6 iftop-style network monitor (GUI).
 qiftop is a Qt 6 desktop application that displays live per-interface

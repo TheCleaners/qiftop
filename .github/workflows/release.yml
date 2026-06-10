@@ -36,6 +36,13 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # Debian package version: replace the FIRST '-' (the prerelease
+          # separator) with '~' so the .deb sorts BEFORE the final release
+          # (0.2~rc1 < 0.2) and apt upgrades rc -> final cleanly. A literal
+          # '-rc1' would be parsed as a Debian revision and sort NEWER than
+          # 0.2, blocking the upgrade. Final tags (no '-') are unchanged.
+          deb_version="${version/-/\~}"
+          echo "deb_version=${deb_version}" >> "$GITHUB_OUTPUT"
           # Pre-release tags (anything with a '-' suffix like v0.1-alpha1,
           # v0.2-rc1, v0.3-beta) get RelWithDebInfo + unstripped binaries
           # so user-reported crash backtraces are debuggable. Final tags
@@ -50,6 +57,7 @@ jobs:
           echo "build_type=${build_type}" >> "$GITHUB_OUTPUT"
           echo "strip_files=${strip_files}" >> "$GITHUB_OUTPUT"
           echo "Release version: ${version}"
+          echo "Debian version:  ${deb_version}"
           echo "Build type:      ${build_type}"
           echo "Strip binaries:  ${strip_files}"
 
@@ -65,13 +73,15 @@ jobs:
             file fakeroot lintian desktop-file-utils
 
       - name: Configure
-        # The project() VERSION in CMakeLists.txt is the single source
-        # of truth for CPACK_PACKAGE_VERSION; we verify below that it
-        # matches the pushed tag rather than overriding it.
+        # project() VERSION in CMakeLists.txt is the single source of truth
+        # for the upstream version (verified against the tag base below). The
+        # full Debian package version (incl. any ~rcN suffix) is passed
+        # explicitly so the .deb filename + version carry the prerelease.
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ steps.ver.outputs.build_type }} \
             -DCPACK_STRIP_FILES=${{ steps.ver.outputs.strip_files }} \
+            -DCPACK_PACKAGE_VERSION=${{ steps.ver.outputs.deb_version }} \
             -DQIFTOP_BUILD_TESTS=ON \
             -DQIFTOP_AUTO_PACKAGE=OFF
 
