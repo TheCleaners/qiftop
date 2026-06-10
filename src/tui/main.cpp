@@ -1,0 +1,215 @@
+// nqiftop — ncurses frontend for qiftop, built entirely on libqiftop.
+//
+// Data source mirrors the GUI: probe the privileged DBus agent, else fall
+// back to the in-process capture backend (needs root). The aggregators,
+// formatting, and DBus client all come from libqiftop — no Qt Widgets, so
+// this runs over SSH on a headless box.
+
+#include <QCommandLineParser>
+#include <QCoreApplication>
+#include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QDBusMessage>
+#include <QSocketNotifier>
+#include <QTimer>
+
+#include <csignal>
+#include <memory>
+
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include "aggregate/ConnectionAggregator.h"
+#include "aggregate/InterfaceAggregator.h"
+#include "backend/ConnectionMonitor.h"
+#include "backend/NetworkMonitor.h"
+#include "backend/dbus/DBusConnectionMonitor.h"
+#include "backend/dbus/DBusNetworkMonitor.h"
+#include "dbus/Types.h"
+#include "tui/Screen.h"
+#include "tui/TuiApp.h"
+#include "util/Logging.h"
+
+#ifdef BACKEND_LINUX
+#include "backend/linux/ConntrackMonitor.h"
+#include "backend/linux/NetlinkMonitor.h"
+#endif
+
+// ncurses last (ERR, resizeterm) — after Qt to avoid macro clashes.
+#include <ncurses.h>
+
+#ifndef QIFTOP_VERSION
+#define QIFTOP_VERSION "0.0-dev"
+#endif
+
+using qiftop::aggregate::ConnectionAggregator;
+using qiftop::aggregate::InterfaceAggregator;
+using qiftop::backend::dbus_client::DBusConnectionMonitor;
+using qiftop::backend::dbus_client::DBusNetworkMonitor;
+
+namespace {
+
+constexpr auto kAgentBusName    = "org.qiftop.NetworkAgent1";
+constexpr auto kAgentIfacesPath = "/org/qiftop/NetworkAgent1/Interfaces";
+constexpr auto kAgentIfacesIface = "org.qiftop.NetworkAgent1.Interfaces";
+
+// Minimal liveness probe: name-activate the agent and do a real method call
+// (the bus policy is group-gated, so registration alone isn't enough).
+bool probeAgent(bool sessionBus)
+{
+    auto bus = sessionBus ? QDBusConnection::sessionBus() : QDBusConnection::systemBus();
+    if (!bus.isConnected()) return false;
+    auto *iface = bus.interface();
+    if (!iface) return false;
+    if (!iface->isServiceRegistered(QString::fromLatin1(kAgentBusName))) {
+        if (!iface->startService(QString::fromLatin1(kAgentBusName)).isValid())
+            return false;
+    }
+    QDBusMessage probe = QDBusMessage::createMethodCall(
+        QString::fromLatin1(kAgentBusName),
+        QString::fromLatin1(kAgentIfacesPath),
+        QString::fromLatin1(kAgentIfacesIface),
+        QStringLiteral("GetInterfaces"));
+    return bus.call(probe, QDBus::Block, 1000).type() != QDBusMessage::ErrorMessage;
+}
+
+// Self-pipe for async-signal-safe handling: the handler only write()s the
+// signal number; a QSocketNotifier processes it on the event loop.
+int g_sigPipe[2] = {-1, -1};
+void signalHandler(int sig)
+{
+    const unsigned char b = static_cast<unsigned char>(sig);
+    ::ssize_t n = ::write(g_sigPipe[1], &b, 1);
+    (void)n;
+}
+
+} // namespace
+
+int main(int argc, char *argv[])
+{
+    QCoreApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("nqiftop"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(QIFTOP_VERSION));
+
+    QCommandLineParser parser;
+    parser.setApplicationDescription(
+        QStringLiteral("nqiftop — ncurses network monitor (qiftop)"));
+    parser.addHelpOption();
+    parser.addVersionOption();
+    QCommandLineOption sessionOpt(QStringLiteral("session"),
+        QStringLiteral("Talk to the agent on the SESSION bus (development)."));
+    QCommandLineOption noAgentOpt(QStringLiteral("no-agent"),
+        QStringLiteral("Skip the agent and capture in-process (needs root)."));
+    QCommandLineOption verboseOpt(QStringLiteral("verbose"),
+        QStringLiteral("Diagnostics to stderr."));
+    QCommandLineOption intervalOpt(QStringList{QStringLiteral("i"), QStringLiteral("interval")},
+        QStringLiteral("Poll interval in milliseconds (default 1000)."),
+        QStringLiteral("ms"), QStringLiteral("1000"));
+    parser.addOption(sessionOpt);
+    parser.addOption(noAgentOpt);
+    parser.addOption(verboseOpt);
+    parser.addOption(intervalOpt);
+    parser.process(app);
+
+    util::logging::setVerbose(parser.isSet(verboseOpt));
+    bool ok = false;
+    int pollMs = parser.value(intervalOpt).toInt(&ok);
+    if (!ok || pollMs < 100) pollMs = 1000;
+    const bool sessionBus = parser.isSet(sessionOpt);
+
+    qRegisterMetaType<InterfaceStats>();
+    qRegisterMetaType<QList<InterfaceStats>>();
+    qRegisterMetaType<Connection>();
+    qRegisterMetaType<QList<Connection>>();
+    qiftop::dbus::registerTypes();
+
+    // --- source selection ---
+    std::unique_ptr<NetworkMonitor>    netMon;
+    std::unique_ptr<ConnectionMonitor> connMon;
+    QString sourceLabel;
+    const bool useAgent = !parser.isSet(noAgentOpt) && probeAgent(sessionBus);
+    if (useAgent) {
+        netMon  = std::make_unique<DBusNetworkMonitor>(sessionBus);
+        connMon = std::make_unique<DBusConnectionMonitor>(sessionBus);
+        sourceLabel = sessionBus ? QStringLiteral("agent (session)")
+                                 : QStringLiteral("agent");
+    } else {
+#ifdef BACKEND_LINUX
+        netMon  = std::make_unique<NetlinkMonitor>();
+        connMon = std::make_unique<ConntrackMonitor>();
+        sourceLabel = QStringLiteral("in-process");
+#else
+        std::fprintf(stderr, "nqiftop: no capture backend on this platform\n");
+        return 1;
+#endif
+    }
+
+    // --- data pipeline (libqiftop aggregators) ---
+    InterfaceAggregator  ifaceAgg;
+    ConnectionAggregator connAgg;
+    connAgg.setRateSmoothingMs(300);
+    connAgg.setPollIntervalMs(pollMs);
+
+    QObject::connect(netMon.get(),  &NetworkMonitor::statsUpdated,
+                     &ifaceAgg, &InterfaceAggregator::updateStats);
+    QObject::connect(connMon.get(), &ConnectionMonitor::connectionsUpdated,
+                     &connAgg, &ConnectionAggregator::updateConnections);
+
+    // --- ncurses + controller ---
+    qiftop::tui::Screen screen;
+    screen.init();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [&screen] { screen.shutdown(); });
+
+    qiftop::tui::TuiApp tui(&screen, &ifaceAgg, &connAgg, sourceLabel, pollMs);
+
+    const auto drainInput = [&screen, &tui] {
+        int ch;
+        while ((ch = screen.pollKey()) != ERR)
+            tui.handleKey(ch);
+    };
+
+    QSocketNotifier stdinNotifier(STDIN_FILENO, QSocketNotifier::Read);
+    QObject::connect(&stdinNotifier, &QSocketNotifier::activated, &app,
+                     [drainInput] { drainInput(); });
+
+    // --- signal-safe terminal restore + resize ---
+    if (::pipe(g_sigPipe) == 0) {
+        auto *sigNotifier = new QSocketNotifier(g_sigPipe[0], QSocketNotifier::Read, &app);
+        QObject::connect(sigNotifier, &QSocketNotifier::activated, &app, [&] {
+            unsigned char b;
+            while (::read(g_sigPipe[0], &b, 1) > 0) {
+                if (b == SIGWINCH) {
+                    struct winsize ws{};
+                    if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row && ws.ws_col)
+                        resizeterm(ws.ws_row, ws.ws_col);
+                    tui.requestRedraw();
+                } else {
+                    screen.shutdown();
+                    QCoreApplication::quit();
+                }
+            }
+        });
+        std::signal(SIGINT,   signalHandler);
+        std::signal(SIGTERM,  signalHandler);
+        std::signal(SIGHUP,   signalHandler);
+        std::signal(SIGWINCH, signalHandler);
+    }
+
+    // Keep the agent warm (its idle manager needs periodic hints).
+    const auto warm = [&] {
+        netMon->setDesiredIntervalMs(pollMs);
+        connMon->setDesiredIntervalMs(pollMs);
+    };
+    warm();
+    auto *heartbeat = new QTimer(&app);
+    heartbeat->setInterval(4000);
+    QObject::connect(heartbeat, &QTimer::timeout, &app, warm);
+    heartbeat->start();
+
+    netMon->setPollIntervalMs(pollMs);
+    connMon->setPollIntervalMs(pollMs);
+    netMon->start();
+    connMon->start();
+
+    return app.exec();
+}

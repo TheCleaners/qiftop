@@ -156,6 +156,30 @@ target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qift
 target_compile_definitions(qiftop-agent PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
 qiftop_apply_attribution_defs(qiftop-agent)
 
+# --- ncurses TUI (nqiftop) --------------------------------------------------
+# Headless frontend built entirely on libqiftop (no Qt Widgets). Needs
+# ncursesw (wide chars for UTF-8 arrows) and, like the GUI, the platform
+# backend for the in-process fallback when no agent is reachable.
+option(QIFTOP_BUILD_TUI "Build the ncurses nqiftop frontend" ON)
+if(QIFTOP_BUILD_TUI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(CURSES_NEED_WIDE TRUE)
+    find_package(Curses)
+    if(CURSES_FOUND)
+        add_executable(nqiftop
+            src/tui/main.cpp
+            src/tui/TuiApp.cpp
+            src/tui/Screen.cpp)
+        target_include_directories(nqiftop PRIVATE src ${CURSES_INCLUDE_DIRS})
+        target_link_libraries(nqiftop PRIVATE qiftoplib backend_linux ${CURSES_LIBRARIES})
+        target_compile_definitions(nqiftop PRIVATE
+            BACKEND_LINUX QIFTOP_VERSION="${PROJECT_VERSION}")
+        qiftop_apply_attribution_defs(nqiftop)
+    else()
+        message(WARNING "ncursesw not found — nqiftop will not be built "
+                        "(install libncurses-dev / ncurses-devel)")
+    endif()
+endif()
+
 # --- Demo harness (privacy-safe synthetic GUI driver) -----------------------
 # Off by default. Builds docs/demo/qiftop-demo.cpp, which drives the real
 # MainWindow from the in-memory test fakes with fabricated data (RFC 5737
@@ -251,6 +275,13 @@ install(TARGETS qiftop
 install(TARGETS qiftop-agent
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         COMPONENT qiftop-agent)
+
+# nqiftop is conditional (QIFTOP_BUILD_TUI + ncursesw present).
+if(TARGET nqiftop)
+    install(TARGETS nqiftop
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            COMPONENT nqiftop)
+endif()
 
 install(FILES LICENSE README.md
         DESTINATION ${CMAKE_INSTALL_DOCDIR}
@@ -386,6 +417,19 @@ set(CPACK_DEBIAN_LIBQIFTOP-DEV_DESCRIPTION
 Public headers, the CMake package config (find_package(qiftop) ->
 qiftop::qiftop), and the pkg-config file for building against libqiftop.")
 
+# --- nqiftop (ncurses frontend) package -------------------------------------
+set(CPACK_DEBIAN_NQIFTOP_PACKAGE_NAME    "nqiftop")
+set(CPACK_DEBIAN_NQIFTOP_PACKAGE_SECTION "net")
+# Library deps (Qt6, ncursesw) are auto-resolved by dpkg-shlibdeps; libqiftop0
+# is our own lib, so declare it explicitly + pinned to this build.
+set(CPACK_DEBIAN_NQIFTOP_PACKAGE_DEPENDS "libqiftop0 (= ${CPACK_PACKAGE_VERSION})")
+set(CPACK_DEBIAN_NQIFTOP_PACKAGE_RECOMMENDS "qiftop-agent")
+set(CPACK_DEBIAN_NQIFTOP_DESCRIPTION
+"ncurses network monitor (qiftop, headless).
+nqiftop is a terminal UI for live per-interface and per-connection traffic,
+built on libqiftop. It streams from the qiftop-agent over DBus, or captures
+in-process when run as root — no X/Wayland needed, so it works over SSH.")
+
 # --- RPM generator (Fedora / openSUSE etc.) ---------------------------------
 # Mirrors the DEB config above. Built with `cpack -G RPM` (needs rpmbuild +
 # the Fedora -devel libs). Library Requires are discovered automatically by
@@ -424,6 +468,11 @@ set(CPACK_RPM_LIBQIFTOP_PACKAGE_SUMMARY "Qt6 network-monitoring data library (ru
 set(CPACK_RPM_LIBQIFTOP-DEV_PACKAGE_NAME     "qiftop-devel")
 set(CPACK_RPM_LIBQIFTOP-DEV_PACKAGE_SUMMARY  "Development files for qiftop-libs")
 set(CPACK_RPM_LIBQIFTOP-DEV_PACKAGE_REQUIRES "qiftop-libs = ${CPACK_PACKAGE_VERSION}, qt6-qtbase-devel")
+
+# nqiftop rpm: auto-req resolves libqiftop.so.0 + ncursesw + Qt6.
+set(CPACK_RPM_NQIFTOP_PACKAGE_NAME    "nqiftop")
+set(CPACK_RPM_NQIFTOP_PACKAGE_SUMMARY "ncurses network monitor (qiftop, headless)")
+set(CPACK_RPM_NQIFTOP_PACKAGE_RECOMMENDS "qiftop-agent")
 # Preserve user edits to the config file across upgrades (Fedora %config(noreplace)).
 set(CPACK_RPM_QIFTOP-AGENT_USER_FILELIST "%config(noreplace) /etc/qiftop/agent.conf")
 # Group creation + user enrollment + systemd reload, mirroring the DEB
@@ -472,6 +521,12 @@ cpack_add_component(libqiftop-dev
     DISPLAY_NAME "libqiftop development files"
     DESCRIPTION  "Headers, CMake config and pkg-config for building against libqiftop"
     DEPENDS libqiftop)
+if(TARGET nqiftop)
+    cpack_add_component(nqiftop
+        DISPLAY_NAME "nqiftop ncurses frontend"
+        DESCRIPTION  "Headless terminal UI for live interface + connection traffic"
+        DEPENDS libqiftop)
+endif()
 
 # --- Auto-rebuild .deb packages on every build ------------------------------
 # Convenience for developers: keep the per-component .debs in the build dir
