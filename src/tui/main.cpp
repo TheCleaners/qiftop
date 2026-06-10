@@ -18,6 +18,7 @@
 #include <csignal>
 #include <memory>
 
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -209,6 +210,18 @@ int main(int argc, char *argv[])
 
     // --- signal-safe terminal restore + resize ---
     if (::pipe(g_sigPipe) == 0) {
+        // Both ends non-blocking: the handler must never block in write(), and
+        // the notifier's drain loop relies on read() returning EAGAIN once the
+        // pipe is empty — a blocking read end would freeze the event loop
+        // inside the callback after the first byte (resize hang + Ctrl-C hang).
+        for (int fd : g_sigPipe) {
+            int fl = ::fcntl(fd, F_GETFL, 0);
+            if (fl != -1)
+                ::fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+            int fdfl = ::fcntl(fd, F_GETFD, 0);
+            if (fdfl != -1)
+                ::fcntl(fd, F_SETFD, fdfl | FD_CLOEXEC);
+        }
         auto *sigNotifier = new QSocketNotifier(g_sigPipe[0], QSocketNotifier::Read, &app);
         QObject::connect(sigNotifier, &QSocketNotifier::activated, &app, [&] {
             unsigned char b;
