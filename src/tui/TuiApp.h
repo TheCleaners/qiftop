@@ -4,6 +4,7 @@
 
 #include "tui/Screen.h"
 #include "tui/TuiFormat.h"
+#include "util/ConnectionFilter.h"
 
 class QTimer;
 
@@ -45,6 +46,9 @@ private:
     void  applyAggregatorSettings();           // push flags into the aggregator
     void  loadSettings();                      // restore view/sort/toggles/theme
     void  saveSettings() const;                // persist them (QSettings)
+    void  onDataChanged();                     // data-driven redraw (paused-aware)
+    void  handleFilterKey(int key);            // key routing while editing a filter
+    void  commitFilter();                      // parse m_filterDraft -> m_filterExpr
 
     Screen                           *m_screen   = nullptr;
     aggregate::InterfaceAggregator   *m_ifaceAgg = nullptr;
@@ -74,6 +78,16 @@ private:
     bool m_udpAggregate   = true;
     bool m_smoothing      = true;
     int  m_pollMs         = 1000;
+
+    // Pause: freeze live updates so the snapshot can be read.
+    bool m_paused = false;
+
+    // Filter (Connections view): a live ConnectionFilter mini-language query.
+    bool                  m_filterEditing = false;
+    QString               m_filterDraft;   // text being typed
+    QString               m_filterText;    // committed text
+    qiftop::filter::ExprPtr m_filterExpr;  // parsed (null = match-all)
+    QString               m_filterError;   // last parse error (empty = ok)
 
     QTimer *m_redrawTimer = nullptr; // single-shot throttle
     QTimer *m_smoothTimer = nullptr; // advanceSmoothing tick

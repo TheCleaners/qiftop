@@ -67,19 +67,19 @@ TuiApp::TuiApp(Screen *screen,
             [this] { if (m_connAgg) m_connAgg->advanceSmoothing(); });
     m_smoothTimer->start();
 
-    // Any data change -> coalesced repaint.
+    // Any data change -> coalesced repaint (suppressed while paused).
     connect(m_ifaceAgg, &aggregate::InterfaceAggregator::didReset,
-            this, &TuiApp::requestRedraw);
+            this, &TuiApp::onDataChanged);
     connect(m_ifaceAgg, &aggregate::InterfaceAggregator::rowsChanged,
-            this, [this](int, int) { requestRedraw(); });
+            this, [this](int, int) { onDataChanged(); });
     connect(m_connAgg, &aggregate::ConnectionAggregator::rowsInserted,
-            this, &TuiApp::requestRedraw);
+            this, &TuiApp::onDataChanged);
     connect(m_connAgg, &aggregate::ConnectionAggregator::rowsRemoved,
-            this, &TuiApp::requestRedraw);
+            this, &TuiApp::onDataChanged);
     connect(m_connAgg, &aggregate::ConnectionAggregator::rowsUpdated,
-            this, [this](int, int) { requestRedraw(); });
+            this, [this](int, int) { onDataChanged(); });
     connect(m_connAgg, &aggregate::ConnectionAggregator::viewDataChanged,
-            this, &TuiApp::requestRedraw);
+            this, &TuiApp::onDataChanged);
 
     requestRedraw();
 }
@@ -113,6 +113,10 @@ void TuiApp::handleKey(int key)
         handleInfoKey(key);
         return;
     }
+    if (m_filterEditing) {
+        handleFilterKey(key);
+        return;
+    }
 
     const int nCols = static_cast<int>(columnsFor(m_view).size());
     int &scroll = (m_view == View::Interfaces) ? m_ifaceScroll : m_connScroll;
@@ -141,6 +145,18 @@ void TuiApp::handleKey(int key)
     case 'a':
     case 'A':
         m_overlay = Overlay::About;
+        break;
+    case 'p':
+    case 'P':
+        m_paused = !m_paused;
+        if (m_paused)
+            m_smoothTimer->stop();
+        else
+            m_smoothTimer->start();
+        break;
+    case '/':
+        m_filterEditing = true;
+        m_filterDraft = m_filterText;   // edit the current filter in place
         break;
     case '\t':
     case KEY_BTAB:
@@ -223,13 +239,25 @@ Frame TuiApp::buildFrame()
         const QList<int> order =
             sortedConnectionIndices(rows, m_connSortCol, m_connSortDesc);
         for (int i : order) {
-            f.rows     << cellsForConnection(*m_connAgg, rows[i]);
-            f.rowRoles << rowRoleForConnection(*m_connAgg, rows[i]);
-            const double cr = combinedRate(rows[i]);
+            const auto &row = rows[i];
+            // Connections-view filter (mini-language). Null expr = match-all.
+            if (m_filterExpr) {
+                const Connection &c = row.current;
+                const qiftop::filter::Context ctx{
+                    c, row.rxRate, row.txRate,
+                    m_connAgg->cachedHostname(c.local.address),
+                    m_connAgg->cachedHostname(c.remote.address),
+                };
+                if (!qiftop::filter::matches(m_filterExpr, ctx))
+                    continue;
+            }
+            f.rows     << cellsForConnection(*m_connAgg, row);
+            f.rowRoles << rowRoleForConnection(*m_connAgg, row);
+            const double cr = combinedRate(row);
             rates << cr;
             maxRate = std::max(maxRate, cr);
-            aggRx += rows[i].rxRate;
-            aggTx += rows[i].txRate;
+            aggRx += row.rxRate;
+            aggTx += row.txRate;
         }
     }
 
@@ -249,8 +277,11 @@ Frame TuiApp::buildFrame()
     const QString rxStr = util::formatByteRate(aggRx).rightJustified(kSumW);
     const QString txStr = util::formatByteRate(aggTx).rightJustified(kSumW);
     const QString scStr = util::formatByteRate(scale).leftJustified(kSumW);
+    const QString src = m_paused
+        ? QStringLiteral("\u23f8 PAUSED \u00b7 %1").arg(m_sourceLabel)
+        : m_sourceLabel;
     f.sourceLabel = QStringLiteral("\u03a3 %1\u2193 %2\u2191 \u00b7 \u2264%3 \u00b7 %4")
-                        .arg(rxStr, txStr, scStr, m_sourceLabel);
+                        .arg(rxStr, txStr, scStr, src);
 
     // Clamp scroll to the valid range for the current body height.
     const int body  = m_screen ? m_screen->bodyHeight() : 0;
@@ -260,8 +291,18 @@ Frame TuiApp::buildFrame()
     scroll = std::clamp(scroll, 0, maxScroll);
     f.scrollOffset = scroll;
 
-    f.footer = QStringLiteral(
-        " q quit · Tab/1/2 view · s/f sort · r reverse · z theme · S settings · ? help ");
+    if (m_filterEditing) {
+        // The menu bar becomes the filter input line while editing.
+        f.footer = m_filterError.isEmpty()
+            ? QStringLiteral(" /%1\u2588   (Enter apply · Esc cancel)").arg(m_filterDraft)
+            : QStringLiteral(" /%1\u2588   ! %2").arg(m_filterDraft, m_filterError);
+    } else if (!m_filterText.isEmpty()) {
+        f.footer = QStringLiteral(" filter: %1 · / edit · q quit · Tab view · s/f sort · ? help ")
+                       .arg(m_filterText);
+    } else {
+        f.footer = QStringLiteral(
+            " q quit · Tab/1/2 view · s/f sort · r reverse · z theme · / filter · p pause · S settings · ? help ");
+    }
 
     buildModal(f);
     return f;
@@ -302,6 +343,8 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
             row(QStringLiteral("f"),            QStringLiteral("Fields: pick sort column & direction")),
             row(QStringLiteral("r"),            QStringLiteral("Reverse the sort order")),
+            row(QStringLiteral("/"),            QStringLiteral("Filter connections (mini-language; Esc clears)")),
+            row(QStringLiteral("p"),            QStringLiteral("Pause / resume live updates")),
             row(QStringLiteral("z"),            QStringLiteral("Cycle the colour theme")),
             row(QStringLiteral("S / F2"),       QStringLiteral("Settings (gauge, DNS, smoothing…)")),
             row(QStringLiteral("? / F1"),       QStringLiteral("This help")),
@@ -346,6 +389,59 @@ void TuiApp::buildModal(Frame &f) const
         };
         f.modal.footer = QStringLiteral("any key / Esc closes · iftop-style net monitor");
     }
+}
+
+void TuiApp::onDataChanged()
+{
+    if (m_paused)
+        return;            // frozen: ignore live updates until unpaused
+    requestRedraw();
+}
+
+void TuiApp::commitFilter()
+{
+    auto res = qiftop::filter::parse(m_filterDraft.trimmed());
+    m_filterError = res.error;
+    if (!m_filterError.isEmpty())
+        return;            // keep editing so the user can fix the expression
+    m_filterExpr  = res.expr;
+    m_filterText  = m_filterDraft.trimmed();
+    m_filterEditing = false;
+    m_connScroll = 0;      // result set changed; start at the top
+}
+
+void TuiApp::handleFilterKey(int key)
+{
+    switch (key) {
+    case 27: // Esc — cancel, revert to the committed filter
+        m_filterEditing = false;
+        m_filterError.clear();
+        m_filterDraft = m_filterText;
+        break;
+    case '\n':
+    case '\r':
+    case KEY_ENTER:
+        commitFilter();
+        break;
+    case KEY_BACKSPACE:
+    case 127:
+    case 8:
+        if (!m_filterDraft.isEmpty())
+            m_filterDraft.chop(1);
+        m_filterError.clear();
+        break;
+    case KEY_RESIZE:
+        break;
+    default:
+        if (key >= 0x20 && key < 0x7f) {     // printable ASCII
+            m_filterDraft.append(QChar(key));
+            m_filterError.clear();
+        } else {
+            return; // ignore, no repaint
+        }
+        break;
+    }
+    requestRedraw();
 }
 
 void TuiApp::applyAggregatorSettings()
