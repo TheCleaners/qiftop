@@ -217,11 +217,14 @@ Frame TuiApp::buildFrame()
     }
 
     // Summary (top-style): aggregate throughput + the gauge scale + source.
+    // Pad each rate to a fixed width so the right-anchored group doesn't jitter
+    // as the significant-digit count changes (e.g. "990 B/s" -> "10.50 MiB/s").
+    constexpr int kSumW = 12; // fits "999.99 MiB/s" / "1023.9 KiB/s"
+    const QString rxStr = util::formatByteRate(aggRx).rightJustified(kSumW);
+    const QString txStr = util::formatByteRate(aggTx).rightJustified(kSumW);
+    const QString scStr = util::formatByteRate(scale).leftJustified(kSumW);
     f.sourceLabel = QStringLiteral("\u03a3 %1\u2193 %2\u2191 \u00b7 \u2264%3 \u00b7 %4")
-                        .arg(util::formatByteRate(aggRx),
-                             util::formatByteRate(aggTx),
-                             util::formatByteRate(scale),
-                             m_sourceLabel);
+                        .arg(rxStr, txStr, scStr, m_sourceLabel);
 
     // Clamp scroll to the valid range for the current body height.
     const int body  = m_screen ? m_screen->bodyHeight() : 0;
