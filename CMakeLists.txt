@@ -360,6 +360,14 @@ set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS ON)
 # pre-release tag, qiftop_0.2~rc1_amd64.deb).
 set(CPACK_DEBIAN_FILE_NAME          "DEB-DEFAULT")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS  ON)
+# qiftop / qiftop-agent / nqiftop link our own libqiftop.so.0, which lives in
+# a SEPARATE component (libqiftop) — so dpkg-shlibdeps can't find it on the
+# system or in the per-component staging dir and aborts with "cannot find
+# library libqiftop.so.0". Point it at the build tree (where the .so + SONAME
+# symlink are) via -l so it resolves; the resulting "no shlibs info" is a
+# harmless warning (the explicit `libqiftop0 (= version)` Depends already
+# pins the dependency). Without this, `cpack -G DEB` fails outright.
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${CMAKE_BINARY_DIR}")
 set(CPACK_DEBIAN_PACKAGE_SECTION    "net")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY   "optional")
 
@@ -519,13 +527,11 @@ cpack_add_component(libqiftop
     DESCRIPTION  "Shared Qt6 data library (DTOs, DBus client, aggregators, filter, export)")
 cpack_add_component(libqiftop-dev
     DISPLAY_NAME "libqiftop development files"
-    DESCRIPTION  "Headers, CMake config and pkg-config for building against libqiftop"
-    DEPENDS libqiftop)
+    DESCRIPTION  "Headers, CMake config and pkg-config for building against libqiftop")
 if(TARGET nqiftop)
     cpack_add_component(nqiftop
         DISPLAY_NAME "nqiftop ncurses frontend"
-        DESCRIPTION  "Headless terminal UI for live interface + connection traffic"
-        DEPENDS libqiftop)
+        DESCRIPTION  "Headless terminal UI for live interface + connection traffic")
 endif()
 
 # --- Auto-rebuild .deb packages on every build ------------------------------
