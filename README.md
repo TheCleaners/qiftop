@@ -1,21 +1,29 @@
-# qiftop
+# <img src="docs/logo.png" width="32" align="top" alt="qiftop logo"> qiftop
 
 [![CI](https://github.com/TheCleaners/qiftop/actions/workflows/ci.yml/badge.svg)](https://github.com/TheCleaners/qiftop/actions/workflows/ci.yml)
 [![Release](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml/badge.svg)](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml)
-![Tests](https://img.shields.io/badge/tests-16%20passing-brightgreen)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
 ![Qt](https://img.shields.io/badge/Qt-6-41cd52)
+![License](https://img.shields.io/badge/license-GPL--2.0--or--later-orange)
 
 Qt6 iftop-style network monitor for Linux.
 
 `qiftop` is a Qt 6 GUI that visualises per-interface byte/packet counters
 (via libnl-route-3) and per-connection flow accounting (via
-libnetfilter_conntrack). Privileged data collection is split out into a
-small DBus system-bus daemon (`qiftop-agent`) so the UI itself does not
-need elevated capabilities.
+libnetfilter_conntrack), with optional per-flow **process and container
+attribution**. Privileged data collection is split out into a small DBus
+system-bus daemon (`qiftop-agent`) so the UI itself does not need elevated
+capabilities.
 
-![qiftop showing live per-connection traffic with the throughput gauge
-and the filter expression bar](docs/screenshot1.png)
+![qiftop grouping live synthetic traffic by process and touring the
+preferences dialog](docs/demo.gif)
+
+> The capture above is driven entirely by **synthetic data** (reserved
+> documentation addresses + `example.*` hostnames) — see
+> [`docs/demo/`](docs/demo/). A static frame:
+>
+> ![qiftop Connections view with the throughput gauge, direction tint,
+> DNS-resolved peers and the process / container columns](docs/screenshot.png)
 
 ## Features
 
@@ -24,13 +32,19 @@ and the filter expression bar](docs/screenshot1.png)
   and IPv6 first-class. Each row is a 5-tuple with directionality
   (inbound / outbound / unknown), aggregated by peer for UDP, and
   optionally tinted by direction.
+- **Process & container attribution** — every flow can carry the owning
+  PID / `comm` / UID plus the container runtime, id and name (Docker,
+  containerd, Podman, CRI-O, Kubernetes, LXC/LXD, systemd-nspawn),
+  including the full nested container chain. Group the Connections view
+  by interface, container or process; group headers show colour-coded
+  PID / user / container detail chips.
 - **Live throughput gauge** drawn under each row, with adaptive
   reference (sliding-window peak or cumulative average) and optional
   smoothed display rates (EMA + easeOutCubic tween between polls).
 - **Filter expression mini-language** for the Connections view:
   `proto:tcp and dport=443`, `iface=wlp228s0 and rate>1Mi`,
-  `host~"\.google\.com"`, etc. Booleans, numeric comparisons, byte
-  suffixes (`K/Ki/M/Mi/...`), regex.
+  `host~"\.google\.com"`, `container:nginx`, `comm=postgres`, etc.
+  Booleans, numeric comparisons, byte suffixes (`K/Ki/M/Mi/...`), regex.
 - **Async DNS** with in-process cache; addresses are rendered as
   hostnames where possible without blocking the UI.
 - **System tray** with live rate sparklines and an optional

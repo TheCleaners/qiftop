@@ -139,6 +139,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 qiftop_apply_attribution_defs(qiftop-agent)
 
+# --- Demo harness (privacy-safe synthetic GUI driver) -----------------------
+# Off by default. Builds docs/demo/qiftop-demo.cpp, which drives the real
+# MainWindow from the in-memory test fakes with fabricated data (RFC 5737
+# doc IPs + RFC 2606 example.* hostnames) for generating the README capture.
+option(QIFTOP_BUILD_DEMO "Build the synthetic GUI demo harness (docs/demo)" OFF)
+if(QIFTOP_BUILD_DEMO)
+    add_executable(qiftop-demo
+        docs/demo/qiftop-demo.cpp
+        tests/fakes/FakeMonitors.h)
+    target_link_libraries(qiftop-demo PRIVATE qiftop_ui Qt6::Widgets)
+    # The fakes live under tests/ and are included as "fakes/FakeMonitors.h".
+    target_include_directories(qiftop-demo PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    qiftop_apply_attribution_defs(qiftop-demo)
+endif()
+
 # --- Install rules ----------------------------------------------------------
 include(GNUInstallDirs)
 
