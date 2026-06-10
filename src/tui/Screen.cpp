@@ -233,15 +233,20 @@ void Screen::render(const Frame &f)
     fillLine(1, Role::Footer);
     if (!f.footerHints.isEmpty()) {
         // Structured menu bar: each key glyph pops in the MenuKey colour, its
-        // label follows in the Footer colour. Stops cleanly at the right edge.
+        // label follows in the Footer colour, items separated by " · ". Stops
+        // cleanly at the right edge.
         int x = 1;
-        for (const KeyHint &h : f.footerHints) {
+        for (int i = 0; i < f.footerHints.size(); ++i) {
+            const KeyHint &h = f.footerHints[i];
             if (x + h.key.size() + 1 >= width)
                 break;
             attrset(attrFor(Role::MenuKey));
             mvaddstr(1, x, h.key.toUtf8().constData());
             x += h.key.size();
-            QString lbl = QStringLiteral(" %1  ").arg(h.desc);
+            QString lbl = h.desc.isEmpty() ? QStringLiteral(" ")
+                                           : QStringLiteral(" %1").arg(h.desc);
+            if (i + 1 < f.footerHints.size())
+                lbl += QStringLiteral(" \u00b7 "); // middle dot separator
             if (x + lbl.size() > width)
                 lbl = lbl.left(width - x);
             attrset(attrFor(Role::Footer));
