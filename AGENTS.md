@@ -685,6 +685,25 @@ restarts degrades conntrack/netns state** enough to make attribution
 flap — another reason this runner belongs in a disposable VM, one clean
 boot per run.
 
+Two portability traps the runner hit when first validated in the VM (and
+now encodes/works around):
+
+* **Container IPv4 lives under `.NetworkSettings.Networks.<net>.IPAddress`
+  on newer docker / podman-docker**, NOT the legacy top-level
+  `.NetworkSettings.IPAddress` (which is empty/absent there). The runner
+  walks the `Networks` map first, then falls back to the top-level field.
+  The devbox's older docker populated the top-level field, so this only
+  surfaced in the VM.
+* **`qiftop-agent` has a `POST_BUILD` cpack hook that regenerates BOTH
+  `.deb`s**, which needs the `qiftop` GUI binary on disk. Under Ninja's
+  parallel scheduling the hook can fire the moment the agent links —
+  before the GUI target finishes — so a fresh `cmake --build --target
+  qiftop-agent` fails with `file INSTALL cannot find …/qiftop`. Both
+  driver scripts therefore build the **`qiftop` GUI target to completion
+  FIRST**, then the agent + probe. (On an incremental tree where the GUI
+  already exists, as on the devbox, the ordering is moot — which is why
+  this only bit on the VM's clean build.)
+
 ---
 
 ## 7. Coding conventions

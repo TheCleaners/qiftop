@@ -101,6 +101,11 @@ vagrant ssh -c "set -euo pipefail
         -DQIFTOP_BUILD_TESTS=ON \\
         -DQIFTOP_BUILD_INTEGRATION_TESTS=OFF \\
         -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON
+    # The qiftop-agent target has a POST_BUILD cpack hook that regenerates
+    # BOTH .debs, which needs the qiftop GUI binary on disk. Under Ninja's
+    # parallel scheduling the hook can fire before the GUI target finishes,
+    # so build the GUI to completion FIRST, then the agent + probe.
+    cmake --build build --target qiftop -j
     cmake --build build --target qiftop-attribution-probe qiftop-agent -j
     sudo --preserve-env=PATH ctest --test-dir build \\
         -R '$CTEST_FILTER' --output-on-failure $CTEST_VERBOSE

@@ -152,9 +152,23 @@ done
 [[ -n "$CID" ]] || die "container did not start within 4s"
 CID_SHORT="${CID:0:12}"
 
+# Read the container's IPv4. The top-level .NetworkSettings.IPAddress is
+# populated by older docker but is EMPTY/absent on newer docker (and
+# podman-docker) where the address only lives under
+# .NetworkSettings.Networks.<net>.IPAddress. Walk the Networks map first
+# and fall back to the legacy top-level field for portability.
+cont_ip_of() {
+    local ip
+    ip="$(docker inspect -f \
+        '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+        "$NAME" 2>/dev/null || true)"
+    [[ -z "$ip" ]] && ip="$(docker inspect -f \
+        '{{.NetworkSettings.IPAddress}}' "$NAME" 2>/dev/null || true)"
+    printf '%s' "$ip"
+}
 CONT_IP=""
 for _ in $(seq 1 20); do
-    CONT_IP="$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$NAME" 2>/dev/null || true)"
+    CONT_IP="$(cont_ip_of)"
     [[ -n "$CONT_IP" ]] && break
     sleep 0.2
 done

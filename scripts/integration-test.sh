@@ -66,10 +66,17 @@ cmake -S . -B "$BUILD_DIR" \
     ${VERBOSE:+--log-level=VERBOSE}
 
 # The systemd-dbus runner installs + drives the real qiftop-agent unit, so
-# it needs that target built (not the in-process probe). Build both to keep
-# the invocation uniform.
+# it needs that target built (not the in-process probe).
 BUILD_TARGETS=(qiftop-attribution-probe)
-if [[ "$RUNTIME" == "systemd-dbus" ]]; then BUILD_TARGETS+=(qiftop-agent); fi
+if [[ "$RUNTIME" == "systemd-dbus" ]]; then
+    # qiftop-agent has a POST_BUILD cpack hook that regenerates BOTH .debs,
+    # which needs the qiftop GUI binary present. Under Ninja's parallel
+    # scheduling that hook can fire before the GUI target finishes, so build
+    # the GUI to completion FIRST, then let the agent build (+ its hook) run.
+    echo ">> building qiftop GUI first (satisfies the agent's cpack POST_BUILD hook)"
+    cmake --build "$BUILD_DIR" --target qiftop -j"$(nproc)"
+    BUILD_TARGETS+=(qiftop-agent)
+fi
 echo ">> building ${BUILD_TARGETS[*]}"
 cmake --build "$BUILD_DIR" --target "${BUILD_TARGETS[@]}" -j"$(nproc)"
 
