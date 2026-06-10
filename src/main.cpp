@@ -142,6 +142,7 @@ int main(int argc, char *argv[])
     qRegisterMetaType<QList<InterfaceStats>>();
     qRegisterMetaType<Connection>();
     qRegisterMetaType<QList<Connection>>();
+    qRegisterMetaType<qiftop::backend::ProcessDetails>();
     qiftop::dbus::registerTypes();
 
     Settings      settings;

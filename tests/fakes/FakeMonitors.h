@@ -78,6 +78,23 @@ public:
         emit accountingUnavailable(detail);
     }
 
+    // On-demand process-detail RPC simulation. requestProcessDetails
+    // records the pid (and count) so a test can assert it was called;
+    // emitProcessDetails delivers a canned reply through the same signal
+    // the DBus backend uses.
+    void requestProcessDetails(qint32 pid) override
+    {
+        ++detailsRequests;
+        lastRequestedPid = pid;
+    }
+    void emitProcessDetails(qiftop::backend::ProcessDetails d)
+    {
+        emit processDetailsReady(std::move(d));
+    }
+
+    int detailsRequests  = 0;
+    qint32 lastRequestedPid = 0;
+
     int startCalls       = 0;
     int stopCalls        = 0;
     int setPollCalls     = 0;

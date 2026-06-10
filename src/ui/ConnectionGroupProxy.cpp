@@ -659,6 +659,27 @@ void ConnectionGroupProxy::setShowGroupDetails(bool on)
     emit dataChanged(index(0, 0), index(m_groups.size() - 1, lastCol));
 }
 
+qint32 ConnectionGroupProxy::representativePid(const QModelIndex &groupIdx) const
+{
+    if (m_mode != ViewMode::ByProcess || !m_src) return 0;
+    if (!groupIdx.isValid() || groupIdx.internalId() != kTopLevelId) return 0;
+    const int gi = groupIdx.row();
+    if (gi < 0 || gi >= m_groups.size() || m_groups[gi].srcRows.isEmpty())
+        return 0;
+    const Connection c = m_src->index(m_groups[gi].srcRows.first(), 0)
+                             .data(ConnectionModel::ConnectionRole)
+                             .value<Connection>();
+    return c.process.pid;
+}
+
+void ConnectionGroupProxy::refreshGroupTooltips()
+{
+    if (m_mode == ViewMode::Flat || m_groups.isEmpty()) return;
+    const int lastCol = columnCount() - 1;
+    emit dataChanged(index(0, 0), index(m_groups.size() - 1, lastCol),
+                     {Qt::ToolTipRole});
+}
+
 QString ConnectionGroupProxy::groupDetailInline(const Group &g) const
 {
     if (!m_showGroupDetails || g.srcRows.isEmpty() || !m_src)
@@ -704,6 +725,20 @@ QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
                           ? QStringLiteral("User: uid %1").arg(c.process.uid)
                           : QStringLiteral("User: %1 (uid %2)")
                                 .arg(user).arg(c.process.uid));
+            // On-demand extended fields, if the agent has answered for
+            // this pid (exe / cmdline / cwd). Absent until the RPC
+            // returns — the tooltip degrades to the wire fields above.
+            if (m_details) {
+                if (const auto it = m_details->constFind(c.process.pid);
+                    it != m_details->constEnd() && it->valid()) {
+                    if (!it->exe.isEmpty())
+                        lines << QStringLiteral("Exe: %1").arg(it->exe);
+                    if (!it->cmdline.isEmpty())
+                        lines << QStringLiteral("Cmdline: %1").arg(it->cmdline);
+                    if (!it->cwd.isEmpty())
+                        lines << QStringLiteral("Cwd: %1").arg(it->cwd);
+                }
+            }
         }
         break;
     case ViewMode::ByContainer:

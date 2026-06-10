@@ -166,6 +166,10 @@ protected:
     ConnectionModel       *m_connModel     = nullptr;
     ConnectionFilterProxy *m_connProxy     = nullptr;
     class ConnectionGroupProxy *m_connGroupProxy = nullptr;
+    // On-demand process details (exe/cmdline/cwd) keyed by pid, populated
+    // lazily from the agent's GetProcessDetails RPC; the group proxy
+    // reads it for ByProcess group tooltips.
+    QHash<qint32, qiftop::backend::ProcessDetails> m_procDetails;
     QTreeView             *m_connView      = nullptr;
     ConnectionFlowDelegate *m_connFlowDelegate = nullptr;
     QFrame                *m_connBanner    = nullptr; // shown on EPERM

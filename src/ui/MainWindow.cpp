@@ -141,6 +141,15 @@ MainWindow::MainWindow(Settings          *settings,
             this,          &MainWindow::onConnectionsPermissionDenied);
     connect(m_connMonitor, &ConnectionMonitor::accountingUnavailable,
             this,          &MainWindow::onConnectionsAccountingUnavailable);
+    // On-demand process details (exe/cmdline/cwd) arriving from the
+    // agent's GetProcessDetails RPC — cache by pid and refresh the
+    // grouped-view tooltips so the next hover shows the enriched data.
+    connect(m_connMonitor, &ConnectionMonitor::processDetailsReady, this,
+            [this](qiftop::backend::ProcessDetails d) {
+                if (d.pid <= 0) return;
+                m_procDetails.insert(d.pid, d);
+                if (m_connGroupProxy) m_connGroupProxy->refreshGroupTooltips();
+            });
 }
 
 MainWindow::~MainWindow() = default;
@@ -205,6 +214,18 @@ void MainWindow::setupUi()
     m_connView = new QTreeView;
     m_connView->setObjectName(QStringLiteral("connView"));
     m_connView->setModel(m_connGroupProxy);
+    m_connGroupProxy->setProcessDetailsCache(&m_procDetails);
+    // Prefetch on-demand process details when the user expands a
+    // ByProcess group (bounded, intuitive: you expand to inspect → the
+    // exe/cmdline/cwd are fetched so they're ready on hover). No-op on
+    // backends without the RPC (in-process / old agent).
+    connect(m_connView, &QTreeView::expanded, this,
+            [this](const QModelIndex &idx) {
+                if (!m_connGroupProxy || !m_connMonitor) return;
+                const qint32 pid = m_connGroupProxy->representativePid(idx);
+                if (pid > 0 && !m_procDetails.contains(pid))
+                    m_connMonitor->requestProcessDetails(pid);
+            });
     m_connView->setSortingEnabled(true);
     m_connView->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_connView->setAlternatingRowColors(true);

@@ -1205,6 +1205,78 @@ private slots:
         QVERIFY2(connView->isExpanded(m->index(0, 0)),
                  "eth0 group collapsed across rate churn");
     }
+
+    // Increment-2 on-demand enrichment: expanding a ByProcess group
+    // requests GetProcessDetails for that group's pid; when the reply
+    // arrives the group tooltip gains exe/cmdline/cwd. Drives the real
+    // wiring (MainWindow → group proxy → monitor) with the fake standing
+    // in for the DBus RPC.
+    void groupProcessDetailsFetchedOnExpand()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *combo    = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(combo && connView);
+
+        Connection a = mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443,
+                              L4Proto::Tcp, 1000, 500);
+        a.process.pid  = 4242;
+        a.process.comm = QStringLiteral("chrome");
+        a.process.uid  = 0;
+        connMon.emitSnapshot({a});
+        QTest::qWait(50);
+
+        combo->setCurrentIndex(combo->findData(
+            static_cast<int>(Settings::ConnectionViewMode::ByProcess)));
+        QTest::qWait(50);
+
+        auto *m = connView->model();
+        QCOMPARE(m->rowCount(), 1);
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+
+        // Expanding the group must request details for pid 4242.
+        connView->expand(m->index(0, 0));
+        QTest::qWait(20);
+        QCOMPARE(connMon.lastRequestedPid, qint32(4242));
+        QVERIFY(connMon.detailsRequests >= 1);
+
+        // Before the reply, the tooltip has only wire fields.
+        QVERIFY(!m->index(0, flowCol).data(Qt::ToolTipRole)
+                     .toString().contains(QStringLiteral("Cmdline")));
+
+        // Deliver the async reply → tooltip gains exe/cmdline/cwd.
+        qiftop::backend::ProcessDetails d;
+        d.pid     = 4242;
+        d.uid     = 0;
+        d.comm    = QStringLiteral("chrome");
+        d.exe     = QStringLiteral("/usr/lib/chrome/chrome");
+        d.cmdline = QStringLiteral("/usr/lib/chrome/chrome --type=renderer");
+        d.cwd     = QStringLiteral("/home/ines");
+        connMon.emitProcessDetails(d);
+        QTest::qWait(20);
+
+        const QString tip = m->index(0, flowCol).data(Qt::ToolTipRole).toString();
+        QVERIFY2(tip.contains(QStringLiteral("Exe: /usr/lib/chrome/chrome")),
+                 "tooltip missing exe after details reply");
+        QVERIFY(tip.contains(QStringLiteral("Cmdline:")));
+        QVERIFY(tip.contains(QStringLiteral("Cwd: /home/ines")));
+
+        // A second expand of the same group must NOT re-request (cached).
+        const int before = connMon.detailsRequests;
+        connView->collapse(m->index(0, 0));
+        connView->expand(m->index(0, 0));
+        QTest::qWait(20);
+        QCOMPARE(connMon.detailsRequests, before);
+    }
 };
 
 // We instantiate widgets, so QApplication is required (not

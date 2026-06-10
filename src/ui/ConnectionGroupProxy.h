@@ -10,6 +10,7 @@
 #include <QVariant>
 
 #include "config/Settings.h"
+#include "backend/ProcessDetails.h"
 
 // Tree-of-groups model wrapping the flat Connections source (ultimately
 // ConnectionModel via the filter proxy). Modes:
@@ -51,6 +52,24 @@ public:
     // a repaint of existing group rows when toggled.
     void setShowGroupDetails(bool on);
     [[nodiscard]] bool showGroupDetails() const { return m_showGroupDetails; }
+
+    // On-demand process-detail enrichment (exe / cmdline / cwd). The
+    // cache is owned by MainWindow and populated asynchronously from the
+    // agent's GetProcessDetails RPC; the group-header tooltip reads from
+    // it when present. Pointer (not copy) so updates are seen without
+    // re-plumbing. May be null (in-process backend / details disabled).
+    void setProcessDetailsCache(const QHash<qint32, qiftop::backend::ProcessDetails> *cache)
+    { m_details = cache; }
+
+    // Representative pid of a ByProcess group row (the pid all its flows
+    // share). 0 for non-group indices, non-ByProcess modes, or the
+    // "(unattributed)" bucket. Used by MainWindow to prefetch details.
+    [[nodiscard]] qint32 representativePid(const QModelIndex &groupIdx) const;
+
+    // Re-emit ToolTipRole dataChanged for every group row so a freshly
+    // arrived detail shows on the next hover. Cheap (group count is
+    // small).
+    void refreshGroupTooltips();
 
     // True for the synthetic group row at index. False for flat rows
     // and for child flow rows. Used by the view (delegate selection,
@@ -154,6 +173,7 @@ private:
     ViewMode m_mode = ViewMode::Flat;
     QList<Group> m_groups;     // empty when mode==Flat
     bool m_showGroupDetails = true;
+    const QHash<qint32, qiftop::backend::ProcessDetails> *m_details = nullptr;
     // Reverse index: source row → (group index, child row in group).
     // Empty in Flat mode. Rebuilt en masse by refreshSrcIndex().
     QHash<int, QPair<int, int>> m_srcIndex;
