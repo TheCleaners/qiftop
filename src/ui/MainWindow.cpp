@@ -270,6 +270,7 @@ void MainWindow::setupUi()
     // canvas and inherits the table's palette. Visibility is driven by
     // onConnectionsUpdated() and the proxy's rowsInserted/rowsRemoved.
     m_connEmptyOverlay = new QLabel(m_connView->viewport());
+    m_connEmptyOverlay->setObjectName(QStringLiteral("connEmptyOverlay"));
     m_connEmptyOverlay->setAlignment(Qt::AlignCenter);
     m_connEmptyOverlay->setWordWrap(true);
     m_connEmptyOverlay->setText(tr(
@@ -311,6 +312,7 @@ void MainWindow::setupUi()
     refreshEmpty();
 
     m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("mainTabs"));
     m_tabs->addTab(m_netView,  tr("Interfaces"));
 
     // Wrap the connections view in a vbox so we can stack a privilege banner
@@ -334,6 +336,7 @@ void MainWindow::setupUi()
     auto *bannerLayout = new QHBoxLayout(m_connBanner);
     bannerLayout->setContentsMargins(8, 4, 8, 4);
     m_connBannerLbl = new QLabel(m_connBanner);
+    m_connBannerLbl->setObjectName(QStringLiteral("connBannerLabel"));
     m_connBannerLbl->setWordWrap(true);
     auto *relaunchBtn = new QPushButton(
         QIcon::fromTheme(QStringLiteral("system-lock-screen")),
@@ -352,8 +355,10 @@ void MainWindow::setupUi()
     // --- Status bar ---
     m_statusInterfaces  = new QLabel(tr("0 interfaces"));
     m_statusConnections = new QLabel(tr("0 connections"));
+    m_statusConnections->setObjectName(QStringLiteral("statusConnections"));
     m_statusThroughput  = new QLabel(QStringLiteral("↓ 0 B   ↑ 0 B"));
     m_statusBackend     = new QLabel(tr("backend: unknown"));
+    m_statusBackend->setObjectName(QStringLiteral("statusBackend"));
     m_statusBackend->setToolTip(tr("Active data source. Hover the value once "
                                    "set for the agent version and capabilities."));
     statusBar()->addPermanentWidget(m_statusBackend);
@@ -458,6 +463,7 @@ void MainWindow::setupMenuAndToolbar()
 
     m_pauseAction = toolbar->addAction(
         QIcon::fromTheme(QStringLiteral("media-playback-pause")), tr("Pause"));
+    m_pauseAction->setObjectName(QStringLiteral("pauseAction"));
     m_pauseAction->setCheckable(true);
     m_pauseAction->setToolTip(tr("Pause updates"));
     connect(m_pauseAction, &QAction::toggled, this, &MainWindow::togglePaused);
@@ -501,6 +507,7 @@ void MainWindow::setupMenuAndToolbar()
 
     toolbar->addSeparator();
     m_connIfaceFilterBtn = new QToolButton(toolbar);
+    m_connIfaceFilterBtn->setObjectName(QStringLiteral("connIfaceFilterBtn"));
     m_connIfaceFilterBtn->setIcon(QIcon::fromTheme(QStringLiteral("view-filter")));
     m_connIfaceFilterBtn->setText(tr("All interfaces"));
     m_connIfaceFilterBtn->setToolTip(tr("Show connections on…"));

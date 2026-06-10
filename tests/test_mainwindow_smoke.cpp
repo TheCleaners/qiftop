@@ -25,9 +25,12 @@
 // No real network, no DBus, no kernel work. Everything is
 // deterministic and finishes in <1s per scenario.
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QFrame>
 #include <QHeaderView>
+#include <QLabel>
 #include <QLineEdit>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -314,6 +317,356 @@ private slots:
         QTest::qWait(20);
         QVERIFY2(!connView->isColumnHidden(processCol),
                  "Process column still hidden after wire cap advertised");
+    }
+
+    // ---- batch 2 (scenario audit P0/P1 picks) ---------------------------
+
+    // #1 filterExpressionTypedEndToEnd. Crosses: QLineEdit textChanged →
+    // 200 ms debounce → ConnectionFilterProxy::setFilterExpression →
+    // row visibility through GroupProxy → Settings persistence → the
+    // text != persisted guard in applySettingsToUi that prevents a
+    // feedback loop. Also pins: garbage expressions tint the bar red,
+    // surface the parser error in the tooltip, and are NOT persisted.
+    void filterExpressionTypedEndToEnd()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *edit     = w.findChild<QLineEdit*>(QStringLiteral("connFilterEdit"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(edit);
+        QVERIFY(connView);
+
+        // The filter bar is toolbar-hosted and visibility-gated to the
+        // Connections tab (updateConnIfaceFilterVisibility) — switch
+        // there first so keyClicks reach a visible, enabled widget.
+        w.selectConnectionsTab();
+        QTest::qWait(20);
+        QVERIFY(edit->isVisible());
+
+        connMon.emitSnapshot({
+            mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+            mkFlow("eth0", "10.0.0.10", 1002, "8.8.8.8", 53,  L4Proto::Udp),
+        });
+        QTest::qWait(50);
+        QCOMPARE(connView->model()->rowCount(), 2);
+
+        // Type a valid expression; wait past the 200 ms debounce.
+        QTest::keyClicks(edit, QStringLiteral("proto:tcp"));
+        QTest::qWait(350);
+        QCOMPARE(connView->model()->rowCount(), 1);
+        // Valid expression must persist to Settings.
+        QCOMPARE(settings.connectionFilterExpr(), QStringLiteral("proto:tcp"));
+        // No error tint.
+        QCOMPARE(edit->palette().color(QPalette::Base),
+                 QPalette{}.color(QPalette::Base));
+
+        // Replace with a parse error: red tint + tooltip, NOT persisted.
+        edit->clear();
+        QTest::keyClicks(edit, QStringLiteral("proto:(("));
+        QTest::qWait(350);
+        QVERIFY2(edit->palette().color(QPalette::Base)
+                     != QPalette{}.color(QPalette::Base),
+                 "error tint missing on parse failure");
+        QVERIFY(edit->toolTip().contains(QStringLiteral("error"),
+                                         Qt::CaseInsensitive));
+        // Settings still hold the last VALID expression — clearing the
+        // bar persisted "" first (clear() fires the debounce too), so
+        // depending on timing we accept either "" or the prior valid
+        // value; the invariant is the garbage itself is never stored.
+        QVERIFY(settings.connectionFilterExpr() != QStringLiteral("proto:(("));
+
+        // Clearing the bar restores all rows.
+        edit->clear();
+        QTest::qWait(350);
+        QCOMPARE(connView->model()->rowCount(), 2);
+        QCOMPARE(settings.connectionFilterExpr(), QString());
+    }
+
+    // #2 filterChangeWhileGroupedRestructuresWithoutReset. Filter
+    // invalidation drives a DIFFERENT signal pattern into
+    // ConnectionGroupProxy (layoutChanged / per-row removes from
+    // QSortFilterProxyModel) than the rowsInserted/Removed path the
+    // unit tests pin. Second front of bug-view-redraw: the surviving
+    // group must stay expanded, the model must not reset, and the
+    // emptied group must vanish + return.
+    void filterChangeWhileGroupedRestructuresWithoutReset()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *edit     = w.findChild<QLineEdit*>(QStringLiteral("connFilterEdit"));
+        auto *combo    = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(edit && combo && connView);
+
+        connMon.emitSnapshot({
+            mkFlow("eth0",  "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+            mkFlow("eth0",  "10.0.0.10", 1002, "1.0.0.1", 443, L4Proto::Tcp),
+            mkFlow("wlan0", "10.0.0.11", 2001, "8.8.8.8", 53,  L4Proto::Udp),
+        });
+        QTest::qWait(50);
+
+        const int byIface = combo->findData(
+            static_cast<int>(Settings::ConnectionViewMode::ByInterface));
+        combo->setCurrentIndex(byIface);
+        QTest::qWait(50);
+
+        auto *m = connView->model();
+        QCOMPARE(m->rowCount(), 2);             // eth0, wlan0
+        // Find + expand the eth0 group (group order may vary).
+        int ethRow = -1;
+        for (int r = 0; r < m->rowCount(); ++r) {
+            if (m->index(r, 0).data(Qt::DisplayRole)
+                    .toString().contains(QStringLiteral("eth0"))) {
+                ethRow = r;
+                break;
+            }
+        }
+        QVERIFY(ethRow >= 0);
+        connView->expand(m->index(ethRow, 0));
+        QVERIFY(connView->isExpanded(m->index(ethRow, 0)));
+
+        QSignalSpy resetSpy(m, &QAbstractItemModel::modelReset);
+
+        // Filter to TCP only → wlan0's lone UDP flow is filtered out,
+        // its group must disappear; eth0 stays and stays expanded.
+        edit->setText(QStringLiteral("proto:tcp"));
+        QTest::qWait(350);
+        QCOMPARE(m->rowCount(), 1);
+        QVERIFY(m->index(0, 0).data(Qt::DisplayRole)
+                    .toString().contains(QStringLiteral("eth0")));
+        QVERIFY2(connView->isExpanded(m->index(0, 0)),
+                 "eth0 group collapsed across filter application");
+
+        // Clear the filter → wlan0 group returns.
+        edit->clear();
+        QTest::qWait(350);
+        QCOMPARE(m->rowCount(), 2);
+
+        // The whole dance must not have reset the model (a reset would
+        // ALSO have collapsed the tree — assert both independently so a
+        // failure pinpoints the mechanism).
+        QCOMPARE(resetSpy.size(), 0);
+    }
+
+    // #3 dnsResolutionRerendersFlowColumn. Exact replica of the
+    // bug-process-empty failure shape: data arrives asynchronously
+    // AFTER the row was first painted. If the resolved() connection in
+    // setDnsResolver or the targeted dataChanged in onResolved
+    // regresses, the UI silently shows raw IPs forever while every
+    // model unit test stays green.
+    void dnsResolutionRerendersFlowColumn()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        settings.setResolveHostnames(true);
+
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(connView);
+
+        connMon.emitSnapshot({
+            mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+        });
+        QTest::qWait(50);
+
+        auto *m = connView->model();
+        QCOMPARE(m->rowCount(), 1);
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+
+        // The model must have ASKED the resolver (resolution enabled).
+        QVERIFY2(dns.resolveCalls > 0, "model never called resolve()");
+        // Pre-answer, the Flow column shows the raw address.
+        QVERIFY(m->index(0, flowCol).data(Qt::DisplayRole)
+                    .toString().contains(QStringLiteral("1.1.1.1")));
+
+        // Async answer arrives: cache first (cachedName must return it),
+        // then the resolved() signal that triggers the re-render.
+        dns.setCached(QHostAddress(QStringLiteral("1.1.1.1")),
+                      QStringLiteral("one.example"));
+        dns.emitResolved(QHostAddress(QStringLiteral("1.1.1.1")),
+                         QStringLiteral("one.example"));
+        QTest::qWait(30);
+
+        QVERIFY2(m->index(0, flowCol).data(Qt::DisplayRole)
+                     .toString().contains(QStringLiteral("one.example")),
+                 "Flow column did not re-render after async DNS answer");
+    }
+
+    // #5 pauseFreezesModelUpdatesAndResumeRecovers. The m_paused gate
+    // is consulted in two independent consumers (onStatsUpdated and
+    // onConnectionsUpdated); an inverted/missed gate in either is
+    // invisible to unit tests. Also asserts the action's text flips so
+    // the UI affordance tracks the state.
+    void pauseFreezesModelUpdatesAndResumeRecovers()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *pause    = w.findChild<QAction*>(QStringLiteral("pauseAction"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(pause && connView);
+
+        connMon.emitSnapshot({
+            mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+        });
+        QTest::qWait(30);
+        QCOMPARE(connView->model()->rowCount(), 1);
+
+        // Pause. New snapshot must NOT reach the model.
+        pause->setChecked(true);
+        QVERIFY(pause->text().contains(QStringLiteral("Resume")));
+        connMon.emitSnapshot({
+            mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+            mkFlow("eth0", "10.0.0.10", 1002, "1.0.0.1", 443, L4Proto::Tcp),
+        });
+        QTest::qWait(30);
+        QCOMPARE(connView->model()->rowCount(), 1);  // frozen
+
+        // Resume. Next snapshot recovers.
+        pause->setChecked(false);
+        QVERIFY(pause->text().contains(QStringLiteral("Pause")));
+        connMon.emitSnapshot({
+            mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+            mkFlow("eth0", "10.0.0.10", 1002, "1.0.0.1", 443, L4Proto::Tcp),
+        });
+        QTest::qWait(30);
+        QCOMPARE(connView->model()->rowCount(), 2);  // recovered
+    }
+
+    // #11 staleRowLingersItalicThenPrunes. First coverage of any kind
+    // for ConnectionModel's stale-row lifecycle: a flow absent from
+    // the latest snapshot lingers (IsStaleRole true) for the retention
+    // window, then is pruned. With retention 0 the prune happens on the
+    // very next tick.
+    void staleRowLingersThenPrunes()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(connView);
+        auto *m = connView->model();
+
+        const auto flowA = mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443,
+                                  L4Proto::Tcp);
+        const auto flowB = mkFlow("eth0", "10.0.0.10", 1002, "1.0.0.1", 443,
+                                  L4Proto::Tcp);
+
+        connMon.emitSnapshot({flowA, flowB});
+        QTest::qWait(30);
+        QCOMPARE(m->rowCount(), 2);
+
+        // Drop B from the snapshot — default retention (15 s) keeps the
+        // row visible but stale.
+        connMon.emitSnapshot({flowA});
+        QTest::qWait(30);
+        QCOMPARE(m->rowCount(), 2);
+        int staleCount = 0;
+        for (int r = 0; r < m->rowCount(); ++r) {
+            if (m->index(r, 0).data(ConnectionModel::IsStaleRole).toBool())
+                ++staleCount;
+        }
+        QCOMPARE(staleCount, 1);
+
+        // Zero retention (both proto families) → B prunes on next tick.
+        settings.setConnectionStaleRetentionSecs(0);
+        settings.setConnectionStaleRetentionSecsUdp(0);
+        QTest::qWait(20);  // applySettingsToUi delivery
+        connMon.emitSnapshot({flowA});
+        QTest::qWait(30);
+        QCOMPARE(m->rowCount(), 1);
+        QVERIFY(!m->index(0, 0).data(ConnectionModel::IsStaleRole).toBool());
+    }
+
+    // #6 permissionDeniedBannerShowsAndIsNotClobbered. The banner has
+    // an explicit precedence guard: a later (less severe)
+    // accountingUnavailable must NOT overwrite an EPERM banner that's
+    // already showing. One inverted boolean away from regressing and
+    // nothing else tests the banner at all.
+    void permissionDeniedBannerShowsAndIsNotClobbered()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *banner = w.findChild<QFrame*>(QStringLiteral("connBanner"));
+        auto *label  = w.findChild<QLabel*>(QStringLiteral("connBannerLabel"));
+        QVERIFY(banner && label);
+        // The banner lives inside the Connections tab; isVisible() is
+        // false while another tab is current regardless of the banner's
+        // own state. Switch first.
+        w.selectConnectionsTab();
+        QTest::qWait(20);
+        QVERIFY(!banner->isVisible());
+
+        connMon.emitPermissionDenied(QStringLiteral("Operation not permitted"));
+        QTest::qWait(20);
+        QVERIFY(banner->isVisible());
+        QVERIFY(label->text().contains(QStringLiteral("CAP_NET_ADMIN")));
+
+        // A later accounting hint must NOT clobber the EPERM banner.
+        connMon.emitAccountingUnavailable(QStringLiteral("acct off"));
+        QTest::qWait(20);
+        QVERIFY(banner->isVisible());
+        QVERIFY2(label->text().contains(QStringLiteral("CAP_NET_ADMIN")),
+                 "accountingUnavailable clobbered the EPERM banner");
+
+        // And the reverse order: accounting-only shows ITS banner when
+        // nothing more severe was displayed. Fresh window for a clean
+        // visibility slate.
+        FakeConnectionMonitor connMon2;
+        MainWindow w2(&settings, &netMon, &connMon2, &dns);
+        w2.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w2));
+        w2.selectConnectionsTab();
+        QTest::qWait(20);
+        auto *banner2 = w2.findChild<QFrame*>(QStringLiteral("connBanner"));
+        auto *label2  = w2.findChild<QLabel*>(QStringLiteral("connBannerLabel"));
+        connMon2.emitAccountingUnavailable(QStringLiteral("acct off"));
+        QTest::qWait(20);
+        QVERIFY(banner2->isVisible());
+        QVERIFY(label2->text().contains(QStringLiteral("counters")));
     }
 };
 
