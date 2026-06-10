@@ -38,9 +38,16 @@ built-in Fusion dark palette fallback for environments without those.
 ## Regenerating the demo media
 
 The animated GIF shown in the README is **not committed to the repo** (to
-keep it lean) — it is attached as an asset to the GitHub Release and the
-README hot-links the release-download URL. The release workflow also
-embeds it in the release notes.
+keep it lean) — it is attached as an asset to the **`v0.2-rc1`** GitHub
+Release, and both the README and the release-notes preamble pin that one
+fixed URL. The GIF is **not regenerated per release**: every release
+reuses the `v0.2-rc1` asset unless the UI changes fundamentally enough to
+warrant a fresh capture.
+
+To refresh it (only on a fundamental UI change): regenerate, re-upload to
+the **same pinned tag**, and the existing URLs resolve to the new GIF
+automatically — no README / workflow edits needed. If you instead pin a
+new tag, update the URL in `README.md` *and* `.github/workflows/release.yml`.
 
 ```sh
 cmake -B build -DQIFTOP_BUILD_DEMO=ON
@@ -50,8 +57,8 @@ cmake --build build --target qiftop-demo -j"$(nproc)"
 bash docs/demo/capture-gif.sh /tmp/demo.gif Adwaita-Dark 26
 gifsicle -O3 --lossy=80 /tmp/demo.gif -o /tmp/demo.gif
 
-# attach to the (pre)release so the README + release-notes URLs resolve:
-gh release upload v0.2-rc1 /tmp/demo.gif
+# overwrite the pinned asset so every release's URL resolves to the update:
+gh release upload v0.2-rc1 /tmp/demo.gif --clobber
 ```
 
 `capture-still.sh` produces a single PNG frame — handy for iterating on

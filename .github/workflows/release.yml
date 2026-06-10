@@ -308,15 +308,18 @@ jobs:
           # Mark as prerelease automatically for tags like v0.2-rc1, v0.2-beta.
           prerelease: ${{ contains(github.ref_name, '-') }}
           # Custom preamble (animated demo) prepended above the auto-generated
-          # notes. The GIF is uploaded to this same release as an asset (it is
-          # deliberately NOT committed to the repo, to keep it lean), so the
-          # self-referential URL resolves once the asset is attached.
+          # notes. The demo GIF is NOT committed to the repo (keeps it lean)
+          # and is NOT re-generated per release — every release reuses the one
+          # uploaded to the v0.2-rc1 release, unless the UI changes
+          # fundamentally enough to warrant a fresh capture (then upload a new
+          # GIF to a release and bump the pinned tag below). The README pins
+          # the same URL.
           body: |
-            ![qiftop demo](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/demo.gif)
+            ![qiftop demo](https://github.com/${{ github.repository }}/releases/download/v0.2-rc1/demo.gif)
 
             *Animated walkthrough driven by synthetic data (reserved
             documentation addresses + `example.*` hostnames). Build / usage
-            docs and a static frame are in the [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md).*
+            docs are in the [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md).*
 
             **Packages:** `.deb` (Debian/Ubuntu) and `.rpm` (Fedora) for `amd64`/`x86_64`.
 
