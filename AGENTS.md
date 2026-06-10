@@ -29,23 +29,41 @@ strictly client-side.
 ```
 src/
 ├── agent/                    # privileged DBus daemon (qiftop-agent)
-│   ├── main.cpp              # config load, bus name, wires services + IdleManager
-│   ├── InterfacesService.{h,cpp}
-│   ├── ConnectionsService.{h,cpp}
+│   ├── main.cpp              # thin shim: argv, bus choice, constructs Application
+│   ├── Application.{h,cpp}   # RAII bus surface: registers objects, name, IdleManager
+│   ├── Config.{h,cpp}        # loadIdleConfig() — parses /etc/qiftop/agent.conf
+│   ├── InterfacesService.{h,cpp}   # /.../Interfaces — Version + Capabilities props
+│   ├── ConnectionsService.{h,cpp}  # /.../Connections — GetProcessDetails RPC, snapshot cap
 │   ├── Attribution.{h,cpp}  # pure helper: enrich Connection list via ProcessResolver
 │   └── IdleManager.{h,cpp}   # adaptive polling cadence + per-client hints
 ├── backend/                  # backend interfaces + platform impls
 │   ├── NetworkMonitor.{h,cpp}      # abstract: per-interface stats
 │   ├── ConnectionMonitor.{h,cpp}   # abstract: per-flow stats
-│   ├── linux/                      # libnl + nf_conntrack impls (server-side)
-│   │   ├── NetlinkMonitor.{h,cpp}, NetlinkWorker.{h,cpp}
-│   │   └── ConntrackMonitor.{h,cpp}
+│   ├── Connection.h                # Endpoint/Connection/L4Proto/Direction value types
+│   ├── ProcessResolver.h           # abstract: pid/process/container/chain resolution
+│   ├── ProcessDetails.h            # on-demand exe/cmdline/cwd/startTime DTO
+│   ├── CompositeResolver.h         # fan-out across a chain of resolvers
+│   ├── ProcessResolverFactory.{h,cpp}  # env-gated default resolver chain
+│   ├── PlatformInfo.{h,cpp}        # qiftop::platform host facts (uid→name, ephemeral range)
+│   ├── linux/                      # libnl + nf_conntrack + attribution (server-side)
+│   │   ├── NetlinkMonitor.{h,cpp}, NetlinkWorker.{h,cpp}   # per-interface stats
+│   │   ├── ConntrackMonitor.{h,cpp}                        # per-flow capture
+│   │   ├── SockDiagResolver.{h,cpp}, SockDiagDump.{h}, SockDiagParse.h  # pid via sock_diag
+│   │   ├── CgroupClassifier.{h,cpp}, CgroupParse.h         # pid → container runtime/id/chain
+│   │   ├── NetnsScanner.{h,cpp}                            # per-netns socket dump (setns)
+│   │   ├── ProcDetails.{h,cpp}                             # on-demand /proc/<pid> reads
+│   │   └── ProcSnapshot.h                                  # /proc/<pid>/stat starttime parser
 │   └── dbus/                       # client-side DBus proxies (used by GUI)
 │       ├── DBusNetworkMonitor.{h,cpp}
 │       └── DBusConnectionMonitor.{h,cpp}
+├── config/Settings.{h,cpp}   # QSettings-backed app prefs (Qt6::Core-only), emits changed()
 ├── dbus/Types.{h,cpp}        # DTOs + Qt marshalling for the wire format
-├── ui/                       # MainWindow, models, delegates, tray
-├── util/                     # Logging, HandoffServer/Client (legacy elevation)
+├── dns/                      # client-side async DNS (never in the agent)
+│   ├── DnsResolver.{h,cpp}         # abstract async resolver
+│   └── QtDnsResolver.{h,cpp}       # QHostInfo-backed, LRU-cached
+├── ui/                       # MainWindow, models, delegates, tray (Qt Widgets)
+├── util/                     # Logging, Units, Exporter, ConnectionFilter, Autostart,
+│                             #   PrivilegeEscalator, HandoffServer/Client (legacy elevation)
 └── main.cpp                  # GUI entry point
 
 dist/
@@ -828,8 +846,9 @@ now encodes/works around):
 
 ## 8. Release / versioning
 
-* `project(... VERSION 0.1)` in `CMakeLists.txt` is the single source of
-  truth. Both .debs and the `CPACK_PACKAGE_VERSION` derive from it.
+* `project(... VERSION 0.2)` in `CMakeLists.txt` is the single source of
+  truth. Both .debs, `CPACK_PACKAGE_VERSION`, and the binaries' runtime
+  `--version` (via the `QIFTOP_VERSION` compile definition) derive from it.
 * The DBus interface name (`org.qiftop.NetworkAgent1`) carries the
   contract version. **If you make a breaking change to a DTO or to a
   method signature, bump to `NetworkAgent2` and keep the old one alive

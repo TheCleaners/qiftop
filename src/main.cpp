@@ -22,6 +22,13 @@
 #include "backend/linux/NetlinkMonitor.h"
 #endif
 
+// QIFTOP_VERSION is injected by CMake (project() version, single source of
+// truth). Fall back to a sentinel only if someone builds without it so the
+// translation unit still compiles.
+#ifndef QIFTOP_VERSION
+#define QIFTOP_VERSION "0.0-dev"
+#endif
+
 namespace {
 
 constexpr auto kAgentBusName = "org.qiftop.NetworkAgent1";
@@ -106,7 +113,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("qiftop"));
     QCoreApplication::setApplicationName(QStringLiteral("qiftop"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(QIFTOP_VERSION));
     // Picks up dist/desktop/qiftop.svg from the hicolor theme once installed;
     // falls through silently when running from the build tree.
     QGuiApplication::setDesktopFileName(QStringLiteral("qiftop"));

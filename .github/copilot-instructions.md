@@ -83,12 +83,12 @@ tests/                                     # Qt6::Test unit tests, gated by QIFT
 
 ## DBus contract (`org.qiftop.NetworkAgent1`)
 
-| Path | Methods | Signals |
-|------|---------|---------|
-| `/.../Interfaces`  | `GetInterfaces()`, `SetDesiredIntervalMs(u)` | `StatsChanged` |
-| `/.../Connections` | `GetConnections()`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged`, `PermissionDenied`, `accountingChanged` |
+| Path | Methods | Signals | Properties |
+|------|---------|---------|------------|
+| `/.../Interfaces`  | `GetInterfaces()`, `SetDesiredIntervalMs(u)` | `StatsChanged`, `CadenceChanged` | `Version`, `Capabilities` |
+| `/.../Connections` | `GetConnections()`, `GetProcessDetails(u)`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged`, `PermissionDenied`, `AccountingChanged` | |
 
-Wire format is **native Qt marshalling, NOT JSON** (`a(yysqysqtttts)` for connections — see `src/dbus/Types.cpp`). Breaking DTO changes ⇒ bump to `NetworkAgent2`.
+Wire format is **native Qt marshalling, NOT JSON** (`a(yysqysqttttsyuyuussssa(sss))` for connections — 22 outer fields incl. the v0.2 process/container attribution columns + nested chain; see `src/dbus/Types.cpp` and the authoritative contract in `AGENTS.md §4`). Breaking DTO changes ⇒ bump to `NetworkAgent2`.
 
 **Idle manager gotcha**: the agent only resets activity on incoming method calls. Subscribing to signals alone is NOT enough — clients must heartbeat via `SetDesiredIntervalMs` every ≤ `hintTtlMs/2` (default 4s) or polling slows at 30s and pauses at 60s. The GUI does this in `MainWindow::applySettingsToUi`.
 
@@ -147,7 +147,7 @@ busctl --system call org.qiftop.NetworkAgent1 \
     org.qiftop.NetworkAgent1.Interfaces GetInterfaces
 ```
 
-The `qiftop` .deb has a `POST_BUILD` cpack hook on the **agent** target only — client-only edits need `cd build && cpack -G DEB && sudo dpkg -i qiftop_0.1_amd64.deb` (or `touch src/agent/main.cpp` first to trigger).
+The `qiftop` .deb has a `POST_BUILD` cpack hook on the **agent** target only — client-only edits need `cd build && cpack -G DEB && sudo dpkg -i qiftop_*_amd64.deb` (or `touch src/agent/main.cpp` first to trigger).
 
 ## Adding a New Platform Backend
 

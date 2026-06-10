@@ -8,7 +8,7 @@ Pre-release alpha tags (`v0.1-alphaN`) are intentionally omitted —
 their commit history is preserved in `git log`. This file is the
 human-readable summary for *shipping* releases.
 
-## [Unreleased]
+## [0.2] — 2026-06-09
 
 ### Added
 
@@ -354,4 +354,5 @@ The first qiftop release ships two Debian packages:
 * No separated debug-info `.ddeb` companion packages yet — alpha
   builds carry full debug info inline; stable .deb is stripped.
 
+[0.2]: https://github.com/TheCleaners/qiftop/releases/tag/v0.2
 [0.1]: https://github.com/TheCleaners/qiftop/releases/tag/v0.1

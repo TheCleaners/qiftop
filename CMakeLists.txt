@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(qiftop VERSION 0.1 LANGUAGES CXX)
+project(qiftop VERSION 0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -99,6 +99,10 @@ target_link_libraries(qiftop_ui PUBLIC
 
 add_executable(qiftop src/main.cpp)
 target_link_libraries(qiftop PRIVATE qiftop_ui)
+# Single source of truth for the release version: derive the runtime
+# --version string from the CMake project() version instead of hardcoding it
+# in main.cpp (which silently drifted from 0.1 to 0.2).
+target_compile_definitions(qiftop PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
 
 # Platform backend selection (shared between client and agent)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -128,6 +132,7 @@ add_executable(qiftop-agent
 )
 target_include_directories(qiftop-agent PRIVATE src)
 target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qiftop_dbus)
+target_compile_definitions(qiftop-agent PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(qiftop-agent PRIVATE backend_linux)
     target_compile_definitions(qiftop-agent PRIVATE BACKEND_LINUX)

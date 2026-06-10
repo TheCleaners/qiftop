@@ -528,7 +528,7 @@ should not appear.
 The auto-package `add_custom_command(POST_BUILD)` is wired to the
 `qiftop-agent` target only — client-only edits (e.g. anything in
 `src/ui/`) build & link the new `qiftop` binary but **do not** trigger
-a `.deb` regen, so `dpkg -i build/qiftop_0.1_amd64.deb` keeps
+a `.deb` regen, so `dpkg -i build/qiftop_*_amd64.deb` keeps
 installing the *previous* client. Symptom: edits seem to have no
 effect at runtime even though the build succeeded.
 
@@ -536,7 +536,7 @@ Two fixes:
 
 ```bash
 # Force a repackage by hand:
-(cd build && cpack -G DEB && sudo dpkg -i qiftop_0.1_amd64.deb)
+(cd build && cpack -G DEB && sudo dpkg -i qiftop_*_amd64.deb)
 
 # Or touch the agent so the POST_BUILD hook fires:
 touch src/agent/main.cpp && cmake --build build -j$(nproc)
