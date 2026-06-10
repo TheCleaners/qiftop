@@ -156,7 +156,108 @@ inline QStringList cellsForConnection(const aggregate::ConnectionAggregator &agg
             util::formatBytes(c.txBytes)};
 }
 
-// --- per-row colour role (the qiftop direction colour-coding semantics) -----
+// --- stable row identity (for the expand/collapse set, survives re-sort) -----
+
+inline QString interfaceKey(const aggregate::InterfaceAggregator::Row &r)
+{
+    return r.current.name;
+}
+inline QString connectionKey(const aggregate::ConnectionAggregator::Row &r)
+{
+    return r.current.key();
+}
+
+// --- aptitude-style detail tree lines for an expanded row -------------------
+// Each returned string is one tree line (already prefixed with ├/└ connectors).
+// The caller renders them as dim Detail rows beneath the parent.
+
+inline QStringList interfaceDetailLines(const aggregate::InterfaceAggregator::Row &r)
+{
+    const InterfaceStats &s = r.current;
+    QList<QPair<QString, QString>> kv;
+    kv << qMakePair(QStringLiteral("Type"),
+                    s.isLoopback ? QStringLiteral("loopback")
+                                 : (s.type.isEmpty() ? QStringLiteral("—") : s.type));
+    kv << qMakePair(QStringLiteral("Addresses"),
+                    s.addresses.isEmpty() ? QStringLiteral("—")
+                                          : s.addresses.join(QStringLiteral(", ")));
+    kv << qMakePair(QStringLiteral("MTU"), s.mtu ? QString::number(s.mtu) : QStringLiteral("—"));
+    kv << qMakePair(QStringLiteral("State"),
+                    QStringLiteral("%1 (oper %2, ifindex %3)")
+                        .arg(operStateText(s.operState, s.isUp))
+                        .arg(s.operState).arg(s.ifIndex));
+    kv << qMakePair(QStringLiteral("Rates"),
+                    QStringLiteral("\u2193 %1   \u2191 %2")
+                        .arg(util::formatByteRate(r.rxRate), util::formatByteRate(r.txRate)));
+    kv << qMakePair(QStringLiteral("Totals"),
+                    QStringLiteral("\u2193 %1   \u2191 %2")
+                        .arg(util::formatBytes(s.rxBytes), util::formatBytes(s.txBytes)));
+    kv << qMakePair(QStringLiteral("Packets"),
+                    QStringLiteral("\u2193 %1   \u2191 %2")
+                        .arg(s.rxPackets).arg(s.txPackets));
+    kv << qMakePair(QStringLiteral("Errors"),
+                    QStringLiteral("rx %1  tx %2").arg(s.rxErrors).arg(s.txErrors));
+    kv << qMakePair(QStringLiteral("Dropped"),
+                    QStringLiteral("rx %1  tx %2").arg(s.rxDropped).arg(s.txDropped));
+
+    QStringList out;
+    for (int i = 0; i < kv.size(); ++i) {
+        const QChar branch = (i == kv.size() - 1) ? QChar(0x2514) : QChar(0x251c); // └ ├
+        out << QStringLiteral("   %1\u2500 %2  %3")
+                   .arg(branch).arg(kv[i].first.leftJustified(10), kv[i].second);
+    }
+    return out;
+}
+
+inline QStringList connectionDetailLines(const aggregate::ConnectionAggregator &agg,
+                                         const aggregate::ConnectionAggregator::Row &r)
+{
+    const Connection &c = r.current;
+    QList<QPair<QString, QString>> kv;
+    kv << qMakePair(QStringLiteral("Protocol"), agg.protoLabel(c));
+    kv << qMakePair(QStringLiteral("Local"),  agg.endpointText(c.local));
+    kv << qMakePair(QStringLiteral("Remote"), agg.endpointText(c.remote));
+    const QString dir = c.direction == Direction::Outbound ? QStringLiteral("outbound")
+                      : c.direction == Direction::Inbound  ? QStringLiteral("inbound")
+                                                           : QStringLiteral("unknown");
+    kv << qMakePair(QStringLiteral("Direction"), dir);
+    if (!c.iface.isEmpty() || c.ifIndex)
+        kv << qMakePair(QStringLiteral("Interface"),
+                        QStringLiteral("%1 (ifindex %2)")
+                            .arg(c.iface.isEmpty() ? QStringLiteral("—") : c.iface)
+                            .arg(c.ifIndex));
+    const QString tcp = tcpStateToString(c.tcpState);
+    if (!tcp.isEmpty())
+        kv << qMakePair(QStringLiteral("TCP state"), tcp);
+    if (c.process.valid())
+        kv << qMakePair(QStringLiteral("Process"),
+                        QStringLiteral("%1 [%2] uid %3")
+                            .arg(c.process.comm.isEmpty() ? QStringLiteral("?") : c.process.comm)
+                            .arg(c.process.pid).arg(c.process.uid));
+    if (c.container.valid())
+        kv << qMakePair(QStringLiteral("Container"),
+                        QStringLiteral("%1 %2 (%3)")
+                            .arg(c.container.runtime,
+                                 c.container.name.isEmpty() ? c.container.id : c.container.name,
+                                 c.container.id));
+    kv << qMakePair(QStringLiteral("Rates"),
+                    QStringLiteral("\u2193 %1   \u2191 %2")
+                        .arg(util::formatByteRate(r.rxRate), util::formatByteRate(r.txRate)));
+    kv << qMakePair(QStringLiteral("Totals"),
+                    QStringLiteral("\u2193 %1   \u2191 %2")
+                        .arg(util::formatBytes(c.rxBytes), util::formatBytes(c.txBytes)));
+    kv << qMakePair(QStringLiteral("Packets"),
+                    QStringLiteral("\u2193 %1   \u2191 %2")
+                        .arg(c.rxPackets).arg(c.txPackets));
+
+    QStringList out;
+    for (int i = 0; i < kv.size(); ++i) {
+        const QChar branch = (i == kv.size() - 1) ? QChar(0x2514) : QChar(0x251c);
+        out << QStringLiteral("   %1\u2500 %2  %3")
+                   .arg(branch).arg(kv[i].first.leftJustified(10), kv[i].second);
+    }
+    return out;
+}
 
 inline Role rowRoleForInterface(const aggregate::InterfaceAggregator::Row &r)
 {

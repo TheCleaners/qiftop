@@ -189,6 +189,40 @@ private slots:
 
         QCOMPARE(groupByName(GroupBy::None), QStringLiteral("off"));
         QCOMPARE(groupByName(GroupBy::Container), QStringLiteral("container"));
+        // Round-trip via groupByFromName (CLI / config parsing, with aliases).
+        QCOMPARE(groupByFromName(QStringLiteral("iface")), GroupBy::Interface);
+        QCOMPARE(groupByFromName(QStringLiteral("PROCESS")), GroupBy::Process);
+        QCOMPARE(groupByFromName(QStringLiteral("off")), GroupBy::None);
+        QCOMPARE(groupByFromName(QStringLiteral("bogus")), GroupBy::Count); // unrecognised
+    }
+
+    void detailTreeLines()
+    {
+        // Interface detail tree: one line per field, tree connectors, last is └.
+        const QStringList ifl = interfaceDetailLines(ifaceRow(QStringLiteral("eth0"), 0, 0, true));
+        QVERIFY(ifl.size() >= 6);
+        QVERIFY(ifl.first().contains(QChar(0x251c)));            // ├ on non-last
+        QVERIFY(ifl.last().contains(QChar(0x2514)));             // └ on last
+        QVERIFY(std::any_of(ifl.cbegin(), ifl.cend(),
+                            [](const QString &s){ return s.contains(QStringLiteral("MTU")); }));
+
+        // Connection detail tree includes the 5-tuple + direction.
+        ConnectionAggregator agg;
+        agg.setUdpAggregateByPeer(false);
+        Connection c;
+        c.proto = L4Proto::Tcp;
+        c.local.address  = QHostAddress(QStringLiteral("10.0.0.1")); c.local.port = 5000;
+        c.remote.address = QHostAddress(QStringLiteral("1.1.1.1"));  c.remote.port = 443;
+        c.direction = Direction::Outbound;
+        agg.updateConnections({c});
+        const QStringList cl = connectionDetailLines(agg, agg.rowAt(0));
+        QVERIFY(std::any_of(cl.cbegin(), cl.cend(),
+                            [](const QString &s){ return s.contains(QStringLiteral("Direction")); }));
+        QVERIFY(cl.last().contains(QChar(0x2514)));
+
+        // Stable keys: interface = name, connection = 5-tuple key().
+        QCOMPARE(interfaceKey(ifaceRow(QStringLiteral("wlan0"), 0, 0)), QStringLiteral("wlan0"));
+        QCOMPARE(connectionKey(agg.rowAt(0)), agg.rowAt(0).current.key());
     }
 };
 

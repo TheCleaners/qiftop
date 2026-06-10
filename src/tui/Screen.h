@@ -42,6 +42,7 @@ struct Frame {
     QList<Role>   rowRoles;          // per-row colour role (parallel to rows)
     QList<double> rowGauge;          // per-row bandwidth fraction [0,1] (parallel)
     int           scrollOffset = 0;  // index of the first visible body row
+    int           cursor = -1;       // selected body row (absolute index; -1 none)
     QString       footer;            // plain key-help line (filter modes)
     QList<KeyHint> footerHints;      // structured menu bar: keys pop vs labels
     ModalPanel    modal;             // when .visible, painted over the body

@@ -313,12 +313,22 @@ void Screen::render(const Frame &f)
     for (int i = 0; i < body && (f.scrollOffset + i) < total; ++i) {
         const int idx = f.scrollOffset + i;
         const Role role = idx < f.rowRoles.size() ? f.rowRoles[idx] : Role::Normal;
+        const bool isCursor = (idx == f.cursor);
         attrset(attrFor(role));
         putLine(3 + i, rowText(f.rows[idx]));
         attrset(A_NORMAL);
-        // Row-spanning bandwidth gauge painted over the text.
-        const double frac = idx < f.rowGauge.size() ? f.rowGauge[idx] : 0.0;
-        paintGauge(3 + i, width, frac, role);
+        if (isCursor) {
+            // Current-line selection bar (htop-style): re-colour the whole row
+            // to the Cursor role, replacing the gauge tint for that one line.
+            const ThemeColor &cc = m_theme[Role::Cursor];
+            mvchgat(3 + i, 0, width, ncursesAttr(cc.attr),
+                    m_hasColor ? static_cast<short>(static_cast<int>(Role::Cursor) + 1) : 0,
+                    nullptr);
+        } else {
+            // Row-spanning bandwidth gauge painted over the text.
+            const double frac = idx < f.rowGauge.size() ? f.rowGauge[idx] : 0.0;
+            paintGauge(3 + i, width, frac, role);
+        }
         ++shown;
     }
     const int below = total - (f.scrollOffset + shown);

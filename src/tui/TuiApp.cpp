@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QSettings>
 #include <QSysInfo>
+#include <QtGlobal>
 #include <QTimer>
 
 #include <algorithm>
@@ -136,9 +137,9 @@ void TuiApp::handleKey(int key)
     }
 
     const int nCols = static_cast<int>(columnsFor(m_view).size());
-    int &scroll = (m_view == View::Interfaces) ? m_ifaceScroll : m_connScroll;
     int &sortCol = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
     bool &sortDesc = (m_view == View::Interfaces) ? m_ifaceSortDesc : m_connSortDesc;
+    const int bodyH = std::max(1, m_screen ? m_screen->bodyHeight() : 1);
 
     switch (key) {
     case 'q':
@@ -179,7 +180,7 @@ void TuiApp::handleKey(int key)
         if (!m_filterText.isEmpty()) {
             m_filterText.clear();
             m_filterExpr.reset();
-            m_connScroll = 0;
+            m_connCursor = 0;
         } else {
             return; // nothing to do; no repaint
         }
@@ -212,41 +213,50 @@ void TuiApp::handleKey(int key)
     case 'g':
         m_groupBy = static_cast<GroupBy>((static_cast<int>(m_groupBy) + 1)
                                          % static_cast<int>(GroupBy::Count));
-        m_connScroll = 0;
+        m_connCursor = 0;
         break;
-    // --- vim-style navigation ---
+    // --- current-line cursor: vim + arrow navigation ---
     case 'k':
     case KEY_UP:
-        if (scroll > 0) --scroll;
+        moveCursor(-1);
         break;
     case 'j':
     case KEY_DOWN:
-        ++scroll; // clamped in buildFrame
-        break;
-    case 'h':                       // previous tab
-    case 'l':                       // next tab (only two tabs: both toggle)
-        m_view = (m_view == View::Interfaces) ? View::Connections : View::Interfaces;
+        moveCursor(+1);
         break;
     case 'G':                       // vim: jump to bottom
-        scroll = std::numeric_limits<int>::max() / 2; // clamped in buildFrame
+    case KEY_END:
+        moveCursor(std::numeric_limits<int>::max() / 2);
         break;
     case 4:                         // Ctrl-D: half page down
-        scroll += std::max(1, (m_screen ? m_screen->bodyHeight() : 2) / 2);
+        moveCursor(bodyH / 2);
         break;
     case 21:                        // Ctrl-U: half page up
-        scroll = std::max(0, scroll - std::max(1, (m_screen ? m_screen->bodyHeight() : 2) / 2));
+        moveCursor(-bodyH / 2);
         break;
     case KEY_PPAGE:
-        scroll = std::max(0, scroll - std::max(1, m_screen ? m_screen->bodyHeight() : 1));
+        moveCursor(-bodyH);
         break;
     case KEY_NPAGE:
-        scroll += std::max(1, m_screen ? m_screen->bodyHeight() : 1);
+        moveCursor(bodyH);
         break;
     case KEY_HOME:
-        scroll = 0;
+        moveCursor(-(std::numeric_limits<int>::max() / 2));
         break;
-    case KEY_END:
-        scroll = std::numeric_limits<int>::max() / 2; // clamped in buildFrame
+    // --- expand / collapse the current row (aptitude-style detail tree) ---
+    case '\n':
+    case '\r':
+    case KEY_ENTER:
+    case ' ':
+        toggleExpand(0);
+        break;
+    case 'l':
+    case KEY_RIGHT:
+        toggleExpand(+1);
+        break;
+    case 'h':
+    case KEY_LEFT:
+        toggleExpand(-1);
         break;
     case KEY_RESIZE:
         break; // Screen reads the new size on the next render
@@ -267,6 +277,11 @@ Frame TuiApp::buildFrame()
     double maxRate = 0.0;
     double aggRx = 0.0, aggTx = 0.0;
 
+    m_rowRefs.clear();
+    const auto marker = [](bool open) {
+        return open ? QStringLiteral("\u25be ") : QStringLiteral("\u25b8 "); // ▾ ▸
+    };
+
     if (m_view == View::Interfaces) {
         f.sortCol  = m_ifaceSortCol;
         f.sortDesc = m_ifaceSortDesc;
@@ -274,13 +289,27 @@ Frame TuiApp::buildFrame()
         const QList<int> order =
             sortedInterfaceIndices(rows, m_ifaceSortCol, m_ifaceSortDesc);
         for (int i : order) {
-            f.rows     << cellsForInterface(rows[i]);
-            f.rowRoles << rowRoleForInterface(rows[i]);
-            const double cr = combinedRate(rows[i]);
+            const auto &row = rows[i];
+            const QString key = interfaceKey(row);
+            const bool open = m_expandedIface.contains(key);
+            QStringList cells = cellsForInterface(row);
+            cells[0] = marker(open) + cells[0];
+            f.rows     << cells;
+            f.rowRoles << rowRoleForInterface(row);
+            const double cr = combinedRate(row);
             rates << cr;
             maxRate = std::max(maxRate, cr);
-            aggRx += rows[i].rxRate;
-            aggTx += rows[i].txRate;
+            aggRx += row.rxRate;
+            aggTx += row.txRate;
+            m_rowRefs << RowRef{true, key};
+            if (open) {
+                for (const QString &dl : interfaceDetailLines(row)) {
+                    f.rows     << QStringList{dl};
+                    f.rowRoles << Role::Detail;
+                    rates      << 0.0;
+                    m_rowRefs  << RowRef{false, QString()};
+                }
+            }
         }
     } else {
         f.sortCol  = m_connSortCol;
@@ -318,13 +347,26 @@ Frame TuiApp::buildFrame()
         if (m_groupBy == GroupBy::None) {
             for (int i : matched) {
                 const auto &row = rows[i];
-                f.rows     << cellsForConnection(*m_connAgg, row);
+                const QString key = connectionKey(row);
+                const bool open = m_expandedConn.contains(key);
+                QStringList cells = cellsForConnection(*m_connAgg, row);
+                cells[0] = marker(open) + cells[0];
+                f.rows     << cells;
                 f.rowRoles << connRole(row);
                 const double cr = combinedRate(row);
                 rates << cr;
                 maxRate = std::max(maxRate, cr);
                 aggRx += row.rxRate;
                 aggTx += row.txRate;
+                m_rowRefs << RowRef{true, key};
+                if (open) {
+                    for (const QString &dl : connectionDetailLines(*m_connAgg, row)) {
+                        f.rows     << QStringList{dl};
+                        f.rowRoles << Role::Detail;
+                        rates      << 0.0;
+                        m_rowRefs  << RowRef{false, QString()};
+                    }
+                }
             }
         } else {
             // Bucket by group key, preserving first-appearance order (which is
@@ -347,7 +389,7 @@ Frame TuiApp::buildFrame()
                     grb += rows[i].current.rxBytes;
                     gtb += rows[i].current.txBytes;
                 }
-                // Group header row (aggregated).
+                // Group header row (aggregated, not expandable).
                 const QString label = groupLabelFor(m_groupBy, rows[members.first()].current);
                 f.rows << QStringList{
                     QStringLiteral("%1  (%2)").arg(label).arg(members.size()),
@@ -359,16 +401,28 @@ Frame TuiApp::buildFrame()
                 maxRate = std::max(maxRate, gcr);
                 aggRx += grx;
                 aggTx += gtx;
-                // Member rows (indented in the flow column).
+                m_rowRefs << RowRef{false, QString()};
+                // Member rows (indented, expandable).
                 for (int i : members) {
                     const auto &row = rows[i];
+                    const QString key = connectionKey(row);
+                    const bool open = m_expandedConn.contains(key);
                     QStringList mc = cellsForConnection(*m_connAgg, row);
-                    mc[0] = QStringLiteral("  ") + mc[0];
-                    f.rows << mc;
+                    mc[0] = QStringLiteral("  ") + marker(open) + mc[0];
+                    f.rows     << mc;
                     f.rowRoles << connRole(row);
                     const double cr = combinedRate(row);
                     rates << cr;
                     maxRate = std::max(maxRate, cr);
+                    m_rowRefs << RowRef{true, key};
+                    if (open) {
+                        for (const QString &dl : connectionDetailLines(*m_connAgg, row)) {
+                            f.rows     << QStringList{QStringLiteral("  ") + dl};
+                            f.rowRoles << Role::Detail;
+                            rates      << 0.0;
+                            m_rowRefs  << RowRef{false, QString()};
+                        }
+                    }
                 }
             }
         }
@@ -396,12 +450,27 @@ Frame TuiApp::buildFrame()
     f.sourceLabel = QStringLiteral("\u03a3 %1\u2193 %2\u2191 \u00b7 \u2264%3 \u00b7 %4")
                         .arg(rxStr, txStr, scStr, src);
 
-    // Clamp scroll to the valid range for the current body height.
+    // Current-line cursor: clamp to the row count, then derive the viewport
+    // scroll so the cursor stays visible (scroll follows selection).
     const int body  = m_screen ? m_screen->bodyHeight() : 0;
     const int total = static_cast<int>(f.rows.size());
+    int &cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
     int &scroll = (m_view == View::Interfaces) ? m_ifaceScroll : m_connScroll;
-    const int maxScroll = std::max(0, total - body);
-    scroll = std::clamp(scroll, 0, maxScroll);
+    if (total <= 0) {
+        cursor = 0;
+        scroll = 0;
+        f.cursor = -1;
+    } else {
+        cursor = std::clamp(cursor, 0, total - 1);
+        if (body > 0) {
+            if (cursor < scroll)
+                scroll = cursor;
+            else if (cursor >= scroll + body)
+                scroll = cursor - body + 1;
+            scroll = std::clamp(scroll, 0, std::max(0, total - body));
+        }
+        f.cursor = cursor;
+    }
     f.scrollOffset = scroll;
 
     if (m_filterEditing) {
@@ -420,15 +489,16 @@ Frame TuiApp::buildFrame()
         };
     } else {
         f.footerHints = {
-            {QStringLiteral("q"),   QStringLiteral("quit")},
-            {QStringLiteral("Tab"), QStringLiteral("view")},
-            {QStringLiteral("s/f"), QStringLiteral("sort")},
-            {QStringLiteral("g"),   QStringLiteral("group")},
-            {QStringLiteral("/"),   QStringLiteral("filter")},
-            {QStringLiteral("p"),   QStringLiteral("pause")},
-            {QStringLiteral("z"),   QStringLiteral("theme")},
-            {QStringLiteral("S"),   QStringLiteral("settings")},
-            {QStringLiteral("?"),   QStringLiteral("help")},
+            {QStringLiteral("q"),     QStringLiteral("quit")},
+            {QStringLiteral("Tab"),   QStringLiteral("view")},
+            {QStringLiteral("jk"),    QStringLiteral("move")},
+            {QStringLiteral("\u21b5"), QStringLiteral("expand")},
+            {QStringLiteral("s/f"),   QStringLiteral("sort")},
+            {QStringLiteral("g"),     QStringLiteral("group")},
+            {QStringLiteral("/"),     QStringLiteral("filter")},
+            {QStringLiteral("p"),     QStringLiteral("pause")},
+            {QStringLiteral("S"),     QStringLiteral("settings")},
+            {QStringLiteral("?"),     QStringLiteral("help")},
         };
     }
 
@@ -464,9 +534,10 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.title      = QStringLiteral("Help — key bindings");
         f.modal.items = {
             row(QStringLiteral("Tab / 1 / 2"), QStringLiteral("Switch view (Interfaces / Connections)")),
-            row(QStringLiteral("↑↓ / j k"),    QStringLiteral("Scroll one row (vim keys too)")),
-            row(QStringLiteral("h / l"),        QStringLiteral("Previous / next view tab")),
-            row(QStringLiteral("PgUp/PgDn ^U/^D"), QStringLiteral("Scroll one page / half page")),
+            row(QStringLiteral("↑↓ / j k"),    QStringLiteral("Move the current-line cursor")),
+            row(QStringLiteral("Enter / Space"), QStringLiteral("Expand / collapse row details")),
+            row(QStringLiteral("l / h"),        QStringLiteral("Expand / collapse the current row")),
+            row(QStringLiteral("PgUp/PgDn ^U/^D"), QStringLiteral("Move cursor by a page / half page")),
             row(QStringLiteral("Home/End  G"),  QStringLiteral("Jump to top / bottom")),
             row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
             row(QStringLiteral("f"),            QStringLiteral("Fields: pick sort column & direction")),
@@ -524,6 +595,35 @@ void TuiApp::onDataChanged()
 {
     if (m_paused)
         return;            // frozen: ignore live updates until unpaused
+    requestRedraw();
+}
+
+void TuiApp::moveCursor(int delta)
+{
+    int &cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
+    // Clamp against the last frame's row count; buildFrame re-clamps too.
+    const int total = m_rowRefs.size();
+    if (total <= 0) { cursor = 0; requestRedraw(); return; }
+    cursor = std::clamp(cursor + delta, 0, total - 1);
+    requestRedraw();
+}
+
+void TuiApp::toggleExpand(int dir)
+{
+    const int cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
+    if (cursor < 0 || cursor >= m_rowRefs.size())
+        return;
+    const RowRef &ref = m_rowRefs[cursor];
+    if (!ref.expandable || ref.key.isEmpty())
+        return;
+    QSet<QString> &exp = (m_view == View::Interfaces) ? m_expandedIface : m_expandedConn;
+    const bool isOpen = exp.contains(ref.key);
+    if (dir > 0)            // expand only
+        exp.insert(ref.key);
+    else if (dir < 0)       // collapse only
+        exp.remove(ref.key);
+    else                    // toggle
+        isOpen ? (void)exp.remove(ref.key) : (void)exp.insert(ref.key);
     requestRedraw();
 }
 

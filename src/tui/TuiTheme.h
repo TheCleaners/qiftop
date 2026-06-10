@@ -30,6 +30,8 @@ enum class Role {
     TitleBar,      // line 0 chrome fill (tab/title bar)
     GroupHeader,   // grouped-view aggregate header row
     MenuKey,       // key glyphs in the line-1 menu bar (bold, vs plain labels)
+    Cursor,        // the current-line selection bar (htop-style)
+    Detail,        // expanded row detail tree lines (dim)
     Count
 };
 
@@ -111,6 +113,8 @@ inline QList<Theme> builtinThemes()
             {Role::TitleBar,      {White,   Blue,    Bold}},
             {Role::GroupHeader,   {Cyan,    Default, Bold}},
             {Role::MenuKey,       {Default, Default, Reverse | Bold}},
+            {Role::Cursor,        {Black,   Cyan,    Bold}},
+            {Role::Detail,        {Cyan,    Default, Dim}},
         }),
         makeTheme(QStringLiteral("light"), {
             {Role::Header,        {Black,   Yellow,  Bold}},
@@ -126,6 +130,8 @@ inline QList<Theme> builtinThemes()
             {Role::TitleBar,      {White,   Blue,    Bold}},
             {Role::GroupHeader,   {Blue,    Default, Bold}},
             {Role::MenuKey,       {Default, Default, Reverse | Bold}},
+            {Role::Cursor,        {Black,   Cyan,    Bold}},
+            {Role::Detail,        {Blue,    Default, Dim}},
         }),
         makeTheme(QStringLiteral("colorblind"), {
             {Role::Header,        {Black,   Yellow,  Bold}},
@@ -141,6 +147,8 @@ inline QList<Theme> builtinThemes()
             {Role::TitleBar,      {White,   Blue,    Bold}},
             {Role::GroupHeader,   {Cyan,    Default, Bold}},
             {Role::MenuKey,       {Default, Default, Reverse | Bold}},
+            {Role::Cursor,        {Black,   Cyan,    Bold}},
+            {Role::Detail,        {Cyan,    Default, Dim}},
         }),
         makeTheme(QStringLiteral("mono"), {
             {Role::Header,        {Default, Default, Reverse}},
@@ -156,6 +164,8 @@ inline QList<Theme> builtinThemes()
             {Role::TitleBar,      {Default, Default, Reverse | Bold}},
             {Role::GroupHeader,   {Default, Default, Bold | Underline}},
             {Role::MenuKey,       {Default, Default, Reverse | Bold}},
+            {Role::Cursor,        {Default, Default, Reverse | Bold}},
+            {Role::Detail,        {Default, Default, Dim}},
         }),
     };
     // Row-spanning gauge fill tint (256-colour only; -1 -> reverse fallback).

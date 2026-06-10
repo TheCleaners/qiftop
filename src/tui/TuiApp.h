@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QSet>
 
 #include <functional>
 
@@ -84,6 +85,19 @@ private:
     int  m_connSortCol  = 1;  bool m_connSortDesc  = true;  // RX rate desc
     int  m_ifaceScroll  = 0;
     int  m_connScroll   = 0;
+    int  m_ifaceCursor  = 0;  // selected row (index into displayed rows)
+    int  m_connCursor   = 0;
+
+    // Expanded rows (aptitude-style detail tree). Keyed by stable identity
+    // (interface name / connection 5-tuple) so they survive a re-sort/refresh.
+    QSet<QString> m_expandedIface;
+    QSet<QString> m_expandedConn;
+    // Per displayed row of the active view, rebuilt each buildFrame: whether the
+    // row can be expanded and its identity key. Lets handleKey act on the cursor.
+    struct RowRef { bool expandable = false; QString key; };
+    QList<RowRef> m_rowRefs;
+    void moveCursor(int delta);   // move selection, clamped, scroll follows
+    void toggleExpand(int dir);   // dir: 0 toggle, +1 expand, -1 collapse
 
     // Modal overlays (only one open at a time). Settings = runtime toggles,
     // Fields = top-style sort-column selector, Help/About = read-only info.
