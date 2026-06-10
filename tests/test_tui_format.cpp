@@ -39,9 +39,9 @@ class TestTuiFormat : public QObject {
 private slots:
     void columnsMatchView()
     {
-        // [name/flow] [RX rate] [TX rate] [RX total] [TX total] (+Status).
-        // The bandwidth gauge is a row-spanning background fill, not a column.
-        QCOMPARE(columnsFor(View::Interfaces).size(), 6);
+        // Connections: [flow][RX rate][TX rate][RX total][TX total].
+        // Interfaces add [MTU][State][Err/Drop] (the Qt-UI-style extra info).
+        QCOMPARE(columnsFor(View::Interfaces).size(), 8);
         QCOMPARE(columnsFor(View::Connections).size(), 5);
         // Column 0 (name/flow) is left-aligned; rate columns (1..) right.
         QVERIFY(!columnsFor(View::Connections)[0].rightAlign);
@@ -49,16 +49,30 @@ private slots:
         // Numeric columns are fixed-width (kills per-frame jitter); name flexes.
         QCOMPARE(columnsFor(View::Connections)[0].fixedWidth, 0);
         QCOMPARE(columnsFor(View::Connections)[1].fixedWidth, kRateW);
+        QCOMPARE(columnsFor(View::Interfaces)[5].title, QStringLiteral("MTU"));
+        QCOMPARE(columnsFor(View::Interfaces)[6].title, QStringLiteral("State"));
     }
 
     void interfaceCells()
     {
         const QStringList cells = cellsForInterface(ifaceRow(QStringLiteral("eth0"), 0, 0, true));
-        QCOMPARE(cells.size(), 6);
-        QCOMPARE(cells[0], QStringLiteral("eth0"));
-        QCOMPARE(cells[5], QStringLiteral("up"));
-        QCOMPARE(cellsForInterface(ifaceRow(QStringLiteral("x"), 0, 0, false))[5],
+        QCOMPARE(cells.size(), 8);
+        QVERIFY(cells[0].startsWith(QStringLiteral("eth0")));
+        // State column (index 6) reflects up/down (operState 0 -> isUp fallback).
+        QCOMPARE(cells[6], QStringLiteral("up"));
+        QCOMPARE(cellsForInterface(ifaceRow(QStringLiteral("x"), 0, 0, false))[6],
                  QStringLiteral("down"));
+        // Err/Drop column (index 7) is "<errs>/<drops>".
+        QCOMPARE(cells[7], QStringLiteral("0/0"));
+    }
+
+    void operStateLabels()
+    {
+        QCOMPARE(operStateText(6, false), QStringLiteral("up"));
+        QCOMPARE(operStateText(2, true),  QStringLiteral("down"));
+        QCOMPARE(operStateText(5, false), QStringLiteral("dormant"));
+        QCOMPARE(operStateText(0, true),  QStringLiteral("up"));   // fallback to isUp
+        QCOMPARE(operStateText(0, false), QStringLiteral("down"));
     }
 
     void scaleAndGaugeFraction()

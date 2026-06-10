@@ -34,11 +34,14 @@ struct Column {
 // column (index 0) flexes to fill the rest.
 constexpr int kRateW   = 11; // "999.9 MiB/s"
 constexpr int kTotalW  = 11; // "999.99 GiB"
-constexpr int kStatusW = 9;  // "loopback"
+constexpr int kStateW  = 9;  // "lower-dn" / "dormant"
+constexpr int kMtuW    = 6;  // "65535"
+constexpr int kErrW    = 11; // "err/drop"
 
-// Layout (both views): [name/flow] [RX rate] [TX rate] [RX total] [TX total]
-// (+ [Status] for interfaces). The whole-row bandwidth gauge is painted as a
-// background fill by Screen — it's not a column.
+// Connections layout: [flow] [RX rate] [TX rate] [RX total] [TX total].
+// Interfaces layout (richer, mirrors the Qt UI's detail info):
+//   [iface+addrs] [RX rate] [TX rate] [RX total] [TX total] [MTU] [State] [Err/Drop]
+// The whole-row bandwidth gauge is painted as a background fill by Screen.
 inline QList<Column> columnsFor(View v)
 {
     QList<Column> cols = {
@@ -48,9 +51,27 @@ inline QList<Column> columnsFor(View v)
         {QStringLiteral("RX total"), true, kTotalW},
         {QStringLiteral("TX total"), true, kTotalW},
     };
-    if (v == View::Interfaces)
-        cols.append({QStringLiteral("Status"), false, kStatusW});
+    if (v == View::Interfaces) {
+        cols.append({QStringLiteral("MTU"),      true,  kMtuW});
+        cols.append({QStringLiteral("State"),    false, kStateW});
+        cols.append({QStringLiteral("Err/Drop"), true,  kErrW});
+    }
     return cols;
+}
+
+// Linux IF_OPER_* (RFC 2863) -> short label, with an isUp fallback when the
+// backend couldn't determine the operational state (operState == 0).
+inline QString operStateText(quint8 operState, bool isUp)
+{
+    switch (operState) {
+    case 1: return QStringLiteral("absent");
+    case 2: return QStringLiteral("down");
+    case 3: return QStringLiteral("lower-dn");
+    case 4: return QStringLiteral("testing");
+    case 5: return QStringLiteral("dormant");
+    case 6: return QStringLiteral("up");
+    default: return isUp ? QStringLiteral("up") : QStringLiteral("down");
+    }
 }
 
 // --- bandwidth scale --------------------------------------------------------
@@ -90,15 +111,31 @@ inline double gaugeFraction(double value, double scale)
 inline QStringList cellsForInterface(const aggregate::InterfaceAggregator::Row &r)
 {
     const InterfaceStats &s = r.current;
-    const QString status = s.isLoopback ? QStringLiteral("loopback")
-                                        : (s.isUp ? QStringLiteral("up")
-                                                  : QStringLiteral("down"));
-    return {s.name,
+
+    // Flexible first column: name + the extra detail the Qt UI shows (type and
+    // assigned addresses). Loopback is tagged so it's obvious at a glance.
+    QString name = s.name;
+    QStringList detail;
+    if (s.isLoopback)
+        detail << QStringLiteral("loopback");
+    else if (!s.type.isEmpty())
+        detail << s.type;
+    if (!s.addresses.isEmpty())
+        detail << s.addresses.join(QStringLiteral(", "));
+    if (!detail.isEmpty())
+        name += QStringLiteral("  \u2014 ") + detail.join(QStringLiteral("  "));
+
+    const quint64 errs  = s.rxErrors + s.txErrors;
+    const quint64 drops = s.rxDropped + s.txDropped;
+
+    return {name,
             util::formatByteRate(r.rxRate),
             util::formatByteRate(r.txRate),
             util::formatBytes(s.rxBytes),
             util::formatBytes(s.txBytes),
-            status};
+            s.mtu > 0 ? QString::number(s.mtu) : QStringLiteral("—"),
+            operStateText(s.operState, s.isUp),
+            QStringLiteral("%1/%2").arg(errs).arg(drops)};
 }
 
 inline QStringList cellsForConnection(const aggregate::ConnectionAggregator &agg,
@@ -141,8 +178,9 @@ inline Role rowRoleForConnection(const aggregate::ConnectionAggregator &agg,
 }
 
 // --- sorting ----------------------------------------------------------------
-// Column layout: 0 = name/flow (text), 1 = RX rate, 2 = TX rate,
-// 3 = RX total, 4 = TX total, 5 = status (interfaces only).
+// Connections columns: 0 flow, 1 RX rate, 2 TX rate, 3 RX total, 4 TX total.
+// Interfaces columns:  0 iface, 1 RX rate, 2 TX rate, 3 RX total, 4 TX total,
+//                      5 MTU, 6 State (operState), 7 Err/Drop.
 
 inline QList<int> sortedInterfaceIndices(const QList<aggregate::InterfaceAggregator::Row> &rows,
                                          int col, bool descending)
@@ -156,7 +194,10 @@ inline QList<int> sortedInterfaceIndices(const QList<aggregate::InterfaceAggrega
         case 2:  return r.txRate;
         case 3:  return static_cast<double>(r.current.rxBytes);
         case 4:  return static_cast<double>(r.current.txBytes);
-        case 5:  return r.current.isUp ? 1.0 : 0.0;
+        case 5:  return static_cast<double>(r.current.mtu);
+        case 6:  return static_cast<double>(r.current.operState);
+        case 7:  return static_cast<double>(r.current.rxErrors + r.current.txErrors
+                                            + r.current.rxDropped + r.current.txDropped);
         default: return 0.0;
         }
     };
