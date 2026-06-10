@@ -4,6 +4,7 @@
 #include "aggregate/InterfaceAggregator.h"
 
 #include <QCoreApplication>
+#include <QSysInfo>
 #include <QTimer>
 
 #include <algorithm>
@@ -95,6 +96,10 @@ void TuiApp::handleKey(int key)
         handleFieldsKey(key);
         return;
     }
+    if (m_overlay == Overlay::Help || m_overlay == Overlay::About) {
+        handleInfoKey(key);
+        return;
+    }
 
     const int nCols = static_cast<int>(columnsFor(m_view).size());
     int &scroll = (m_view == View::Interfaces) ? m_ifaceScroll : m_connScroll;
@@ -115,6 +120,14 @@ void TuiApp::handleKey(int key)
     case 'F':
         m_fieldsSel = sortCol;          // start on the current sort column
         m_overlay = Overlay::Fields;
+        break;
+    case '?':
+    case KEY_F(1):
+        m_overlay = Overlay::Help;
+        break;
+    case 'a':
+    case 'A':
+        m_overlay = Overlay::About;
         break;
     case '\t':
     case KEY_BTAB:
@@ -235,7 +248,7 @@ Frame TuiApp::buildFrame()
     f.scrollOffset = scroll;
 
     f.footer = QStringLiteral(
-        " q quit · Tab/1/2 view · s sort · f fields · r reverse · z theme · S settings · ↑↓/PgUp/PgDn scroll ");
+        " q quit · Tab/1/2 view · s/f sort · r reverse · z theme · S settings · ? help ");
 
     buildModal(f);
     return f;
@@ -260,6 +273,61 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.items    = sortFieldRows(columnsFor(m_view), sortCol, sortDesc);
         f.modal.selected = m_fieldsSel;
         f.modal.footer   = QStringLiteral("↑↓ move · Enter/Space sort · r reverse · f/Esc close");
+    } else if (m_overlay == Overlay::Help) {
+        // Pre-format "key   description" into the label (read-only panel).
+        const auto row = [](const QString &key, const QString &desc) {
+            return SettingRow{key.leftJustified(14) + desc, QString(), QString()};
+        };
+        f.modal.visible    = true;
+        f.modal.selectable = false;
+        f.modal.title      = QStringLiteral("Help — key bindings");
+        f.modal.items = {
+            row(QStringLiteral("Tab / 1 / 2"), QStringLiteral("Switch view (Interfaces / Connections)")),
+            row(QStringLiteral("↑ ↓"),         QStringLiteral("Scroll one row")),
+            row(QStringLiteral("PgUp / PgDn"),  QStringLiteral("Scroll one page")),
+            row(QStringLiteral("Home / End"),   QStringLiteral("Jump to top / bottom")),
+            row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
+            row(QStringLiteral("f"),            QStringLiteral("Fields: pick sort column & direction")),
+            row(QStringLiteral("r"),            QStringLiteral("Reverse the sort order")),
+            row(QStringLiteral("z"),            QStringLiteral("Cycle the colour theme")),
+            row(QStringLiteral("S / F2"),       QStringLiteral("Settings (gauge, DNS, smoothing…)")),
+            row(QStringLiteral("? / F1"),       QStringLiteral("This help")),
+            row(QStringLiteral("a"),            QStringLiteral("About (app & system info)")),
+            row(QStringLiteral("q"),            QStringLiteral("Quit")),
+        };
+        f.modal.footer = QStringLiteral("any key / Esc closes");
+    } else if (m_overlay == Overlay::About) {
+        const auto row = [](const QString &label, const QString &value) {
+            return SettingRow{label.leftJustified(12), value, QString()};
+        };
+        const QString name = QCoreApplication::applicationName().isEmpty()
+                                 ? QStringLiteral("nqiftop")
+                                 : QCoreApplication::applicationName();
+        const QString ver = QCoreApplication::applicationVersion();
+        QString term = QStringLiteral("unknown");
+        if (m_screen) {
+            const QString mode = m_screen->color256() ? QStringLiteral("256-colour")
+                                 : m_screen->hasColor() ? QStringLiteral("8-colour")
+                                                        : QStringLiteral("monochrome");
+            term = QStringLiteral("%1×%2, %3")
+                       .arg(m_screen->cols()).arg(m_screen->rows()).arg(mode);
+        }
+        f.modal.visible    = true;
+        f.modal.selectable = false;
+        f.modal.title      = QStringLiteral("About %1").arg(name);
+        f.modal.items = {
+            row(QStringLiteral("Application"), QStringLiteral("%1 %2").arg(name, ver)),
+            row(QStringLiteral("libqiftop"),   ver),
+            row(QStringLiteral("Source"),      m_sourceLabel),
+            row(QStringLiteral("Qt"),          QString::fromLatin1(qVersion())),
+            row(QStringLiteral("OS"),          QSysInfo::prettyProductName()),
+            row(QStringLiteral("Kernel"),      QStringLiteral("%1 %2")
+                    .arg(QSysInfo::kernelType(), QSysInfo::kernelVersion())),
+            row(QStringLiteral("Arch"),        QSysInfo::currentCpuArchitecture()),
+            row(QStringLiteral("Host"),        QSysInfo::machineHostName()),
+            row(QStringLiteral("Terminal"),    term),
+        };
+        f.modal.footer = QStringLiteral("any key / Esc closes · iftop-style net monitor");
     }
 }
 
@@ -363,6 +431,17 @@ void TuiApp::handleFieldsKey(int key)
     default:
         return; // ignore, no repaint
     }
+    requestRedraw();
+}
+
+void TuiApp::handleInfoKey(int key)
+{
+    // Read-only Help/About panels: any key (except a terminal resize) closes.
+    if (key == KEY_RESIZE) {
+        requestRedraw();
+        return;
+    }
+    m_overlay = Overlay::None;
     requestRedraw();
 }
 

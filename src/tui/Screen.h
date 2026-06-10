@@ -18,6 +18,7 @@ namespace qiftop::tui {
 // body and shows the selected row's help line.
 struct ModalPanel {
     bool                 visible = false;
+    bool                 selectable = true; // false = read-only info panel
     QString              title;
     QList<SettingRow>    items;
     int                  selected = 0;
@@ -53,6 +54,10 @@ public:
     // (re)registered if the terminal supports colour.
     void setTheme(const Theme &theme);
     [[nodiscard]] const QString &themeName() const { return m_theme.name; }
+
+    // Terminal colour capability (for the About panel).
+    [[nodiscard]] bool hasColor() const { return m_hasColor; }
+    [[nodiscard]] bool color256() const { return m_color256; }
 
     [[nodiscard]] int  rows() const;   // terminal height
     [[nodiscard]] int  cols() const;   // terminal width

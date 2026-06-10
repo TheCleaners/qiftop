@@ -333,9 +333,10 @@ void Screen::renderModal(const ModalPanel &s) const
 
     const int innerW = std::min(W - 4, std::max(40, contentW));
     const int boxW   = innerW + 2;                       // + side borders
-    // Inner content rows (between the borders): blank, N items, blank, help,
-    // footer. The title lives in the top border. +2 for the borders.
-    const int innerH = 1 + s.items.size() + 1 + 1 + 1;
+    // Inner content rows (between the borders): blank, N items, blank,
+    // [help (selectable only)], footer. The title lives in the top border.
+    const int helpLines = s.selectable ? 1 : 0;
+    const int innerH = 1 + s.items.size() + 1 + helpLines + 1;
     const int boxH   = innerH + 2;
     const int x0 = (W - boxW) / 2;
     const int y0 = std::max(0, (H - boxH) / 2);
@@ -392,6 +393,19 @@ void Screen::renderModal(const ModalPanel &s) const
     put(y++, QString(), normal, false);                   // blank
     for (int i = 0; i < s.items.size(); ++i) {
         const SettingRow &it = s.items[i];
+        if (!s.selectable) {
+            // Read-only info panel: left-aligned "label   value", no marker,
+            // no highlight (label is usually pre-formatted; value optional).
+            QString row = QStringLiteral("  ") + it.label;
+            if (!it.value.isEmpty()) {
+                const int gap = innerW - row.size() - it.value.size();
+                if (gap > 0)
+                    row += QString(gap, QLatin1Char(' '));
+                row += it.value;
+            }
+            put(y++, row, normal, false);
+            continue;
+        }
         const bool selected = (i == s.selected);
         const QString marker = selected ? QStringLiteral("\u25b8 ") : QStringLiteral("  "); // ▸
         // "▸ Label" left, "[value]" right.
@@ -404,8 +418,8 @@ void Screen::renderModal(const ModalPanel &s) const
         put(y++, row, selected ? sel : normal, false);
     }
     put(y++, QString(), normal, false);                   // blank
-    // Help line for the selected item.
-    {
+    // Help line for the selected item (selectable panels only).
+    if (s.selectable) {
         const QString h = (s.selected >= 0 && s.selected < s.items.size())
                                ? s.items[s.selected].help
                                : QString();

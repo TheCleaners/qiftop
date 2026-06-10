@@ -41,6 +41,7 @@ private:
     void  buildModal(Frame &f) const;          // fill f.modal for the open overlay
     void  handleSettingsKey(int key);          // key routing while Settings open
     void  handleFieldsKey(int key);            // key routing while Fields open
+    void  handleInfoKey(int key);              // key routing while Help/About open
     void  applyAggregatorSettings();           // push flags into the aggregator
 
     Screen                           *m_screen   = nullptr;
@@ -58,8 +59,8 @@ private:
     int  m_connScroll   = 0;
 
     // Modal overlays (only one open at a time). Settings = runtime toggles,
-    // Fields = top-style sort-column selector.
-    enum class Overlay { None, Settings, Fields };
+    // Fields = top-style sort-column selector, Help/About = read-only info.
+    enum class Overlay { None, Settings, Fields, Help, About };
     Overlay m_overlay = Overlay::None;
     int  m_settingsSel    = 0;
     int  m_fieldsSel      = 0;
