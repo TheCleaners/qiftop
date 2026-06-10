@@ -71,6 +71,17 @@ readonly IFACE_IFACE="org.qiftop.NetworkAgent1.Interfaces"
 skip() { echo "harness: $1; SKIPPING" >&2; exit 77; }
 die()  { echo "harness: $1" >&2; exit 70; }
 
+# --- env-supplied value guards ---------------------------------------------
+# These values are interpolated into `docker run` argv and an in-container
+# `sh -c` string. Minimal sanity guards: reject an image ref that could be
+# parsed as a CLI option, and reject host/port values containing shell
+# metacharacters.
+[[ "$IMAGE" == -* ]] && die "QIFTOP_PROBE_IMAGE must not start with '-' (got '$IMAGE')"
+[[ "$TARGET_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || die "QIFTOP_PROBE_TARGET_HOST is not a plausible hostname/IP (got '$TARGET_HOST')"
+[[ "$TARGET_PORT" =~ ^[0-9]{1,5}$ ]] \
+    || die "QIFTOP_PROBE_TARGET_PORT must be numeric (got '$TARGET_PORT')"
+
 # --- preconditions --------------------------------------------------------
 command -v systemctl >/dev/null 2>&1 || skip "no systemd (systemctl)"
 command -v busctl    >/dev/null 2>&1 || skip "no busctl"

@@ -64,6 +64,20 @@ RestrictNamespaces=net
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+# Additional hardening (none of these affect netlink, conntrack, /proc
+# reads, or NetnsScanner's setns — see CapabilityBoundingSet rationale
+# above before adding anything stronger):
+#   RestrictSUIDSGID — the agent never creates suid/sgid files.
+#   ProtectClock     — never sets the clock (lacks CAP_SYS_TIME anyway).
+#   ProtectHostname  — never changes the hostname.
+#   PrivateDevices   — the agent talks to the kernel via AF_NETLINK
+#                      sockets and /proc only, never device nodes; a
+#                      private minimal /dev is safe. Validate any doubt
+#                      via the attribution_systemd_dbus Tier-2 runner.
+RestrictSUIDSGID=yes
+ProtectClock=yes
+ProtectHostname=yes
+PrivateDevices=yes
 Restart=on-failure
 RestartSec=2
 

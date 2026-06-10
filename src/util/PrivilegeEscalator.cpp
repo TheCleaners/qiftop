@@ -103,11 +103,6 @@ QProcessEnvironment scrubbedHelperEnv()
     return env;
 }
 
-QString findHelper(const QString &name)
-{
-    return QStandardPaths::findExecutable(name);
-}
-
 // Start a helper as a regular QProcess (NOT detached). The QProcess is
 // parented to QCoreApplication so it outlives the (possibly stack-local)
 // escalator object — that's what keeps pkexec / polkit happy: they verify
@@ -144,6 +139,24 @@ bool launchAttached(const QString &program,
 }
 
 } // namespace
+
+QStringList PrivilegeEscalator::helperSearchPaths()
+{
+    // Must stay in lock-step with the PATH forced into the privileged
+    // child (sessionEnv() / scrubbedHelperEnv() above).
+    return {QStringLiteral("/usr/sbin"), QStringLiteral("/usr/bin"),
+            QStringLiteral("/sbin"), QStringLiteral("/bin")};
+}
+
+QString PrivilegeEscalator::findHelper(const QString &name)
+{
+    // SECURITY: pass an explicit search-path list so the lookup ignores
+    // the user-controlled $PATH. Otherwise a hostile PATH containing a
+    // fake `pkexec` / `sudo` would have qiftop launch the attacker's
+    // binary and present it as the authentication helper (credential
+    // phishing / privesc). See the docstring in PrivilegeEscalator.h.
+    return QStandardPaths::findExecutable(name, helperSearchPaths());
+}
 
 PrivilegeEscalator::PrivilegeEscalator(QObject *parent)
     : QObject(parent)

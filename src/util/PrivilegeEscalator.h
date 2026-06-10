@@ -58,6 +58,23 @@ public:
     // original values. Empty values are skipped.
     [[nodiscard]] static QProcessEnvironment filterEnv(const QProcessEnvironment &in);
 
+    // The fixed list of directories searched when resolving a privilege
+    // helper binary (pkexec, sudo, kdesu, …). Matches the PATH forced into
+    // the privileged child. Exposed for tests / auditing.
+    [[nodiscard]] static QStringList helperSearchPaths();
+
+    // Resolves a helper binary name to an absolute path using ONLY
+    // helperSearchPaths() — never the caller's $PATH.
+    //
+    // SECURITY: helpers must NOT be looked up via the user-controlled
+    // $PATH that qiftop was launched with. A hostile PATH containing a
+    // fake `pkexec` would make qiftop execute the attacker's binary and
+    // prompt the user to authenticate to it (credential phishing /
+    // privilege escalation). The forced safe PATH applies to the lookup
+    // here, exactly as it applies to the child's environment.
+    // Exposed for tests.
+    [[nodiscard]] static QString findHelper(const QString &name);
+
     // Tries each strategy in order until one starts a privileged copy of
     // (program, args). Returns true and writes the chosen strategy id into
     // `usedStrategy` on success.

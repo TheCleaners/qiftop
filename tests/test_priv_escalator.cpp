@@ -16,6 +16,9 @@
 #include <QProcessEnvironment>
 #include <QSet>
 #include <QByteArray>
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
 
 class TestPrivilegeEscalator : public QObject {
     Q_OBJECT
@@ -29,6 +32,8 @@ private slots:
     void filterEnv_preservesValues();
     void filterEnv_dropsPathFromAllowlist();
     void allowlist_excludesQtPluginPath();
+    void helperSearchPaths_isSafeFixedList();
+    void findHelper_ignoresHostilePath();
 };
 
 void TestPrivilegeEscalator::allowlist_includesExpectedKeys()
@@ -192,6 +197,80 @@ void TestPrivilegeEscalator::allowlist_excludesQtPluginPath()
     const auto allow = util::PrivilegeEscalator::envAllowlist();
     QVERIFY(!allow.contains(QByteArray("QT_PLUGIN_PATH")));
     QVERIFY(!allow.contains(QByteArray("QT_QPA_PLATFORM_PLUGIN_PATH")));
+}
+
+void TestPrivilegeEscalator::helperSearchPaths_isSafeFixedList()
+{
+    // The helper-lookup directories must be exactly the safe absolute
+    // dirs forced into the privileged child's PATH (see sessionEnv() /
+    // scrubbedHelperEnv()). Anything user-writable or relative here
+    // reopens the fake-pkexec phishing hole pinned below.
+    const QStringList paths = util::PrivilegeEscalator::helperSearchPaths();
+    QCOMPARE(paths, (QStringList{QStringLiteral("/usr/sbin"),
+                                 QStringLiteral("/usr/bin"),
+                                 QStringLiteral("/sbin"),
+                                 QStringLiteral("/bin")}));
+    for (const QString &p : paths)
+        QVERIFY2(QDir::isAbsolutePath(p),
+                 qPrintable(QStringLiteral("search path %1 must be absolute").arg(p)));
+}
+
+void TestPrivilegeEscalator::findHelper_ignoresHostilePath()
+{
+    // SECURITY (M12): findHelper must resolve helpers ONLY via the fixed
+    // safe directory list, never via the user-controlled $PATH. A hostile
+    // PATH containing a fake `pkexec` would otherwise have qiftop launch
+    // the attacker's binary and prompt the user to authenticate to it.
+    QTemporaryDir dir(QDir::currentPath()
+                      + QStringLiteral("/hostile-path-XXXXXX"));
+    QVERIFY(dir.isValid());
+
+    // A helper name that cannot exist in the safe dirs, planted only in
+    // the hostile directory.
+    const QString fakeName = QStringLiteral("qiftop-test-fake-helper");
+    const QString fakePath = dir.filePath(fakeName);
+    {
+        QFile f(fakePath);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("#!/bin/sh\nexit 0\n");
+    }
+    QVERIFY(QFile::setPermissions(
+        fakePath,
+        QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    // Also plant a fake pkexec to simulate the real attack.
+    const QString fakePkexec = dir.filePath(QStringLiteral("pkexec"));
+    QVERIFY(QFile::copy(fakePath, fakePkexec));
+    QVERIFY(QFile::setPermissions(
+        fakePkexec,
+        QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+
+    const QByteArray oldPath = qgetenv("PATH");
+    qputenv("PATH", QStringLiteral("%1:%2")
+                        .arg(dir.path(), QString::fromLocal8Bit(oldPath))
+                        .toLocal8Bit());
+
+    const QString foundFake   = util::PrivilegeEscalator::findHelper(fakeName);
+    const QString foundPkexec = util::PrivilegeEscalator::findHelper(
+        QStringLiteral("pkexec"));
+
+    qputenv("PATH", oldPath);
+
+    // The unique fake exists ONLY on the hostile PATH: must NOT be found.
+    QVERIFY2(foundFake.isEmpty(),
+             qPrintable(QStringLiteral("hostile-PATH helper was selected: %1")
+                            .arg(foundFake)));
+    // pkexec may or may not be installed in the safe dirs, but the fake
+    // must never win, and any result must live in a safe directory.
+    QVERIFY(foundPkexec != fakePkexec);
+    if (!foundPkexec.isEmpty()) {
+        bool inSafeDir = false;
+        for (const QString &p : util::PrivilegeEscalator::helperSearchPaths())
+            if (foundPkexec.startsWith(p + QLatin1Char('/'))) inSafeDir = true;
+        QVERIFY2(inSafeDir,
+                 qPrintable(QStringLiteral("pkexec resolved outside safe dirs: %1")
+                                .arg(foundPkexec)));
+    }
 }
 
 QTEST_APPLESS_MAIN(TestPrivilegeEscalator)

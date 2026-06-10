@@ -24,6 +24,13 @@ readonly NAME="qiftop-attr-probe-$$"
 readonly LISTEN_PORT=18080
 readonly PROBE_BIN="${QIFTOP_PROBE_BIN:-}"
 
+# Guard: an image ref starting with '-' could be parsed as a docker CLI
+# option instead of an image name.
+if [[ "$IMAGE" == -* ]]; then
+    echo "harness: QIFTOP_PROBE_IMAGE must not start with '-' (got '$IMAGE')" >&2
+    exit 70
+fi
+
 if [[ -z "$PROBE_BIN" || ! -x "$PROBE_BIN" ]]; then
     echo "harness: QIFTOP_PROBE_BIN unset or not executable ('$PROBE_BIN')" >&2
     exit 70
