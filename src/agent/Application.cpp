@@ -57,6 +57,7 @@ bool Application::start()
     m_ifaceSvc = new InterfacesService(m_netMonitor);
     m_ifaceSvc->setProcessResolver(m_resolver.get());
     m_connSvc  = new ConnectionsService(m_connMonitor);
+    m_connSvc->setProcessDetailsPolicy(m_detailsPolicy);
     if (m_resolver) {
         // `container-chain-wire` is gated on the resolver's own
         // `container-chain` capability; mirror that here so we don't

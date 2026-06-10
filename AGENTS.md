@@ -391,7 +391,12 @@ open:
   processes (and the GUI run as that user) sees everything; a netdev user
   probing *another* user's PID gets only pid/uid/comm. This keeps the
   attribution UX intact while not letting netdev membership alone
-  escalate into cross-UID `exe`/`cwd`/`cmdline` disclosure. Distros that
+  escalate into cross-UID `exe`/`cwd`/`cmdline` disclosure. The gate is
+  **configurable** via `[process_details] disclosure` in
+  `/etc/qiftop/agent.conf` (§5): `owner` (default, the behaviour above),
+  `permissive` (any netdev caller — the pre-0.2.1 behaviour), or
+  `restricted` (root/owner plus an `allow_users` / `allow_groups`
+  allowlist, e.g. `wheel`, for cross-UID admin visibility). Distros that
   want an even stricter gate can still narrow `GetProcessDetails` in the
   bus policy file.
 
@@ -451,6 +456,15 @@ to a sensible range and emits a `qWarning()` if the file value is out of
 range (intervals: `[10 ms, 1 h]`; windows/timeouts: `[0, 24 h]`, with `0`
 meaning "disable that step"). Typos in the conffile produce a visible
 warning, not a degenerate cadence.
+
+The `[process_details]` section (loaded by `loadProcessDetailsPolicy`,
+separate from `loadIdleConfig`) controls who may see the privileged
+`exe`/`cwd`/`cmdline` fields from `GetProcessDetails` — see §4. Keys:
+`disclosure` (`owner` default / `permissive` / `restricted`), and the
+`restricted`-mode `allow_users` / `allow_groups` allowlists (comma- or
+whitespace-separated; groups match primary or supplementary membership
+via `qiftop::platform::userInGroup`). An unrecognised `disclosure` value
+warns and falls back to `owner`.
 
 Override path: `qiftop-agent --config <path>`.
 

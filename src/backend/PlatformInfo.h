@@ -52,4 +52,11 @@ namespace qiftop::platform {
 // uid). Cheap + cached internally; safe to call per row render.
 [[nodiscard]] QString userNameForUid(uint uid);
 
+// True if the user identified by `uid` is a member of `groupName` — either
+// as their primary group or a supplementary one. Returns false when the
+// user or group can't be resolved, or on platforms with no group database.
+// Used by the agent to gate cross-UID process-detail disclosure on an
+// admin-configured group allowlist (e.g. "wheel"). Cheap + cached.
+[[nodiscard]] bool userInGroup(uint uid, const QString &groupName);
+
 } // namespace qiftop::platform

@@ -3,6 +3,7 @@
 #include <QDBusContext>
 #include <QElapsedTimer>
 #include <QObject>
+#include "Config.h"
 #include "dbus/Types.h"
 
 class ConnectionMonitor;
@@ -47,6 +48,14 @@ public:
         m_wantContainerChain = wantContainerChain;
     }
 
+    // Install the disclosure policy for GetProcessDetails' privileged fields
+    // (exe/cwd/cmdline). Defaults to Owner (root or the PID owner) when never
+    // set — the safe, documented default.
+    void setProcessDetailsPolicy(const ProcessDetailsPolicy &policy)
+    {
+        m_detailsPolicy = policy;
+    }
+
 public slots:
     dbus::ConnectionDtoList GetConnections();
 
@@ -84,6 +93,7 @@ private:
     IdleManager             *m_idle    = nullptr;
     backend::ProcessResolver*m_resolver= nullptr;
     bool                     m_wantContainerChain = false;
+    ProcessDetailsPolicy     m_detailsPolicy;   // default: Owner
     dbus::ConnectionDtoList  m_last;
     bool                     m_accountingEnabled = true;
     QElapsedTimer            m_clock;       // started in ctor; drives snapshot timestamps

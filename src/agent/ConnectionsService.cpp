@@ -106,6 +106,10 @@ dbus::ProcessDetailsDto ConnectionsService::GetProcessDetails(uint pid)
 
 bool ConnectionsService::callerMaySeeProcessFields(quint32 targetUid) const
 {
+    using Mode = ProcessDetailsPolicy::Mode;
+    // Permissive: any authorised (netdev) caller — restores pre-0.2.1 behaviour.
+    if (m_detailsPolicy.mode == Mode::Permissive)
+        return true;
     // Not a D-Bus call (in-process embedding / unit test): the caller is the
     // agent itself — no privilege boundary to enforce.
     if (!calledFromDBus())
@@ -113,10 +117,24 @@ bool ConnectionsService::callerMaySeeProcessFields(quint32 targetUid) const
     auto *iface = connection().interface();
     if (!iface)
         return false;                       // fail safe: can't verify the caller
-    const QDBusReply<uint> uid = iface->serviceUid(message().service());
-    if (!uid.isValid())
+    const QDBusReply<uint> uidReply = iface->serviceUid(message().service());
+    if (!uidReply.isValid())
         return false;                       // fail safe
-    return uid.value() == 0 || uid.value() == targetUid;
+    const uint caller = uidReply.value();
+    // Root and the process owner always see the privileged fields.
+    if (caller == 0 || caller == targetUid)
+        return true;
+    // Restricted: additionally honour the admin-configured user/group allowlist
+    // (e.g. wheel) for cross-UID disclosure.
+    if (m_detailsPolicy.mode == Mode::Restricted) {
+        const QString name = qiftop::platform::userNameForUid(caller);
+        if (!name.isEmpty() && m_detailsPolicy.allowUsers.contains(name, Qt::CaseInsensitive))
+            return true;
+        for (const QString &g : m_detailsPolicy.allowGroups)
+            if (qiftop::platform::userInGroup(caller, g))
+                return true;
+    }
+    return false;
 }
 
 void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)

@@ -1,6 +1,7 @@
 #include "Config.h"
 
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStringList>
 #include <QtDebug>
@@ -134,6 +135,48 @@ IdleManager::Config loadIdleConfig(const QString &path)
         << cfg.slow1WindowMs/1000  << "s→" << cfg.slow2IntervalMs << "ms,"
         << "idle=" << cfg.idleTimeoutMs/1000 << "s";
     return cfg;
+}
+
+ProcessDetailsPolicy loadProcessDetailsPolicy(const QString &path)
+{
+    ProcessDetailsPolicy pol; // default: Owner
+    if (!QFileInfo::exists(path))
+        return pol;
+    QSettings ini(path, QSettings::IniFormat);
+
+    const QString mode = ini.value(QStringLiteral("process_details/disclosure"),
+                                    QStringLiteral("owner")).toString().trimmed().toLower();
+    if (mode == QLatin1String("owner"))
+        pol.mode = ProcessDetailsPolicy::Mode::Owner;
+    else if (mode == QLatin1String("permissive") || mode == QLatin1String("all"))
+        pol.mode = ProcessDetailsPolicy::Mode::Permissive;
+    else if (mode == QLatin1String("restricted") || mode == QLatin1String("users"))
+        pol.mode = ProcessDetailsPolicy::Mode::Restricted;
+    else {
+        qWarning().noquote()
+            << "agent: config key process_details/disclosure value" << mode
+            << "unrecognised (owner|permissive|restricted) — using owner";
+        pol.mode = ProcessDetailsPolicy::Mode::Owner;
+    }
+
+    const auto splitList = [&](const QString &key) {
+        // Accept comma- or whitespace-separated lists; QSettings turns a
+        // comma-containing INI value into a QStringList already.
+        QStringList out;
+        for (const QString &tok : ini.value(key).toStringList())
+            for (const QString &p : tok.split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                              Qt::SkipEmptyParts))
+                out << p.trimmed();
+        out.removeDuplicates();
+        return out;
+    };
+    pol.allowUsers  = splitList(QStringLiteral("process_details/allow_users"));
+    pol.allowGroups = splitList(QStringLiteral("process_details/allow_groups"));
+
+    qCInfo(lcVerbose).noquote()
+        << "agent: process-details disclosure =" << mode
+        << "users=" << pol.allowUsers << "groups=" << pol.allowGroups;
+    return pol;
 }
 
 } // namespace qiftop::agent

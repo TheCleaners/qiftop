@@ -5,6 +5,7 @@
 
 #include <memory>
 
+#include "Config.h"
 #include "IdleManager.h"
 #include "backend/ProcessResolver.h"
 
@@ -46,6 +47,11 @@ public:
     // registered on the bus.
     [[nodiscard]] bool start();
 
+    // Disclosure policy for GetProcessDetails' privileged fields. Must be set
+    // before start() to take effect; defaults to Owner. Kept as a setter (not
+    // a ctor arg) so existing constructions stay source-compatible.
+    void setProcessDetailsPolicy(const ProcessDetailsPolicy &policy) { m_detailsPolicy = policy; }
+
     [[nodiscard]] QString errorString() const { return m_lastError; }
 
     // Accessors for tests / introspection. Pointers stay valid for the
@@ -60,6 +66,7 @@ private:
     NetworkMonitor      *m_netMonitor  = nullptr;
     ConnectionMonitor   *m_connMonitor = nullptr;
     IdleManager::Config  m_idleCfg;
+    ProcessDetailsPolicy m_detailsPolicy;   // default: Owner
     std::unique_ptr<backend::ProcessResolver> m_resolver;
 
     InterfacesService   *m_ifaceSvc = nullptr;
