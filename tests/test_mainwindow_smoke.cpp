@@ -1045,6 +1045,95 @@ private slots:
         w.setBackendInfo(true, QStringLiteral("0.5"), QStringList{});
         QVERIFY(label->styleSheet().isEmpty());
     }
+
+    // Reproduces the user-reported live-GUI bug: in ByProcess /
+    // ByContainer modes the tree collapsed every few seconds because a
+    // flow's group key changed when attribution resolved it (e.g.
+    // pid 0 → pid 1234), and the old code reset the whole model on any
+    // group-key change. This drives a real MainWindow: expand a group,
+    // then deliver a snapshot where a previously-unattributed flow gains
+    // a pid (new group key). The expanded group must STAY expanded and
+    // the model must not reset.
+    void groupedAttributionFlapKeepsTreeExpanded()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *combo    = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(combo && connView);
+
+        // Two attributed flows (pid 1000 chrome) + one unattributed.
+        auto chromeFlow = [](quint16 lport) {
+            Connection c = mkFlow("eth0", "10.0.0.10", lport, "1.1.1.1", 443,
+                                  L4Proto::Tcp, 1000, 500);
+            c.process.pid  = 1000;
+            c.process.comm = QStringLiteral("chrome");
+            return c;
+        };
+        Connection pending = mkFlow("eth0", "10.0.0.10", 5555, "8.8.8.8", 443,
+                                    L4Proto::Tcp, 100, 50);  // pid 0 → (unattributed)
+
+        connMon.emitSnapshot({chromeFlow(1001), chromeFlow(1002), pending});
+        QTest::qWait(50);
+
+        combo->setCurrentIndex(combo->findData(
+            static_cast<int>(Settings::ConnectionViewMode::ByProcess)));
+        QTest::qWait(50);
+
+        auto *m = connView->model();
+        // chrome group + (unattributed) group.
+        QCOMPARE(m->rowCount(), 2);
+        // Find + expand the chrome group.
+        int chromeRow = -1;
+        for (int r = 0; r < m->rowCount(); ++r) {
+            if (m->index(r, 0).data(Qt::DisplayRole)
+                    .toString().contains(QStringLiteral("chrome"))) {
+                chromeRow = r;
+                break;
+            }
+        }
+        QVERIFY(chromeRow >= 0);
+        connView->expand(m->index(chromeRow, 0));
+        QVERIFY(connView->isExpanded(m->index(chromeRow, 0)));
+
+        QSignalSpy resetSpy(m, &QAbstractItemModel::modelReset);
+
+        // Attribution resolves: the pending flow gains pid 1000 (chrome)
+        // — its group key changes from "(unattributed)" to chrome's.
+        // Simulate several ticks of this kind of flap.
+        for (int tick = 0; tick < 5; ++tick) {
+            Connection resolved = pending;
+            resolved.process.pid  = 1000;
+            resolved.process.comm = QStringLiteral("chrome");
+            connMon.emitSnapshot({chromeFlow(1001), chromeFlow(1002), resolved});
+            QTest::qWait(20);
+            // And flap back to unattributed to stress the move both ways.
+            connMon.emitSnapshot({chromeFlow(1001), chromeFlow(1002), pending});
+            QTest::qWait(20);
+        }
+
+        QCOMPARE(resetSpy.size(), 0);   // NO collapse
+        // The chrome group must still exist AND still be expanded.
+        int chromeRow2 = -1;
+        for (int r = 0; r < m->rowCount(); ++r) {
+            if (m->index(r, 0).data(Qt::DisplayRole)
+                    .toString().contains(QStringLiteral("chrome"))) {
+                chromeRow2 = r;
+                break;
+            }
+        }
+        QVERIFY(chromeRow2 >= 0);
+        QVERIFY2(connView->isExpanded(m->index(chromeRow2, 0)),
+                 "chrome group collapsed across attribution flap");
+    }
 };
 
 // We instantiate widgets, so QApplication is required (not

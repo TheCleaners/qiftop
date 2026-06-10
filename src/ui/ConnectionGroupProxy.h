@@ -105,6 +105,19 @@ private:
     void forwardSourceDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight,
                                   const QVector<int> &roles);
 
+    // Surgically move a single source row to the group its CURRENT
+    // group key maps to, emitting fine-grained begin/endRemoveRows +
+    // begin/endInsertRows (creating / destroying groups as needed)
+    // instead of a wholesale model reset. Used when a flow's group key
+    // changes mid-stream — most often in ByContainer/ByProcess modes
+    // when attribution resolves a flow from "(unattributed)" to a real
+    // pid/container a tick or two after it first appears. A reset here
+    // would collapse every expanded group in the view; the surgical
+    // move preserves expansion + selection. Returns true if a
+    // STRUCTURAL change happened (row moved groups), false if only the
+    // group's display label was refreshed in place.
+    bool regroupSourceRow(int srcRow);
+
     // Re-applies the current m_sortColumn / m_sortOrder to m_groups
     // and each group's srcRows. Cheap; called from rebuild() so that
     // group restructures after dataChanged keep the user's sort order

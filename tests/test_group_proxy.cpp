@@ -228,7 +228,12 @@ private slots:
         QCOMPARE(p.rowCount(), 2);
     }
 
-    void groupedRebuildsOnKeyChange()
+    // A group-key change must NOT reset the model (a reset collapses
+    // every expanded group in the view — user-reported regression in
+    // ByContainer/ByProcess where attribution flap moved flows between
+    // groups every few seconds). The row is moved surgically with
+    // fine-grained insert/remove instead.
+    void groupedKeyChangeMovesRowWithoutReset()
     {
         StubFlows src;
         src.replace({mk("eth0",  "", "", 0, ""),
@@ -236,18 +241,47 @@ private slots:
         ConnectionGroupProxy p;
         p.setSourceModel(&src);
         p.setViewMode(Settings::ConnectionViewMode::ByInterface);
-        QCOMPARE(p.rowCount(), 2);
+        QCOMPARE(p.rowCount(), 2);          // eth0, wlan0
 
         QSignalSpy reset(&p, &QAbstractItemModel::modelReset);
+        QSignalSpy inserted(&p, &QAbstractItemModel::rowsInserted);
+        QSignalSpy removed(&p, &QAbstractItemModel::rowsRemoved);
+
+        // Move row 0 from eth0 → wlan0: eth0 empties and is removed,
+        // wlan0 gains a second child. Net: one group, two children.
         Connection moved = src.rows[0];
         moved.iface = QStringLiteral("wlan0");
         src.setRow(0, moved, {ConnectionModel::ConnectionRole});
 
-        QCOMPARE(reset.size(), 1);
-        QCOMPARE(p.rowCount(), 1);
+        QCOMPARE(reset.size(), 0);          // NO collapse
+        QVERIFY(inserted.size() > 0);
+        QVERIFY(removed.size() > 0);
+        QCOMPARE(p.rowCount(), 1);          // only wlan0 remains
         const QModelIndex group = p.index(0, 0);
         QVERIFY(p.isGroupIndex(group));
-        QCOMPARE(p.rowCount(group), 2);
+        QCOMPARE(p.rowCount(group), 2);     // both flows now under wlan0
+    }
+
+    // A key change that creates a NEW group (no existing target) must
+    // also avoid a reset — the new group is appended via insertRows.
+    void groupedKeyChangeToNewGroupWithoutReset()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "", "", 0, ""),
+                     mk("eth0", "", "", 0, "")});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        QCOMPARE(p.rowCount(), 1);          // single eth0 group, 2 children
+
+        QSignalSpy reset(&p, &QAbstractItemModel::modelReset);
+
+        Connection moved = src.rows[1];
+        moved.iface = QStringLiteral("wlan0");
+        src.setRow(1, moved, {ConnectionModel::ConnectionRole});
+
+        QCOMPARE(reset.size(), 0);
+        QCOMPARE(p.rowCount(), 2);          // eth0 + new wlan0 group
     }
 
     void switchingModesResetsModel()

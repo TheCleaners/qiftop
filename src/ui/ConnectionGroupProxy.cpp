@@ -248,18 +248,79 @@ void ConnectionGroupProxy::onSourceDataChanged(const QModelIndex &topLeft,
     const bool maybeGroupKeyChanged =
         roles.isEmpty() || roles.contains(ConnectionModel::ConnectionRole);
     if (maybeGroupKeyChanged) {
-        for (int row = topLeft.row(); row <= bottomRight.row(); ++row) {
-            const int gi = groupIndexForSourceRow(row);
-            if (gi < 0 || gi >= m_groups.size()
-                || m_groups[gi].key != groupKeyFor(row)
-                || m_groups[gi].label != groupLabelFor(row, m_groups[gi].key)) {
-                onSourceReset();
-                return;
-            }
-        }
+        // A flow's group key can change while it's live — most often
+        // when attribution resolves it from "(unattributed)" to a real
+        // pid/container a tick after it first appeared (ByProcess /
+        // ByContainer). Move just that row to its correct group with
+        // fine-grained insert/remove signals; the previous wholesale
+        // onSourceReset() collapsed every expanded group in the view
+        // every few seconds on a busy host (user-reported regression).
+        for (int row = topLeft.row(); row <= bottomRight.row(); ++row)
+            regroupSourceRow(row);
     }
 
     forwardSourceDataChanged(topLeft, bottomRight, roles);
+}
+
+bool ConnectionGroupProxy::regroupSourceRow(int srcRow)
+{
+    const QString newKey = groupKeyFor(srcRow);
+    const auto it = m_srcIndex.constFind(srcRow);
+    const int curGi = (it != m_srcIndex.constEnd()) ? it->first : -1;
+
+    if (curGi >= 0 && curGi < m_groups.size()
+        && m_groups[curGi].key == newKey) {
+        // Key unchanged — only the display label might have drifted
+        // (e.g. comm resolved after the pid). Update it in place and
+        // repaint the group header row; no structural change.
+        const QString newLabel = groupLabelFor(srcRow, newKey);
+        if (m_groups[curGi].label != newLabel) {
+            m_groups[curGi].label = newLabel;
+            const int lastCol = columnCount() - 1;
+            emit dataChanged(index(curGi, 0), index(curGi, lastCol));
+        }
+        return false;
+    }
+
+    // --- structural move: remove from the current group, insert into
+    //     the target group (creating it if it doesn't exist yet). ---
+    if (curGi >= 0 && curGi < m_groups.size()) {
+        const int childRow = it->second;
+        beginRemoveRows(createIndex(curGi, 0, kTopLevelId), childRow, childRow);
+        m_groups[curGi].srcRows.removeAt(childRow);
+        endRemoveRows();
+        if (m_groups[curGi].srcRows.isEmpty()) {
+            beginRemoveRows({}, curGi, curGi);
+            m_groups.removeAt(curGi);
+            endRemoveRows();
+        }
+    }
+
+    // Find the target group by key (group count is small — an iface /
+    // container / process count, not a flow count).
+    int targetGi = -1;
+    for (int gi = 0; gi < m_groups.size(); ++gi) {
+        if (m_groups[gi].key == newKey) { targetGi = gi; break; }
+    }
+    if (targetGi >= 0) {
+        const int childRow = m_groups[targetGi].srcRows.size();
+        beginInsertRows(createIndex(targetGi, 0, kTopLevelId), childRow, childRow);
+        m_groups[targetGi].srcRows.append(srcRow);
+        endInsertRows();
+    } else {
+        const int groupRow = m_groups.size();
+        beginInsertRows({}, groupRow, groupRow);
+        Group g;
+        g.key   = newKey;
+        g.label = groupLabelFor(srcRow, newKey);
+        g.srcRows.append(srcRow);
+        m_groups.append(std::move(g));
+        endInsertRows();
+    }
+
+    // Child positions + group indices shifted — rebuild the O(1) index.
+    refreshSrcIndex();
+    return true;
 }
 
 void ConnectionGroupProxy::rebuild()
