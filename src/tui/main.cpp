@@ -105,10 +105,15 @@ int main(int argc, char *argv[])
     QCommandLineOption intervalOpt(QStringList{QStringLiteral("i"), QStringLiteral("interval")},
         QStringLiteral("Poll interval in milliseconds (default 1000)."),
         QStringLiteral("ms"), QStringLiteral("1000"));
+    QCommandLineOption themeOpt(QStringLiteral("theme"),
+        QStringLiteral("Colour theme: %1 (default dark; 't' cycles live).")
+            .arg(qiftop::tui::themeNames().join(QStringLiteral(", "))),
+        QStringLiteral("name"), QStringLiteral("dark"));
     parser.addOption(sessionOpt);
     parser.addOption(noAgentOpt);
     parser.addOption(verboseOpt);
     parser.addOption(intervalOpt);
+    parser.addOption(themeOpt);
     parser.process(app);
 
     util::logging::setVerbose(parser.isSet(verboseOpt));
@@ -160,7 +165,8 @@ int main(int argc, char *argv[])
     screen.init();
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [&screen] { screen.shutdown(); });
 
-    qiftop::tui::TuiApp tui(&screen, &ifaceAgg, &connAgg, sourceLabel, pollMs);
+    qiftop::tui::TuiApp tui(&screen, &ifaceAgg, &connAgg, sourceLabel,
+                            parser.value(themeOpt), pollMs);
 
     const auto drainInput = [&screen, &tui] {
         int ch;

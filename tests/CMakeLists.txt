@@ -90,6 +90,7 @@ qiftop_add_test(test_tui_format
     ${CMAKE_SOURCE_DIR}/src/aggregate/ConnectionAggregator.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
     ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp)
+qiftop_add_test(test_tui_theme test_tui_theme.cpp)
 qiftop_add_test(test_settings_migration
     test_settings_migration.cpp
     ${CMAKE_SOURCE_DIR}/src/config/Settings.cpp

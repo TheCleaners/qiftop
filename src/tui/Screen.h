@@ -21,6 +21,7 @@ struct Frame {
     int           sortCol  = 0;
     bool          sortDesc = true;
     QList<QStringList> rows;         // ALL rows (already sorted), each = cells
+    QList<Role>   rowRoles;          // per-row colour role (parallel to rows)
     int           scrollOffset = 0;  // index of the first visible body row
     QString       footer;            // key help line
 };
@@ -34,6 +35,11 @@ public:
     void shutdown();                   // endwin (idempotent, signal-safe)
     [[nodiscard]] bool active() const { return m_active; }
 
+    // Install a theme. May be called before or after init(); colour pairs are
+    // (re)registered if the terminal supports colour.
+    void setTheme(const Theme &theme);
+    [[nodiscard]] const QString &themeName() const { return m_theme.name; }
+
     [[nodiscard]] int  rows() const;   // terminal height
     [[nodiscard]] int  cols() const;   // terminal width
     // Body height available for table rows (total minus chrome: tab line,
@@ -45,7 +51,12 @@ public:
     void render(const Frame &f);
 
 private:
-    bool m_active = false;
+    void applyTheme();                 // (re)register colour pairs
+    long attrFor(Role r) const;        // COLOR_PAIR | A_* for a role
+
+    bool  m_active   = false;
+    bool  m_hasColor = false;
+    Theme m_theme    = builtinThemes().first();
 };
 
 } // namespace qiftop::tui

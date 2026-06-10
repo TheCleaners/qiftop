@@ -25,6 +25,7 @@ public:
            aggregate::InterfaceAggregator  *ifaceAgg,
            aggregate::ConnectionAggregator *connAgg,
            QString sourceLabel,
+           QString themeName,
            int pollMs,
            QObject *parent = nullptr);
 
@@ -42,6 +43,9 @@ private:
     aggregate::InterfaceAggregator   *m_ifaceAgg = nullptr;
     aggregate::ConnectionAggregator  *m_connAgg  = nullptr;
     QString                           m_sourceLabel;
+
+    QList<Theme> m_themes;
+    int          m_themeIdx = 0;
 
     View m_view = View::Connections;
     int  m_ifaceSortCol = 0;  bool m_ifaceSortDesc = false; // name asc

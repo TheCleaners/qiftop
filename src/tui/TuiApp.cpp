@@ -21,6 +21,7 @@ TuiApp::TuiApp(Screen *screen,
                aggregate::InterfaceAggregator  *ifaceAgg,
                aggregate::ConnectionAggregator *connAgg,
                QString sourceLabel,
+               QString themeName,
                int pollMs,
                QObject *parent)
     : QObject(parent)
@@ -29,6 +30,16 @@ TuiApp::TuiApp(Screen *screen,
     , m_connAgg(connAgg)
     , m_sourceLabel(std::move(sourceLabel))
 {
+    m_themes = builtinThemes();
+    for (int i = 0; i < m_themes.size(); ++i) {
+        if (m_themes[i].name.compare(themeName, Qt::CaseInsensitive) == 0) {
+            m_themeIdx = i;
+            break;
+        }
+    }
+    if (m_screen)
+        m_screen->setTheme(m_themes[m_themeIdx]);
+
     m_redrawTimer = new QTimer(this);
     m_redrawTimer->setSingleShot(true);
     connect(m_redrawTimer, &QTimer::timeout, this, &TuiApp::doRedraw);
@@ -104,6 +115,14 @@ void TuiApp::handleKey(int key)
     case 'R':
         sortDesc = !sortDesc;
         break;
+    case 't':
+    case 'T':
+        if (!m_themes.isEmpty()) {
+            m_themeIdx = (m_themeIdx + 1) % m_themes.size();
+            if (m_screen)
+                m_screen->setTheme(m_themes[m_themeIdx]);
+        }
+        break;
     case KEY_UP:
         if (scroll > 0) --scroll;
         break;
@@ -141,16 +160,20 @@ Frame TuiApp::buildFrame()
         const auto &rows = m_ifaceAgg->rows();
         const QList<int> order =
             sortedInterfaceIndices(rows, m_ifaceSortCol, m_ifaceSortDesc);
-        for (int i : order)
-            f.rows << cellsForInterface(rows[i]);
+        for (int i : order) {
+            f.rows     << cellsForInterface(rows[i]);
+            f.rowRoles << rowRoleForInterface(rows[i]);
+        }
     } else {
         f.sortCol  = m_connSortCol;
         f.sortDesc = m_connSortDesc;
         const auto &rows = m_connAgg->rows();
         const QList<int> order =
             sortedConnectionIndices(rows, m_connSortCol, m_connSortDesc);
-        for (int i : order)
-            f.rows << cellsForConnection(*m_connAgg, rows[i]);
+        for (int i : order) {
+            f.rows     << cellsForConnection(*m_connAgg, rows[i]);
+            f.rowRoles << rowRoleForConnection(*m_connAgg, rows[i]);
+        }
     }
 
     // Clamp scroll to the valid range for the current body height.
@@ -162,7 +185,7 @@ Frame TuiApp::buildFrame()
     f.scrollOffset = scroll;
 
     f.footer = QStringLiteral(
-        " q quit · Tab/1/2 view · s sort · r reverse · ↑↓/PgUp/PgDn scroll ");
+        " q quit · Tab/1/2 view · s sort · r reverse · t theme · ↑↓/PgUp/PgDn scroll ");
     return f;
 }
 

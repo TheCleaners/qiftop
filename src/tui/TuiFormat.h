@@ -14,6 +14,7 @@
 #include "aggregate/ConnectionAggregator.h"
 #include "aggregate/InterfaceAggregator.h"
 #include "backend/Connection.h"
+#include "tui/TuiTheme.h"
 #include "util/Units.h"
 
 namespace qiftop::tui {
@@ -71,6 +72,31 @@ inline QStringList cellsForConnection(const aggregate::ConnectionAggregator &agg
             util::formatByteRate(r.txRate),
             util::formatBytes(c.rxBytes),
             util::formatBytes(c.txBytes)};
+}
+
+// --- per-row colour role (the qiftop direction colour-coding semantics) -----
+
+inline Role rowRoleForInterface(const aggregate::InterfaceAggregator::Row &r)
+{
+    // A down (non-loopback) interface reads as inactive.
+    if (!r.current.isUp && !r.current.isLoopback)
+        return Role::Stale;
+    return Role::Normal;
+}
+
+inline Role rowRoleForConnection(const aggregate::ConnectionAggregator &agg,
+                                 const aggregate::ConnectionAggregator::Row &r)
+{
+    if (r.stale)
+        return Role::Stale;
+    const Connection &c = r.current;
+    if (agg.isForwardedFlow(c))
+        return Role::Forwarded;
+    if (c.direction == Direction::Outbound)
+        return Role::Outbound;
+    if (c.direction == Direction::Inbound)
+        return Role::Inbound;
+    return Role::Normal;
 }
 
 // --- sorting (returns a view-index vector; the aggregator rows are untouched) ---

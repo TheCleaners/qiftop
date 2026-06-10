@@ -33,6 +33,17 @@ QString fitCell(const QString &text, int width, bool rightAlign)
     return rightAlign ? spaces + t : t + spaces;
 }
 
+// Map the backend-agnostic attr bits to ncurses A_* attributes.
+long ncursesAttr(int bits)
+{
+    long a = A_NORMAL;
+    if (bits & attr::Bold)      a |= A_BOLD;
+    if (bits & attr::Dim)       a |= A_DIM;
+    if (bits & attr::Reverse)   a |= A_REVERSE;
+    if (bits & attr::Underline) a |= A_UNDERLINE;
+    return a;
+}
+
 void putLine(int y, const QString &s)
 {
     const QByteArray utf8 = s.toUtf8();
@@ -54,7 +65,13 @@ void Screen::init()
     nodelay(stdscr, TRUE);
     keypad(stdscr, TRUE);
     curs_set(0);
+    if (has_colors()) {
+        start_color();
+        use_default_colors();
+        m_hasColor = true;
+    }
     m_active = true;
+    applyTheme();
 }
 
 void Screen::shutdown()
@@ -65,20 +82,40 @@ void Screen::shutdown()
     m_active = false;
 }
 
-int Screen::rows() const
+void Screen::setTheme(const Theme &theme)
 {
-    return m_active ? getmaxy(stdscr) : 0;
+    m_theme = theme;
+    if (m_active)
+        applyTheme();
 }
 
-int Screen::cols() const
+void Screen::applyTheme()
 {
-    return m_active ? getmaxx(stdscr) : 0;
+    if (!m_active || !m_hasColor)
+        return;
+    for (int i = 0; i < static_cast<int>(Role::Count); ++i) {
+        const ThemeColor &c = m_theme.roles[i];
+        init_pair(static_cast<short>(i + 1),
+                  static_cast<short>(c.fg),
+                  static_cast<short>(c.bg));
+    }
 }
+
+long Screen::attrFor(Role r) const
+{
+    const ThemeColor &c = m_theme[r];
+    long a = ncursesAttr(c.attr);
+    if (m_hasColor)
+        a |= COLOR_PAIR(static_cast<int>(r) + 1);
+    return a;
+}
+
+int Screen::rows() const { return m_active ? getmaxy(stdscr) : 0; }
+int Screen::cols() const { return m_active ? getmaxx(stdscr) : 0; }
 
 int Screen::bodyHeight() const
 {
-    // chrome: tab line (0), column header (1), footer (last) => 3 lines.
-    const int h = rows() - 3;
+    const int h = rows() - 3; // tab line + header + footer
     return h > 0 ? h : 0;
 }
 
@@ -105,17 +142,19 @@ void Screen::render(const Frame &f)
         int x = 0;
         for (int i = 0; i < f.tabs.size(); ++i) {
             const QString label = QStringLiteral(" %1 ").arg(f.tabs[i]);
-            const QByteArray u = label.toUtf8();
-            if (i == f.activeTab) attron(A_REVERSE);
-            mvaddstr(0, x, u.constData());
-            if (i == f.activeTab) attroff(A_REVERSE);
+            const long a = attrFor(i == f.activeTab ? Role::TabActive : Role::TabInactive);
+            attrset(a);
+            mvaddstr(0, x, label.toUtf8().constData());
             x += label.size() + 1;
         }
-        // source label, right-aligned
+        attrset(A_NORMAL);
         const QString src = f.sourceLabel;
         const int sx = width - src.size() - 1;
-        if (sx > x)
+        if (sx > x) {
+            attrset(attrFor(Role::Accent));
             mvaddstr(0, sx, src.toUtf8().constData());
+            attrset(A_NORMAL);
+        }
     }
 
     // --- column widths ---
@@ -155,9 +194,9 @@ void Screen::render(const Frame &f)
                 h += f.sortDesc ? QStringLiteral(" v") : QStringLiteral(" ^");
             headers << h;
         }
-        attron(A_BOLD | A_UNDERLINE);
+        attrset(attrFor(Role::Header));
         putLine(1, rowText(headers));
-        attroff(A_BOLD | A_UNDERLINE);
+        attrset(A_NORMAL);
     }
 
     // --- body ---
@@ -165,24 +204,26 @@ void Screen::render(const Frame &f)
     const int total = static_cast<int>(f.rows.size());
     int shown = 0;
     for (int i = 0; i < body && (f.scrollOffset + i) < total; ++i) {
-        putLine(2 + i, rowText(f.rows[f.scrollOffset + i]));
+        const int idx = f.scrollOffset + i;
+        const Role role = idx < f.rowRoles.size() ? f.rowRoles[idx] : Role::Normal;
+        attrset(attrFor(role));
+        putLine(2 + i, rowText(f.rows[idx]));
+        attrset(A_NORMAL);
         ++shown;
     }
-    // "+N more" hint when the list overflows below the fold.
     const int below = total - (f.scrollOffset + shown);
     if (below > 0 && body > 0) {
-        attron(A_DIM);
+        attrset(attrFor(Role::Stale));
         putLine(2 + body - 1,
                 QStringLiteral("  … +%1 more (↓ to scroll)").arg(below));
-        attroff(A_DIM);
+        attrset(A_NORMAL);
     }
 
     // --- footer ---
     {
-        attron(A_REVERSE);
-        const QString f2 = fitCell(f.footer, width, false);
-        putLine(height - 1, f2);
-        attroff(A_REVERSE);
+        attrset(attrFor(Role::Footer));
+        putLine(height - 1, fitCell(f.footer, width, false));
+        attrset(A_NORMAL);
     }
 
     refresh();
