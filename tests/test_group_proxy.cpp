@@ -348,6 +348,41 @@ private slots:
         QVERIFY(tip.contains(QStringLiteral("uid 0")));
     }
 
+    // GroupChipsRole drives the colour-coded delegate rendering of the
+    // group header under the Flow column. Pin the chip kinds + texts so
+    // the delegate's colour mapping has a stable contract.
+    void groupChipsRoleStructure()
+    {
+        StubFlows src;
+        Connection a = mk("eth0", "", "", 4242, "chrome");
+        a.process.uid = 0;
+        src.replace({a, a});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByProcess);
+
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+        const QVariantList chips =
+            p.index(0, flowCol).data(ConnectionModel::GroupChipsRole).toList();
+        QVERIFY(!chips.isEmpty());
+
+        QHash<QString, QString> byKind;
+        for (const QVariant &v : chips) {
+            const auto m = v.toMap();
+            byKind.insert(m.value(QStringLiteral("kind")).toString(),
+                          m.value(QStringLiteral("text")).toString());
+        }
+        QCOMPARE(byKind.value(QStringLiteral("process")), QStringLiteral("chrome"));
+        QCOMPARE(byKind.value(QStringLiteral("pid")),     QStringLiteral("pid 4242"));
+        QVERIFY(byKind.value(QStringLiteral("user")).contains(QStringLiteral("uid 0")));
+        QVERIFY(byKind.value(QStringLiteral("count")).contains(QStringLiteral("2 flows")));
+
+        // Flow rows (children) must NOT carry chips — only group headers.
+        const QModelIndex grp = p.index(0, 0);
+        const QModelIndex child = p.index(0, flowCol, grp);
+        QVERIFY(child.data(ConnectionModel::GroupChipsRole).toList().isEmpty());
+    }
+
     void switchingModesResetsModel()
     {
         StubFlows src;

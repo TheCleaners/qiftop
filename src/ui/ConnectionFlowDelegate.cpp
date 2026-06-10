@@ -41,6 +41,58 @@ FlowColors pickFlowColors(const QStyleOptionViewItem &option, bool selected)
              dst  .name(QColor::HexArgb) };
 }
 
+// Theme-aware accent for a group-header chip "kind". Mirrors the
+// flow-row palette philosophy (cool/warm hand-picked accents that read
+// on light and dark) so the grouped view keeps the same colour-coded
+// info density as the flat view.
+QString chipColor(const QStyleOptionViewItem &option, bool selected,
+                  const QString &kind)
+{
+    if (selected)
+        return option.palette.color(QPalette::HighlightedText).name(QColor::HexArgb);
+    const QColor base = option.palette.color(QPalette::Base);
+    const bool   dark = base.lightness() < 128;
+    const QColor muted = option.palette.color(QPalette::PlaceholderText);
+    if (kind == QLatin1String("process") || kind == QLatin1String("container")
+        || kind == QLatin1String("iface"))
+        return (dark ? QColor(0x6CB6FF) : QColor(0x0B5FA5)).name(QColor::HexArgb); // primary, blue
+    if (kind == QLatin1String("user"))
+        return (dark ? QColor(0x8DDB8D) : QColor(0x2E7D32)).name(QColor::HexArgb); // green
+    if (kind == QLatin1String("id"))
+        return (dark ? QColor(0xF0B86E) : QColor(0xA0521B)).name(QColor::HexArgb); // amber
+    // pid / cmdline / count → muted.
+    return muted.name(QColor::HexArgb);
+}
+
+QTextDocument *buildGroupDoc(const QStyleOptionViewItem &option,
+                             const QVariantList &chips)
+{
+    const bool selected = option.state & QStyle::State_Selected;
+    QStringList spans;
+    for (const QVariant &v : chips) {
+        const QVariantMap m = v.toMap();
+        const QString text = m.value(QStringLiteral("text")).toString().toHtmlEscaped();
+        const QString kind = m.value(QStringLiteral("kind")).toString();
+        const QString color = chipColor(option, selected, kind);
+        const bool bold = (kind == QLatin1String("process")
+                           || kind == QLatin1String("container")
+                           || kind == QLatin1String("iface"));
+        spans << QStringLiteral("<span style=\"color:%1;%2\">%3</span>")
+                     .arg(color,
+                          bold ? QStringLiteral("font-weight:bold;") : QString(),
+                          text);
+    }
+    const QString sep = QStringLiteral(
+        " <span style=\"color:%1;\">·</span> ")
+        .arg(option.palette.color(QPalette::PlaceholderText).name(QColor::HexArgb));
+
+    auto *doc = new QTextDocument;
+    doc->setDocumentMargin(0);
+    doc->setDefaultFont(option.font);
+    doc->setHtml(spans.join(sep));
+    return doc;
+}
+
 QTextDocument *buildDoc(const QStyleOptionViewItem &option,
                         const QModelIndex &index,
                         bool colorCode)
@@ -94,6 +146,19 @@ QTextDocument *buildDoc(const QStyleOptionViewItem &option,
 
 } // namespace
 
+// Returns the group-header chip document when `index` is a group row
+// (GroupChipsRole non-empty), else the normal flow-endpoint document.
+static QTextDocument *chooseDoc(const QStyleOptionViewItem &option,
+                                const QModelIndex &index,
+                                bool colorCode)
+{
+    const QVariantList chips =
+        index.data(ConnectionModel::GroupChipsRole).toList();
+    if (!chips.isEmpty())
+        return buildGroupDoc(option, chips);
+    return buildDoc(option, index, colorCode);
+}
+
 void ConnectionFlowDelegate::paint(QPainter *painter,
                                    const QStyleOptionViewItem &option,
                                    const QModelIndex &index) const
@@ -114,7 +179,7 @@ void ConnectionFlowDelegate::paint(QPainter *painter,
 
     const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
 
-    QTextDocument *doc = buildDoc(opt, index, m_colorCode);
+    QTextDocument *doc = chooseDoc(opt, index, m_colorCode);
     doc->setTextWidth(textRect.width());
 
     painter->save();
@@ -137,7 +202,7 @@ QSize ConnectionFlowDelegate::sizeHint(const QStyleOptionViewItem &option,
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
 
-    QTextDocument *doc = buildDoc(opt, index, m_colorCode);
+    QTextDocument *doc = chooseDoc(opt, index, m_colorCode);
     doc->setTextWidth(-1);
     const QSize hint = doc->size().toSize();
     delete doc;

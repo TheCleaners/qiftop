@@ -680,30 +680,78 @@ void ConnectionGroupProxy::refreshGroupTooltips()
                      {Qt::ToolTipRole});
 }
 
-QString ConnectionGroupProxy::groupDetailInline(const Group &g) const
+QVariantList ConnectionGroupProxy::groupChips(const Group &g) const
 {
-    if (!m_showGroupDetails || g.srcRows.isEmpty() || !m_src)
-        return {};
+    QVariantList chips;
+    if (g.srcRows.isEmpty() || !m_src) return chips;
+
+    const auto chip = [](const QString &text, const char *kind) {
+        QVariantMap m;
+        m.insert(QStringLiteral("text"), text);
+        m.insert(QStringLiteral("kind"), QString::fromLatin1(kind));
+        return QVariant(m);
+    };
+
     const Connection c = m_src->index(g.srcRows.first(), 0)
                              .data(ConnectionModel::ConnectionRole)
                              .value<Connection>();
+
     switch (m_mode) {
-    case ViewMode::ByProcess: {
-        if (c.process.pid <= 0) return {};
-        const QString user = qiftop::platform::userNameForUid(c.process.uid);
-        return user.isEmpty()
-            ? QStringLiteral("uid %1").arg(c.process.uid)
-            : QStringLiteral("%1 (uid %2)").arg(user).arg(c.process.uid);
-    }
+    case ViewMode::ByProcess:
+        if (!c.process.comm.isEmpty())
+            chips << chip(c.process.comm, "process");
+        if (c.process.pid > 0 && m_showGroupDetails) {
+            chips << chip(QStringLiteral("pid %1").arg(c.process.pid), "pid");
+            const QString user = qiftop::platform::userNameForUid(c.process.uid);
+            chips << chip(user.isEmpty()
+                              ? QStringLiteral("uid %1").arg(c.process.uid)
+                              : QStringLiteral("%1 (uid %2)").arg(user).arg(c.process.uid),
+                          "user");
+            // On-demand cmdline (elided) once the RPC has answered.
+            if (m_details) {
+                if (const auto it = m_details->constFind(c.process.pid);
+                    it != m_details->constEnd() && it->valid()
+                    && !it->cmdline.isEmpty()) {
+                    QString cmd = it->cmdline;
+                    if (cmd.size() > 60) cmd = cmd.left(57) + QStringLiteral("…");
+                    chips << chip(cmd, "cmdline");
+                }
+            }
+        }
+        break;
     case ViewMode::ByContainer: {
-        if (c.container.id.isEmpty()) return {};
-        // Label already shows runtime + name; the inline detail adds the
-        // short container id sysadmins paste into `docker inspect` etc.
-        return QStringLiteral("id %1").arg(c.container.id.left(12));
+        const QString primary = !c.container.name.isEmpty()
+            ? (c.container.runtime.isEmpty()
+                   ? c.container.name
+                   : QStringLiteral("%1: %2").arg(c.container.runtime, c.container.name))
+            : g.label;
+        chips << chip(primary, "container");
+        if (m_showGroupDetails && !c.container.id.isEmpty())
+            chips << chip(QStringLiteral("id %1").arg(c.container.id.left(12)), "id");
+        break;
     }
+    case ViewMode::ByInterface:
+        chips << chip(g.label, "iface");
+        break;
     default:
-        return {};
+        break;
     }
+
+    chips << chip(QStringLiteral("%1 flow%2").arg(g.srcRows.size())
+                      .arg(g.srcRows.size() == 1 ? QString() : QStringLiteral("s")),
+                  "count");
+    return chips;
+}
+
+QString ConnectionGroupProxy::groupDetailInline(const Group &g) const
+{
+    // Plain-text fallback (copy / export / accessibility): the chip
+    // texts joined. The delegate renders the colour-coded version from
+    // GroupChipsRole.
+    QStringList parts;
+    for (const QVariant &v : groupChips(g))
+        parts << v.toMap().value(QStringLiteral("text")).toString();
+    return parts.join(QStringLiteral("  ·  "));
 }
 
 QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
@@ -784,15 +832,10 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
             return QStringLiteral("%1  [%2]")
                 .arg(g.label).arg(g.srcRows.size());
         case Col::Flow:
-            return groupDetailInline(g).isEmpty()
-                ? QStringLiteral("%1 flow%2 in “%3”")
-                      .arg(g.srcRows.size())
-                      .arg(g.srcRows.size() == 1 ? QStringLiteral("") : QStringLiteral("s"),
-                           g.label)
-                : QStringLiteral("%1 flow%2 in “%3”  ·  %4")
-                      .arg(g.srcRows.size())
-                      .arg(g.srcRows.size() == 1 ? QStringLiteral("") : QStringLiteral("s"),
-                           g.label, groupDetailInline(g));
+            // Plain-text fallback (copy/export/accessibility). The
+            // delegate paints the colour-coded chip version from
+            // GroupChipsRole.
+            return groupDetailInline(g);
         case Col::RxRate:  return util::formatByteRate(rxSum);
         case Col::TxRate:  return util::formatByteRate(txSum);
         case Col::RxTotal: return util::formatBytes(rxBytes);
@@ -822,6 +865,9 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
     }
     if (role == Qt::ToolTipRole) {
         return groupDetailTooltip(g);
+    }
+    if (role == ConnectionModel::GroupChipsRole) {
+        return groupChips(g);
     }
     if (role == ConnectionModel::RxRateRole) return rxSum;
     if (role == ConnectionModel::TxRateRole) return txSum;

@@ -8,6 +8,7 @@
 #include <QPersistentModelIndex>
 #include <QString>
 #include <QVariant>
+#include <QVariantList>
 
 #include "config/Settings.h"
 #include "backend/ProcessDetails.h"
@@ -135,6 +136,11 @@ private:
     // the group has no attribution.
     [[nodiscard]] QString groupDetailInline(const Group &g) const;
     [[nodiscard]] QString groupDetailTooltip(const Group &g) const;
+    // Colour-codable group-header segments (GroupChipsRole): a list of
+    // {"text", "kind"} maps the ConnectionFlowDelegate paints with
+    // theme-aware accents. kind ∈ {process, pid, user, cmdline,
+    // container, id, iface, count}.
+    [[nodiscard]] QVariantList groupChips(const Group &g) const;
     [[nodiscard]] int groupIndexForSourceRow(int srcRow) const;
     void forwardSourceDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight,
                                   const QVector<int> &roles);

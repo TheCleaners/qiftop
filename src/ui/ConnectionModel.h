@@ -54,6 +54,10 @@ public:
         ContainerIdRole,      // QString: container.id (12-char shortform safe)
         ContainerNameRole,    // QString: container.name (display name)
         ContainerChainRole,   // QStringList: "runtime:name" per ancestry layer
+        GroupChipsRole,       // QVariantList of {"text":QString,"kind":QString}
+                              // — colour-codable group-header segments
+                              // (ConnectionGroupProxy group rows only;
+                              // empty for flow rows).
     };
 
     // Adaptive throughput tracking modes (mirror Settings::ThroughputMaxMode).
