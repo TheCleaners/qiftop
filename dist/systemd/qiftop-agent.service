@@ -52,7 +52,15 @@ ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
-RestrictNamespaces=yes
+# Allow ONLY network-namespace switching (deny user/mnt/pid/ipc/uts/cgroup).
+# NetnsScanner setns(CLONE_NEWNET)s into each container's network namespace
+# to dump its sockets and attribute container-side flows. RestrictNamespaces=yes
+# (deny ALL namespace ops) silently blocked that setns — the scanner would
+# enter the netns loop, fail setns with EPERM, and attribute every container
+# flow as host. `=net` is the minimum that re-enables container attribution
+# while still denying every other namespace type. (Also requires
+# CAP_SYS_ADMIN, already granted above.)
+RestrictNamespaces=net
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native

@@ -790,6 +790,17 @@ Concrete rules every resolver must follow:
        ENETUNREACH or empty results; treat as "no flows", not an error.
      - All of this happens on the agent's worker thread so the main
        thread is never affected.
+     - **systemd sandbox gotcha:** `setns(CLONE_NEWNET)` is silently
+       blocked by `RestrictNamespaces=yes` (it seccomp-denies *all*
+       namespace ops). The unit MUST use `RestrictNamespaces=net`
+       (allow only the net type) or every container-side flow
+       attributes as host with no error in the log — the scanner
+       enters the netns loop, `setns()` returns EPERM, the per-netns
+       socket dump is skipped, and the merged map stays empty. This
+       bit us live (a `dockurr/tor` container showed no grouping);
+       the symptom is `netns-scan` advertised + "refreshed across N
+       netns" logged, yet zero container attribution. It also needs
+       `CAP_SYS_ADMIN` (granted) — both are required.
 
 6. **No `int`-returning syscalls without checking errno.** Anything
    that can fail (socket, bind, sendto, recv, opendir, setns,
