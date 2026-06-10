@@ -190,12 +190,16 @@ jobs:
           echo "rpm_version=${rpm_version}" >> "$GITHUB_OUTPUT"
           if [[ "${tag}" == *-* ]]; then
             build_type="RelWithDebInfo"
+            strip_files="OFF"
           else
             build_type="Release"
+            strip_files="ON"
           fi
           echo "build_type=${build_type}" >> "$GITHUB_OUTPUT"
+          echo "strip_files=${strip_files}" >> "$GITHUB_OUTPUT"
           echo "RPM version:  ${rpm_version}"
           echo "Build type:   ${build_type}"
+          echo "Strip files:  ${strip_files}"
 
       - name: Verify project version matches tag
         run: |
@@ -224,6 +228,7 @@ jobs:
               dbus-daemon systemd shadow-utils
             cmake -S . -B build-rpm -G Ninja \
               -DCMAKE_BUILD_TYPE=${{ steps.ver.outputs.build_type }} \
+              -DCPACK_STRIP_FILES=${{ steps.ver.outputs.strip_files }} \
               -DCPACK_PACKAGE_VERSION=${{ steps.ver.outputs.rpm_version }} \
               -DQIFTOP_BUILD_TESTS=OFF \
               -DQIFTOP_AUTO_PACKAGE=OFF

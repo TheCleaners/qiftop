@@ -903,6 +903,22 @@ can be dropped with `vagrant destroy default`.
 * User-facing config (`/etc/qiftop/agent.conf`) is a conffile — additions
   are fine, removals/renames are not. Always keep loader code tolerant
   of unknown keys.
+* **Debug symbols: pre-release vs final.** The release workflow keys off
+  the tag shape (a `-` suffix like `v0.2-rc1` ⇒ pre-release). Pre-release
+  builds are `RelWithDebInfo` + `CPACK_STRIP_FILES=OFF` so user crash
+  backtraces are debuggable; final builds are `Release` + stripped.
+  Symbols are kept **inline** in the main package (no separate
+  `-dbgsym`/`-debuginfo` packages) for BOTH formats: the `.deb` is simply
+  left unstripped, and the `.rpm` matches via a `CPACK_STRIP_FILES`-gated
+  block in `CMakeLists.txt` that sets `debug_package %{nil}` +
+  `__strip /bin/true` to neutralise rpmbuild's brp-strip / debuginfo
+  split. Both jobs must pass `-DCPACK_STRIP_FILES=${strip_files}`.
+* **No source packages.** CPack emits binary `.deb`/`.rpm` only — there
+  is no Debian source package (`.dsc`/`Sources` index) or SRPM, so
+  `apt source qiftop` / `dnf download --source qiftop` do not work. The
+  source is the git repo (clean `cmake` build). Adding `deb-src`/SRPM
+  would need real Debian packaging (`debian/`) or an SRPM repo and is
+  low-ROI for a from-source-buildable project.
 
 ### Package distribution (apt / dnf repos)
 

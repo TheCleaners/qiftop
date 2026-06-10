@@ -323,6 +323,24 @@ set(CPACK_RPM_QIFTOP-AGENT_POST_UNINSTALL_SCRIPT_FILE
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
     "/lib;/lib/systemd;/lib/systemd/system;/usr/share/dbus-1;/usr/share/dbus-1/system.d;/usr/share/dbus-1/system-services;/usr/share/applications;/usr/share/icons;/usr/share/icons/hicolor;/usr/share/icons/hicolor/scalable;/usr/share/icons/hicolor/scalable/apps")
 
+# Pre-release RPMs keep inline debug info (unstripped), mirroring the
+# unstripped pre-release .deb so user-reported crash backtraces are
+# debuggable. CPACK_STRIP_FILES=OFF is the release workflow's signal for a
+# "debuggable build" (set for pre-release tags); for it we neutralise BOTH
+# of rpmbuild's symbol-shedding passes that would otherwise discard the
+# DWARF that CPACK_STRIP_FILES=OFF preserved at install time:
+#   * `debug_package %{nil}`  — don't split symbols into a -debuginfo
+#     subpackage (the .deb keeps them inline, so the .rpm does too).
+#   * `__strip /bin/true`     — neutralise brp-strip so the binaries in the
+#     payload stay unstripped with their .debug_* sections intact.
+# Final tags strip normally (CPACK_STRIP_FILES defaults TRUE above).
+if(NOT CPACK_STRIP_FILES)
+    set(CPACK_RPM_DEBUGINFO_PACKAGE OFF)
+    set(CPACK_RPM_SPEC_MORE_DEFINE
+"%global debug_package %{nil}
+%global __strip /bin/true")
+endif()
+
 include(CPack)
 cpack_add_component(qiftop
     DISPLAY_NAME "qiftop GUI"
