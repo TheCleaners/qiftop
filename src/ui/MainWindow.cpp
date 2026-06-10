@@ -786,25 +786,9 @@ void MainWindow::applySettingsToUi()
     applyConnIfaceFilterToProxy();
     updateWindowTitle();
 
-    // Push our desired cadence to the (possibly remote) backends. For local
-    // backends this is a no-op; for the DBus proxies it sends a hint AND
-    // doubles as a liveness signal that resets the agent's idle timer.
-    const int desired = m_settings->pollIntervalMs();
-    if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(desired);
-    if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(desired);
-    // (Re)arm the heartbeat at half the agent's hint TTL (10s) so the hint
-    // never lapses between assertions. We use 4s to stay comfortably under
-    // both the TTL and the agent's slow1 threshold (30s).
-    if (!m_agentHeartbeat) {
-        m_agentHeartbeat = new QTimer(this);
-        m_agentHeartbeat->setTimerType(Qt::CoarseTimer);
-        connect(m_agentHeartbeat, &QTimer::timeout, this, [this] {
-            const int d = m_settings->pollIntervalMs();
-            if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(d);
-            if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(d);
-        });
-    }
-    m_agentHeartbeat->start(4000);
+    // (Re)assert our desired cadence to the backends, unless the window is
+    // hidden to tray — see refreshAgentHeartbeat() for the rationale.
+    refreshAgentHeartbeat();
 
     // Sub-poll display animation: when smoothing is on, repaint at a
     // tighter cadence than the data poll so smoothed rate changes ease
@@ -818,7 +802,7 @@ void MainWindow::applySettingsToUi()
         });
     }
     if (m_settings->rateSmoothingMs() > 0) {
-        const int sub = std::max(100, desired / 4);
+        const int sub = std::max(100, m_settings->pollIntervalMs() / 4);
         if (!m_smoothingTick->isActive() || m_smoothingTick->interval() != sub)
             m_smoothingTick->start(sub);
     } else {
@@ -1278,6 +1262,72 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
     writeUiState();
     QMainWindow::closeEvent(event);
+}
+
+// PERF-L2: the agent heartbeat (SetDesiredIntervalMs every 4s) doubles as the
+// liveness signal that resets the agent's idle-wind-down timer. While the
+// window is hidden to tray there is no tree to refresh, so pinning the agent
+// at full 1 Hz — which also re-runs the expensive conntrack dump + per-flow
+// attribution + netns scans every second — is pure waste.
+//
+// The agent has a SINGLE shared IdleManager driving BOTH the Interfaces and
+// Connections services at one cadence (any method call resets the global
+// activity timer), so we cannot keep interface stats fast while letting
+// connection polling idle. The clean win is therefore to STOP heartbeating
+// while the window is not visible and let the agent wind itself down per its
+// schedule (30 s → 2 s, 45 s → 5 s, 60 s → paused). The tray sparkline
+// degrades to that cadence and then freezes — acceptable for a
+// minimized-to-tray app, and showEvent() re-asserts immediately so it wakes
+// the instant the user restores the window. This also makes `--tray` startup
+// (window never shown) leave the agent idle until the user summons the
+// window. For the in-process backend setDesiredIntervalMs is a no-op and the
+// local monitors keep their own timers, so the tray stays live there
+// regardless; this only changes behaviour against the DBus agent.
+//
+// Gated on isVisible() (not a manual flag) so Qt's own visibility tracking
+// drives it: minimized windows stay "visible" and keep the heartbeat, only a
+// genuine hide()-to-tray suspends it.
+void MainWindow::refreshAgentHeartbeat()
+{
+    if (!isVisible()) {
+        if (m_agentHeartbeat) m_agentHeartbeat->stop();
+        return;
+    }
+
+    // Visible: assert desired cadence now, then (re)arm the heartbeat at well
+    // under the agent's hint TTL (10 s) so the hint never lapses between
+    // assertions.
+    const int desired = m_settings->pollIntervalMs();
+    if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(desired);
+    if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(desired);
+    if (!m_agentHeartbeat) {
+        m_agentHeartbeat = new QTimer(this);
+        m_agentHeartbeat->setTimerType(Qt::CoarseTimer);
+        connect(m_agentHeartbeat, &QTimer::timeout, this, [this] {
+            const int d = m_settings->pollIntervalMs();
+            if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(d);
+            if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(d);
+        });
+    }
+    m_agentHeartbeat->start(4000);
+}
+
+void MainWindow::hideEvent(QHideEvent *event)
+{
+    // Fires when the window is hidden to tray (hide()) — not on plain
+    // minimize, which keeps the window "visible" in Qt's sense. isVisible()
+    // is already false here, so refreshAgentHeartbeat() stops the heartbeat
+    // and the agent winds down.
+    QMainWindow::hideEvent(event);
+    refreshAgentHeartbeat();
+}
+
+void MainWindow::showEvent(QShowEvent *event)
+{
+    // isVisible() is already true here; re-assert cadence immediately so the
+    // agent wakes the instant the window is summoned.
+    QMainWindow::showEvent(event);
+    refreshAgentHeartbeat();
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)

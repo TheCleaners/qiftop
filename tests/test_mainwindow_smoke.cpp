@@ -1304,6 +1304,52 @@ private slots:
         QTest::qWait(20);
         QCOMPARE(connMon.detailsRequests, before);
     }
+
+    // PERF-L2: while the window is hidden to tray the agent cadence heartbeat
+    // must be SUSPENDED (no SetDesiredIntervalMs pushes), so the agent can
+    // wind down its expensive conntrack+attribution polling. Showing the
+    // window must immediately re-assert the cadence so the agent wakes.
+    //
+    // We assert this via push-suppression (deterministic, no waiting for a
+    // 4 s heartbeat tick): a poll-interval change made WHILE HIDDEN must not
+    // reach the backends; the next show() must flush the current cadence.
+    void hiddenWindowSuspendsAgentHeartbeatAndShowResumes()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        // Visible: a cadence change reaches both backends.
+        settings.setPollIntervalMs(250);
+        QTest::qWait(30);
+        QCOMPARE(netMon.lastDesiredMs,  250);
+        QCOMPARE(connMon.lastDesiredMs, 250);
+
+        // Hide to tray. isVisible() is false; the heartbeat is suspended.
+        w.hide();
+        QTest::qWait(30);
+        QVERIFY(!w.isVisible());
+
+        // A cadence change made while hidden must NOT be pushed — the gate in
+        // refreshAgentHeartbeat() short-circuits before asserting.
+        settings.setPollIntervalMs(1750);
+        QTest::qWait(30);
+        QCOMPARE(netMon.lastDesiredMs,  250);   // unchanged
+        QCOMPARE(connMon.lastDesiredMs, 250);   // unchanged
+
+        // Showing the window re-asserts the CURRENT cadence immediately.
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        QTest::qWait(30);
+        QCOMPARE(netMon.lastDesiredMs,  1750);
+        QCOMPARE(connMon.lastDesiredMs, 1750);
+    }
 };
 
 // We instantiate widgets, so QApplication is required (not

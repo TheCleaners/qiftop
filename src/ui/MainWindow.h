@@ -101,6 +101,9 @@ private:
     void setupMenuAndToolbar();
     void updateStatusBar(const QList<InterfaceStats> &stats);
     void applySettingsToUi();
+    // (Re)assert or suspend the agent cadence heartbeat based on whether the
+    // window is hidden to tray (PERF-L2). Safe to call repeatedly.
+    void refreshAgentHeartbeat();
     void runExport(class Exportable *src, ExportFormat fmt,
                    ExportSink sink, const QString &baseName);
 
@@ -138,6 +141,8 @@ private:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
     Settings          *m_settings    = nullptr;

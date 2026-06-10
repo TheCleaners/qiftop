@@ -400,6 +400,17 @@ the default policy and a matching `<allow>` to the privileged stanza.
 * Setting any window or `idle.timeout_secs` to `0` disables that step
   (the comparison is guarded; see `IdleManager::evaluate`). This matches
   what `dist/conf/agent.conf` has always documented.
+* **Client heartbeat is gated on UI visibility (PERF-L2).** The GUI's
+  heartbeat lives in `MainWindow::refreshAgentHeartbeat()` and is
+  asserted only while `isVisible()`. When the window is hidden to tray
+  (or never shown under `--tray`), the heartbeat STOPS, so the agent's
+  idle wind-down runs and it eventually pauses — even though the tray
+  sparkline only needs cheap interface stats, the single shared
+  `IdleManager` drives both services at one cadence, so there is no way
+  to keep interfaces fast while letting connections idle. `showEvent()`
+  re-asserts immediately, waking the agent the instant the window is
+  summoned. Plain minimize keeps the window "visible" and does NOT
+  suspend the heartbeat.
 
 ---
 
@@ -442,7 +453,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_direction`           | `inferDirection` (ephemeral-port + local-end fallback)            |
 | `test_forwarded`           | `isForwardedFlow` heuristic                                       |
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
-| `test_settings_migration`  | `Settings` legacy-key migration logic                             |
+| `test_settings_migration`  | `Settings` legacy-key migration logic; chip-colour + v0.2 attribution view settings (view mode, process/container column toggles, chain-in-tooltip) round-trip + out-of-range view-mode clamp |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
 | `test_exporter`            | JSON quint64-as-string, qint64 numeric, CSV formula-injection     |
 | `test_idle`                | `IdleManager` cadence, hints, TTL, 64-cap, degrade, NameOwnerChanged |
