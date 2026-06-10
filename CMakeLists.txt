@@ -1,9 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
-project(qiftop VERSION 0.2 LANGUAGES CXX)
+project(qiftop VERSION 0.2.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# libqiftop is a SHARED library that absorbs the static backend_<platform>
+# lib, so every object that can end up inside it must be position-independent.
+# (Executables become PIE, which is already the toolchain default.)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -51,19 +56,27 @@ function(qiftop_apply_attribution_defs target)
 endfunction()
 
 # --- Shared DBus type marshalling (used by both client and agent) -----------
-add_library(qiftop_dbus STATIC
-    src/dbus/Types.cpp
-)
-target_include_directories(qiftop_dbus PUBLIC src)
-target_link_libraries(qiftop_dbus PUBLIC Qt6::Core Qt6::Network Qt6::DBus)
+# --- Platform backend (static; absorbed into libqiftop below) ---------------
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_subdirectory(src/backend/linux)
+else()
+    message(FATAL_ERROR "No backend available for platform: ${CMAKE_SYSTEM_NAME}")
+endif()
 
-# --- Client (qiftop) --------------------------------------------------------
-# qiftop_ui is a static library carrying every translation unit of the GUI
-# client EXCEPT main.cpp. Both the qiftop executable and the widget-level
-# smoke tests (tests/test_mainwindow_smoke.cpp) link against it so the
-# tests exercise the real production widget tree, models, and proxies —
-# not stand-in lookalikes.
-add_library(qiftop_ui STATIC
+# --- libqiftop: shared, Widgets-free core -----------------------------------
+# Qt6::Core + Network + DBus ONLY (NO Widgets). Every frontend links this: the
+# GUI (qiftop), the ncurses TUI (nqiftop), the privileged agent, and any
+# future exporter / alerting consumer. Anything pulling in QWidget /
+# QAbstractItemView / a delegate belongs in qiftop_ui, NOT here. The static
+# platform backend (backend_linux) is absorbed PUBLIC so consumers get the
+# in-process capture path + the resolver factory's #ifdef'd impls.
+#
+# NOTE: the long-term goal is to further split a Qt6::Core-only `qiftop_core`
+# seam (DTOs, filter mini-language, unit formatters, aggregation/EMA) out of
+# this into a libqiftop-core package. Keep new pure-logic TUs free of
+# Network/DBus includes so that carve-out stays mechanical.
+add_library(qiftoplib SHARED
+    src/dbus/Types.cpp
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
     src/backend/PlatformInfo.cpp
@@ -73,6 +86,30 @@ add_library(qiftop_ui STATIC
     src/config/Settings.cpp
     src/dns/DnsResolver.cpp
     src/dns/QtDnsResolver.cpp
+    src/util/ConnectionFilter.cpp
+    src/util/Exporter.cpp
+    src/util/Logging.cpp
+    src/util/Autostart.cpp
+)
+set_target_properties(qiftoplib PROPERTIES
+    OUTPUT_NAME qiftop
+    VERSION   ${PROJECT_VERSION}
+    SOVERSION 0)
+target_include_directories(qiftoplib PUBLIC src)
+target_link_libraries(qiftoplib PUBLIC Qt6::Core Qt6::Network Qt6::DBus)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(qiftoplib PUBLIC backend_linux)
+    target_compile_definitions(qiftoplib PUBLIC BACKEND_LINUX)
+endif()
+qiftop_apply_attribution_defs(qiftoplib)
+
+# --- Client GUI layer (qiftop_ui, static, Widgets) --------------------------
+# Widgets-only: MainWindow, dialogs, delegates, the QAbstractItemModel
+# adapters + proxies, tray, and the GUI-only elevation path. Links libqiftop.
+# Both the qiftop executable and the widget-level smoke tests
+# (tests/test_mainwindow_smoke.cpp) link this so the tests exercise the real
+# production widget tree, models, and proxies — not stand-in lookalikes.
+add_library(qiftop_ui STATIC
     src/ui/MainWindow.cpp
     src/ui/NetworkModel.cpp
     src/ui/InterfaceFilterProxy.cpp
@@ -85,37 +122,24 @@ add_library(qiftop_ui STATIC
     src/ui/ConnectionAttributionDelegate.cpp
     src/ui/SettingsDialog.cpp
     src/ui/TrayManager.cpp
-    src/util/Autostart.cpp
-    src/util/ConnectionFilter.cpp
-    src/util/Exporter.cpp
     src/util/HandoffClient.cpp
     src/util/HandoffServer.cpp
-    src/util/Logging.cpp
     src/util/PrivilegeEscalator.cpp
 )
 target_include_directories(qiftop_ui PUBLIC src)
 target_link_libraries(qiftop_ui PUBLIC
-    Qt6::Core Qt6::Widgets Qt6::Network Qt6::DBus qiftop_dbus)
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::DBus qiftoplib)
+qiftop_apply_attribution_defs(qiftop_ui)
 
 add_executable(qiftop src/main.cpp)
 target_link_libraries(qiftop PRIVATE qiftop_ui)
 # Single source of truth for the release version: derive the runtime
-# --version string from the CMake project() version instead of hardcoding it
-# in main.cpp (which silently drifted from 0.1 to 0.2).
+# --version string from the CMake project() version instead of hardcoding it.
 target_compile_definitions(qiftop PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
 
-# Platform backend selection (shared between client and agent)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_subdirectory(src/backend/linux)
-    target_link_libraries(qiftop_ui PUBLIC backend_linux)
-    target_compile_definitions(qiftop_ui PUBLIC BACKEND_LINUX)
-else()
-    message(FATAL_ERROR "No backend available for platform: ${CMAKE_SYSTEM_NAME}")
-endif()
-
-qiftop_apply_attribution_defs(qiftop_ui)
-
 # --- Privileged agent (qiftop-agent) ----------------------------------------
+# Agent-specific TUs only; everything shared (monitors, resolver factory,
+# backend, DTO marshalling, logging) comes in via libqiftop.
 add_executable(qiftop-agent
     src/agent/main.cpp
     src/agent/Application.cpp
@@ -124,19 +148,10 @@ add_executable(qiftop-agent
     src/agent/ConnectionsService.cpp
     src/agent/Attribution.cpp
     src/agent/IdleManager.cpp
-    src/backend/NetworkMonitor.cpp
-    src/backend/ConnectionMonitor.cpp
-    src/backend/PlatformInfo.cpp
-    src/backend/ProcessResolverFactory.cpp
-    src/util/Logging.cpp
 )
 target_include_directories(qiftop-agent PRIVATE src)
-target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qiftop_dbus)
+target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qiftoplib)
 target_compile_definitions(qiftop-agent PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_libraries(qiftop-agent PRIVATE backend_linux)
-    target_compile_definitions(qiftop-agent PRIVATE BACKEND_LINUX)
-endif()
 qiftop_apply_attribution_defs(qiftop-agent)
 
 # --- Demo harness (privacy-safe synthetic GUI driver) -----------------------
@@ -157,6 +172,13 @@ endif()
 
 # --- Install rules ----------------------------------------------------------
 include(GNUInstallDirs)
+
+# Shared core library. Full -dev component (headers + CMake/pkg-config) and
+# the inter-package dependency wiring land in Phase 2 packaging; for now this
+# ships the runtime .so so the installed binaries resolve it.
+install(TARGETS qiftoplib
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT libqiftop)
 
 install(TARGETS qiftop
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
