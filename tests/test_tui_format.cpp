@@ -39,41 +39,41 @@ class TestTuiFormat : public QObject {
 private slots:
     void columnsMatchView()
     {
-        // [name/flow] [bar] [RX rate] [TX rate] [RX total] [TX total] (+Status)
-        QCOMPARE(columnsFor(View::Interfaces).size(), 7);
-        QCOMPARE(columnsFor(View::Connections).size(), 6);
-        // Column 0 (name/flow) and the bar (1) are left-aligned; rates (2..) right.
+        // [name/flow] [RX rate] [TX rate] [RX total] [TX total] (+Status).
+        // The bandwidth gauge is a row-spanning background fill, not a column.
+        QCOMPARE(columnsFor(View::Interfaces).size(), 6);
+        QCOMPARE(columnsFor(View::Connections).size(), 5);
+        // Column 0 (name/flow) is left-aligned; rate columns (1..) right.
         QVERIFY(!columnsFor(View::Connections)[0].rightAlign);
-        QVERIFY(!columnsFor(View::Connections)[kBarColumn].rightAlign);
-        QVERIFY(columnsFor(View::Connections)[2].rightAlign);
-        // The bar column is fixed-width.
-        QCOMPARE(columnsFor(View::Connections)[kBarColumn].fixedWidth, kBarWidth);
+        QVERIFY(columnsFor(View::Connections)[1].rightAlign);
+        // Numeric columns are fixed-width (kills per-frame jitter); name flexes.
+        QCOMPARE(columnsFor(View::Connections)[0].fixedWidth, 0);
+        QCOMPARE(columnsFor(View::Connections)[1].fixedWidth, kRateW);
     }
 
     void interfaceCells()
     {
         const QStringList cells = cellsForInterface(ifaceRow(QStringLiteral("eth0"), 0, 0, true));
-        QCOMPARE(cells.size(), 7);
+        QCOMPARE(cells.size(), 6);
         QCOMPARE(cells[0], QStringLiteral("eth0"));
-        QVERIFY(cells[kBarColumn].isEmpty());  // bar filled in by the caller
-        QCOMPARE(cells[6], QStringLiteral("up"));
-        QCOMPARE(cellsForInterface(ifaceRow(QStringLiteral("x"), 0, 0, false))[6],
+        QCOMPARE(cells[5], QStringLiteral("up"));
+        QCOMPARE(cellsForInterface(ifaceRow(QStringLiteral("x"), 0, 0, false))[5],
                  QStringLiteral("down"));
     }
 
-    void barScalesAndFills()
+    void scaleAndGaugeFraction()
     {
         // niceScale rounds up to 1/2/5 × 10^k.
         QCOMPARE(niceScale(0.0), 1024.0);
         QVERIFY(niceScale(900.0) >= 900.0);
         QVERIFY(niceScale(1.5e6) >= 1.5e6);
-        // A full-rate bar fills the width; half fills ~half; zero is blank;
-        // a tiny non-zero rate still shows at least one cell.
-        const QChar block(0x2588);
-        QCOMPARE(barString(100, 100, 10).count(block), 10);
-        QCOMPARE(barString(0, 100, 10).count(block), 0);
-        QCOMPARE(barString(50, 100, 10).count(block), 5);
-        QVERIFY(barString(1, 1e9, 10).count(block) >= 1); // non-zero floor
+        // gaugeFraction is the row's combined rate against the view scale,
+        // clamped to [0,1]. Screen turns this into a background fill width.
+        QCOMPARE(gaugeFraction(100, 100), 1.0);
+        QCOMPARE(gaugeFraction(0, 100), 0.0);
+        QCOMPARE(gaugeFraction(50, 100), 0.5);
+        QCOMPARE(gaugeFraction(200, 100), 1.0);  // clamped
+        QCOMPARE(gaugeFraction(5, 0), 0.0);       // guard against /0
     }
 
     void connectionCellsRenderFlow()
@@ -91,7 +91,7 @@ private slots:
         QCOMPARE(agg.rowCount(), 1);
 
         const QStringList cells = cellsForConnection(agg, agg.rowAt(0));
-        QCOMPARE(cells.size(), 6);
+        QCOMPARE(cells.size(), 5);
         QVERIFY(cells[0].contains(QStringLiteral("TCP")));
         QVERIFY(cells[0].contains(QStringLiteral("10.0.0.1:5000")));
         QVERIFY(cells[0].contains(QStringLiteral("1.1.1.1:443")));

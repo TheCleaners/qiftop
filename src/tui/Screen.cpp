@@ -1,6 +1,7 @@
 #include "tui/Screen.h"
 
 #include <clocale>
+#include <cmath>
 
 // ncurses last: it defines lower-case macros (erase, move, refresh, timeout…)
 // that would clash with Qt/STL identifiers if included before them.
@@ -69,6 +70,7 @@ void Screen::init()
         start_color();
         use_default_colors();
         m_hasColor = true;
+        m_color256 = (COLORS >= 256);
     }
     m_active = true;
     applyTheme();
@@ -93,11 +95,42 @@ void Screen::applyTheme()
 {
     if (!m_active || !m_hasColor)
         return;
-    for (int i = 0; i < static_cast<int>(Role::Count); ++i) {
+    const int n = static_cast<int>(Role::Count);
+    for (int i = 0; i < n; ++i) {
         const ThemeColor &c = m_theme.roles[i];
         init_pair(static_cast<short>(i + 1),
                   static_cast<short>(c.fg),
                   static_cast<short>(c.bg));
+    }
+    // Gauge-fill pairs (256-colour only): same role fg, the theme's gauge
+    // background tint — a subtle fill behind readable text. Pairs n+1..2n.
+    if (m_color256 && m_theme.gaugeBg >= 0) {
+        for (int i = 0; i < n; ++i)
+            init_pair(static_cast<short>(n + 1 + i),
+                      static_cast<short>(m_theme.roles[i].fg),
+                      static_cast<short>(m_theme.gaugeBg));
+    }
+}
+
+void Screen::paintGauge(int y, int width, double fraction, Role role) const
+{
+    if (!m_active || width <= 0 || fraction <= 0.0)
+        return;
+    int fill = static_cast<int>(std::lround(fraction * width));
+    if (fill <= 0)
+        fill = 1;            // a visible sliver for any non-zero traffic
+    if (fill > width)
+        fill = width;
+    const int r = static_cast<int>(role);
+    if (m_color256 && m_theme.gaugeBg >= 0) {
+        // Re-colour the filled cells to (role fg, gauge bg) without touching
+        // the glyphs — the Qt RowGaugeDelegate "tint behind text" look.
+        mvchgat(y, 0, fill, ncursesAttr(m_theme[role].attr),
+                static_cast<short>(static_cast<int>(Role::Count) + 1 + r), nullptr);
+    } else {
+        // Fallback for 8-colour / mono: reverse-video the filled region.
+        const short pair = m_hasColor ? static_cast<short>(r + 1) : 0;
+        mvchgat(y, 0, fill, A_REVERSE | ncursesAttr(m_theme[role].attr), pair, nullptr);
     }
 }
 
@@ -213,13 +246,17 @@ void Screen::render(const Frame &f)
         attrset(attrFor(role));
         putLine(2 + i, rowText(f.rows[idx]));
         attrset(A_NORMAL);
+        // Row-spanning bandwidth gauge painted over the text.
+        const double frac = idx < f.rowGauge.size() ? f.rowGauge[idx] : 0.0;
+        paintGauge(2 + i, width, frac, role);
         ++shown;
     }
     const int below = total - (f.scrollOffset + shown);
     if (below > 0 && body > 0) {
         attrset(attrFor(Role::Stale));
         putLine(2 + body - 1,
-                QStringLiteral("  … +%1 more (↓ to scroll)").arg(below));
+                fitCell(QStringLiteral("  … +%1 more (↓ to scroll)").arg(below),
+                        width, false));
         attrset(A_NORMAL);
     }
 

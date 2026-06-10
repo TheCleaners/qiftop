@@ -61,6 +61,11 @@ struct ThemeColor {
 struct Theme {
     QString     name;
     ThemeColor  roles[static_cast<int>(Role::Count)];
+    // Background colour for the row-spanning bandwidth gauge fill. Used only
+    // on 256-colour terminals (a subtle tint behind the text, like the Qt
+    // RowGaugeDelegate); -1 means "no colour" and Screen falls back to a
+    // reverse-video fill so the gauge still reads on 8-colour / mono.
+    int         gaugeBg = -1;
 
     [[nodiscard]] const ThemeColor &operator[](Role r) const
     {
@@ -88,7 +93,7 @@ inline QList<Theme> builtinThemes()
 {
     using namespace color;
     using namespace attr;
-    return {
+    QList<Theme> all = {
         makeTheme(QStringLiteral("dark"), {
             {Role::Header,        {Cyan,    Default, Bold}},
             {Role::TabActive,     {Default, Default, Reverse | Bold}},
@@ -138,6 +143,12 @@ inline QList<Theme> builtinThemes()
             {Role::Accent,        {Default, Default, Bold}},
         }),
     };
+    // Row-spanning gauge fill tint (256-colour only; -1 -> reverse fallback).
+    all[0].gaugeBg = 236; // dark      : very dark gray
+    all[1].gaugeBg = 252; // light     : light gray
+    all[2].gaugeBg = 236; // colorblind: very dark gray
+    all[3].gaugeBg = -1;  // mono      : reverse-video fill
+    return all;
 }
 
 inline QStringList themeNames()

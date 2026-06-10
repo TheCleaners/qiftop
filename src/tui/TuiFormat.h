@@ -1,9 +1,9 @@
 #pragma once
 
 // Pure-logic formatting + sorting for the nqiftop ncurses frontend. No
-// ncurses, no event loop — row -> cell strings, the bandwidth-bar gauge, the
-// dynamic scale, the per-column sort comparators, and the per-row colour
-// role. Unit-tested directly (tests/test_tui_format.cpp).
+// ncurses, no event loop — row -> cell strings, the bandwidth scale + gauge
+// fraction, per-column sort comparators, and the per-row colour role.
+// Unit-tested directly (tests/test_tui_format.cpp).
 
 #include <QList>
 #include <QString>
@@ -23,36 +23,37 @@ namespace qiftop::tui {
 
 enum class View { Interfaces, Connections };
 
-// Fixed width of the bandwidth-bar column (iftop's signature gauge).
-constexpr int kBarWidth   = 14;
-// Column index of the bandwidth bar in both views.
-constexpr int kBarColumn  = 1;
-
 struct Column {
     QString title;
     bool    rightAlign = false; // numeric columns are right-aligned
     int     fixedWidth = 0;     // 0 = auto (natural width); >0 = exact
 };
 
-// Columns. Layout (both views): [name/flow] [bar] [RX rate] [TX rate]
-// [RX total] [TX total] (+ [Status] for interfaces). The bar column's title
-// is overwritten with the live scale by the caller.
+// Fixed widths for the numeric/status columns so the layout is STABLE as
+// values change (otherwise the columns jitter every tick). The name/flow
+// column (index 0) flexes to fill the rest.
+constexpr int kRateW   = 11; // "999.9 MiB/s"
+constexpr int kTotalW  = 11; // "999.99 GiB"
+constexpr int kStatusW = 9;  // "loopback"
+
+// Layout (both views): [name/flow] [RX rate] [TX rate] [RX total] [TX total]
+// (+ [Status] for interfaces). The whole-row bandwidth gauge is painted as a
+// background fill by Screen — it's not a column.
 inline QList<Column> columnsFor(View v)
 {
     QList<Column> cols = {
         {v == View::Interfaces ? QStringLiteral("Interface") : QStringLiteral("Flow"), false, 0},
-        {QStringLiteral("Bandwidth"), false, kBarWidth},
-        {QStringLiteral("RX rate"),   true,  0},
-        {QStringLiteral("TX rate"),   true,  0},
-        {QStringLiteral("RX total"),  true,  0},
-        {QStringLiteral("TX total"),  true,  0},
+        {QStringLiteral("RX rate"),  true, kRateW},
+        {QStringLiteral("TX rate"),  true, kRateW},
+        {QStringLiteral("RX total"), true, kTotalW},
+        {QStringLiteral("TX total"), true, kTotalW},
     };
     if (v == View::Interfaces)
-        cols.append({QStringLiteral("Status"), false, 0});
+        cols.append({QStringLiteral("Status"), false, kStatusW});
     return cols;
 }
 
-// --- bandwidth scale + bar --------------------------------------------------
+// --- bandwidth scale --------------------------------------------------------
 
 inline double combinedRate(const aggregate::InterfaceAggregator::Row &r)
 {
@@ -63,8 +64,8 @@ inline double combinedRate(const aggregate::ConnectionAggregator::Row &r)
     return r.rxRate + r.txRate;
 }
 
-// Round `maxRate` UP to a "nice" 1/2/5 × 10^k value so a full bar maps to a
-// readable scale (like iftop's top ruler). Returns >= maxRate.
+// Round `maxRate` UP to a "nice" 1/2/5 × 10^k value so the loudest row's
+// full-row gauge maps to a readable scale (like iftop's top ruler).
 inline double niceScale(double maxRate)
 {
     if (maxRate <= 0.0)
@@ -76,23 +77,15 @@ inline double niceScale(double maxRate)
     return nice * base;
 }
 
-// A `width`-cell horizontal bar: filled block (█) proportional to value/scale.
-inline QString barString(double value, double scale, int width)
+// Gauge fraction in [0,1]: a row's combined rate against the view scale.
+inline double gaugeFraction(double value, double scale)
 {
-    if (width <= 0)
-        return {};
-    double frac = scale > 0.0 ? value / scale : 0.0;
-    frac = std::clamp(frac, 0.0, 1.0);
-    int filled = static_cast<int>(std::lround(frac * width));
-    filled = std::clamp(filled, 0, width);
-    // A single visible cell for any non-zero traffic, so tiny flows still show.
-    if (filled == 0 && value > 0.0)
-        filled = 1;
-    return QString(filled, QChar(0x2588)) + QString(width - filled, QLatin1Char(' '));
+    if (scale <= 0.0)
+        return 0.0;
+    return std::clamp(value / scale, 0.0, 1.0);
 }
 
-// --- cell rendering (the bar cell is filled in by the caller, which knows the
-//     view-wide scale; here it's an empty placeholder) -----------------------
+// --- cell rendering ---------------------------------------------------------
 
 inline QStringList cellsForInterface(const aggregate::InterfaceAggregator::Row &r)
 {
@@ -101,7 +94,6 @@ inline QStringList cellsForInterface(const aggregate::InterfaceAggregator::Row &
                                         : (s.isUp ? QStringLiteral("up")
                                                   : QStringLiteral("down"));
     return {s.name,
-            QString(),                       // bar placeholder
             util::formatByteRate(r.rxRate),
             util::formatByteRate(r.txRate),
             util::formatBytes(s.rxBytes),
@@ -118,7 +110,6 @@ inline QStringList cellsForConnection(const aggregate::ConnectionAggregator &agg
                                   agg.endpointText(c.local),
                                   agg.endpointText(c.remote));
     return {flow,
-            QString(),                       // bar placeholder
             util::formatByteRate(r.rxRate),
             util::formatByteRate(r.txRate),
             util::formatBytes(c.rxBytes),
@@ -150,8 +141,8 @@ inline Role rowRoleForConnection(const aggregate::ConnectionAggregator &agg,
 }
 
 // --- sorting ----------------------------------------------------------------
-// Column layout: 0 = name/flow (text), 1 = bandwidth (combined rate),
-// 2 = RX rate, 3 = TX rate, 4 = RX total, 5 = TX total, 6 = status (iface).
+// Column layout: 0 = name/flow (text), 1 = RX rate, 2 = TX rate,
+// 3 = RX total, 4 = TX total, 5 = status (interfaces only).
 
 inline QList<int> sortedInterfaceIndices(const QList<aggregate::InterfaceAggregator::Row> &rows,
                                          int col, bool descending)
@@ -161,12 +152,11 @@ inline QList<int> sortedInterfaceIndices(const QList<aggregate::InterfaceAggrega
     const auto num = [&](int i) -> double {
         const auto &r = rows[i];
         switch (col) {
-        case 1:  return combinedRate(r);
-        case 2:  return r.rxRate;
-        case 3:  return r.txRate;
-        case 4:  return static_cast<double>(r.current.rxBytes);
-        case 5:  return static_cast<double>(r.current.txBytes);
-        case 6:  return r.current.isUp ? 1.0 : 0.0;
+        case 1:  return r.rxRate;
+        case 2:  return r.txRate;
+        case 3:  return static_cast<double>(r.current.rxBytes);
+        case 4:  return static_cast<double>(r.current.txBytes);
+        case 5:  return r.current.isUp ? 1.0 : 0.0;
         default: return 0.0;
         }
     };
@@ -188,11 +178,10 @@ inline QList<int> sortedConnectionIndices(const QList<aggregate::ConnectionAggre
     const auto num = [&](int i) -> double {
         const auto &r = rows[i];
         switch (col) {
-        case 1:  return combinedRate(r);
-        case 2:  return r.rxRate;
-        case 3:  return r.txRate;
-        case 4:  return static_cast<double>(r.current.rxBytes);
-        case 5:  return static_cast<double>(r.current.txBytes);
+        case 1:  return r.rxRate;
+        case 2:  return r.txRate;
+        case 3:  return static_cast<double>(r.current.rxBytes);
+        case 4:  return static_cast<double>(r.current.txBytes);
         default: return 0.0;
         }
     };

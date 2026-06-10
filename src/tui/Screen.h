@@ -22,6 +22,7 @@ struct Frame {
     bool          sortDesc = true;
     QList<QStringList> rows;         // ALL rows (already sorted), each = cells
     QList<Role>   rowRoles;          // per-row colour role (parallel to rows)
+    QList<double> rowGauge;          // per-row bandwidth fraction [0,1] (parallel)
     int           scrollOffset = 0;  // index of the first visible body row
     QString       footer;            // key help line
 };
@@ -53,9 +54,13 @@ public:
 private:
     void applyTheme();                 // (re)register colour pairs
     long attrFor(Role r) const;        // COLOR_PAIR | A_* for a role
+    // Paint the row-spanning bandwidth gauge: fill the first `fraction` of
+    // line `y` with the gauge tint (256-colour) or reverse-video (fallback).
+    void paintGauge(int y, int width, double fraction, Role role) const;
 
     bool  m_active   = false;
     bool  m_hasColor = false;
+    bool  m_color256 = false;
     Theme m_theme    = builtinThemes().first();
 };
 

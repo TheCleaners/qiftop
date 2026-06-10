@@ -153,7 +153,7 @@ Frame TuiApp::buildFrame()
     f.activeTab   = (m_view == View::Interfaces) ? 0 : 1;
     f.columns     = columnsFor(m_view);
 
-    QList<double> rates;       // combined rate per displayed row (for the bar)
+    QList<double> rates;       // combined rate per displayed row (for the gauge)
     double maxRate = 0.0;
     double aggRx = 0.0, aggTx = 0.0;
 
@@ -189,17 +189,18 @@ Frame TuiApp::buildFrame()
         }
     }
 
-    // Bandwidth gauge: scale a full bar to a "nice" round value >= the loudest
-    // row (iftop's scale), then fill each row's bar cell.
+    // Row-spanning bandwidth gauge: a full-width row maps to a "nice" round
+    // scale >= the loudest row (iftop's ruler). Each row gets a [0,1]
+    // fraction that Screen paints as a background fill behind the text.
     const double scale = niceScale(maxRate);
-    f.columns[kBarColumn].title = QStringLiteral("\u2264%1").arg(util::formatByteRate(scale));
-    for (int k = 0; k < f.rows.size() && k < rates.size(); ++k)
-        f.rows[k][kBarColumn] = barString(rates[k], scale, kBarWidth);
+    for (double cr : rates)
+        f.rowGauge << gaugeFraction(cr, scale);
 
-    // Aggregate throughput in the tab-line right gutter, next to the source.
-    f.sourceLabel = QStringLiteral("\u03a3 %1\u2193 %2\u2191 \u00b7 %3")
+    // Summary (top-style): aggregate throughput + the gauge scale + source.
+    f.sourceLabel = QStringLiteral("\u03a3 %1\u2193 %2\u2191 \u00b7 \u2264%3 \u00b7 %4")
                         .arg(util::formatByteRate(aggRx),
                              util::formatByteRate(aggTx),
+                             util::formatByteRate(scale),
                              m_sourceLabel);
 
     // Clamp scroll to the valid range for the current body height.
