@@ -65,6 +65,8 @@ private:
     void  handleSettingsKey(int key);          // key routing while Settings open
     void  handleFieldsKey(int key);            // key routing while Fields open
     void  handleInfoKey(int key);              // key routing while Help/About open
+    void  handleDetailKey(int key);            // key routing while a row Detail is open
+    void  openDetail();                        // open the Detail overlay for the cursor row
     void  applyAggregatorSettings();           // push flags into the aggregator
     void  loadSettings();                      // restore view/sort/toggles/theme
     void  saveSettings() const;                // persist them (QSettings)
@@ -88,20 +90,22 @@ private:
     int  m_ifaceCursor  = 0;  // selected row (index into displayed rows)
     int  m_connCursor   = 0;
 
-    // Expanded rows (aptitude-style detail tree). Keyed by stable identity
-    // (interface name / connection 5-tuple) so they survive a re-sort/refresh.
-    QSet<QString> m_expandedIface;
-    QSet<QString> m_expandedConn;
     // Per displayed row of the active view, rebuilt each buildFrame: whether the
-    // row can be expanded and its identity key. Lets handleKey act on the cursor.
-    struct RowRef { bool expandable = false; QString key; };
+    // row is selectable (a real iface/flow vs. a group header) and its stable
+    // identity key. Drives cursor navigation and opening the Detail overlay.
+    struct RowRef { bool selectable = false; QString key; };
     QList<RowRef> m_rowRefs;
-    void moveCursor(int delta);   // move selection, clamped, scroll follows
-    void toggleExpand(int dir);   // dir: 0 toggle, +1 expand, -1 collapse
+    void moveCursor(int delta);   // move selection over selectable rows only
+
+    // Detail overlay target: the stable key + view of the row whose details are
+    // shown. Rebuilt live each frame from the current rows so rates stay fresh.
+    QString m_detailKey;
+    View    m_detailView = View::Connections;
 
     // Modal overlays (only one open at a time). Settings = runtime toggles,
-    // Fields = top-style sort-column selector, Help/About = read-only info.
-    enum class Overlay { None, Settings, Fields, Help, About };
+    // Fields = top-style sort-column selector, Help/About = read-only info,
+    // Detail = the per-row inspector (replaces inline expansion).
+    enum class Overlay { None, Settings, Fields, Help, About, Detail };
     Overlay m_overlay = Overlay::None;
     int  m_settingsSel    = 0;
     int  m_fieldsSel      = 0;

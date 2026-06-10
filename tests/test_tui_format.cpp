@@ -4,6 +4,7 @@
 #include <QHostAddress>
 #include <QTest>
 
+#include "tui/Expansion.h"
 #include "tui/TuiFormat.h"
 
 using namespace qiftop::tui;
@@ -196,17 +197,26 @@ private slots:
         QCOMPARE(groupByFromName(QStringLiteral("bogus")), GroupBy::Count); // unrecognised
     }
 
-    void detailTreeLines()
+    void detailRows()
     {
-        // Interface detail tree: one line per field, tree connectors, last is └.
-        const QStringList ifl = interfaceDetailLines(ifaceRow(QStringLiteral("eth0"), 0, 0, true));
-        QVERIFY(ifl.size() >= 6);
-        QVERIFY(ifl.first().contains(QChar(0x251c)));            // ├ on non-last
-        QVERIFY(ifl.last().contains(QChar(0x2514)));             // └ on last
-        QVERIFY(std::any_of(ifl.cbegin(), ifl.cend(),
-                            [](const QString &s){ return s.contains(QStringLiteral("MTU")); }));
+        // Interface detail: a label/value row per field; optional fields still
+        // listed with an em-dash (the bug fix — they used to render blank/"…").
+        const QList<SettingRow> ifl =
+            interfaceDetailRows(ifaceRow(QStringLiteral("eth0"), 0, 0, true));
+        QVERIFY(ifl.size() >= 8);
+        const auto hasLabel = [](const QList<SettingRow> &rs, const QString &l) {
+            return std::any_of(rs.cbegin(), rs.cend(),
+                               [&](const SettingRow &r){ return r.label == l; });
+        };
+        QVERIFY(hasLabel(ifl, QStringLiteral("MTU")));
+        QVERIFY(hasLabel(ifl, QStringLiteral("State")));
+        for (const SettingRow &r : ifl) {           // no blank values
+            QVERIFY(!r.label.isEmpty());
+            QVERIFY(!r.value.isEmpty());
+        }
 
-        // Connection detail tree includes the 5-tuple + direction.
+        // Connection detail includes the 5-tuple, direction AND process/
+        // container rows (shown in every view mode, flat included).
         ConnectionAggregator agg;
         agg.setUdpAggregateByPeer(false);
         Connection c;
@@ -214,15 +224,39 @@ private slots:
         c.local.address  = QHostAddress(QStringLiteral("10.0.0.1")); c.local.port = 5000;
         c.remote.address = QHostAddress(QStringLiteral("1.1.1.1"));  c.remote.port = 443;
         c.direction = Direction::Outbound;
+        c.process = {4242, QStringLiteral("curl"), {}, {}, 1000};
+        c.container = {QStringLiteral("docker"), QStringLiteral("abc123"), QStringLiteral("web")};
         agg.updateConnections({c});
-        const QStringList cl = connectionDetailLines(agg, agg.rowAt(0));
-        QVERIFY(std::any_of(cl.cbegin(), cl.cend(),
-                            [](const QString &s){ return s.contains(QStringLiteral("Direction")); }));
-        QVERIFY(cl.last().contains(QChar(0x2514)));
+        const QList<SettingRow> cl = connectionDetailRows(agg, agg.rowAt(0));
+        QVERIFY(hasLabel(cl, QStringLiteral("Direction")));
+        QVERIFY(hasLabel(cl, QStringLiteral("Process")));
+        QVERIFY(hasLabel(cl, QStringLiteral("Container")));
 
         // Stable keys: interface = name, connection = 5-tuple key().
         QCOMPARE(interfaceKey(ifaceRow(QStringLiteral("wlan0"), 0, 0)), QStringLiteral("wlan0"));
         QCOMPARE(connectionKey(agg.rowAt(0)), agg.rowAt(0).current.key());
+    }
+
+    void expansionStateIsKeyedAndReusable()
+    {
+        // The reusable inline-expand pattern (parked for future hierarchical
+        // views): keyed by identity, toggles, bounded by retainOnly.
+        ExpansionState ex;
+        QVERIFY(ex.isEmpty());
+        QVERIFY(!ex.isExpanded(QStringLiteral("a")));
+        QVERIFY(ex.toggle(QStringLiteral("a")));        // returns new state (open)
+        QVERIFY(ex.isExpanded(QStringLiteral("a")));
+        QVERIFY(!ex.toggle(QStringLiteral("a")));       // back to collapsed
+        QVERIFY(ex.apply(QStringLiteral("b"), +1));     // explicit expand
+        QVERIFY(ex.apply(QStringLiteral("c"), +1));
+        QCOMPARE(ex.count(), 2);
+        QVERIFY(!ex.apply(QStringLiteral("b"), -1));    // explicit collapse
+        QCOMPARE(ex.count(), 1);                        // only "c" remains
+        ex.expand(QStringLiteral("gone"));
+        ex.retainOnly({QStringLiteral("c")});           // drop keys not present
+        QVERIFY(ex.isExpanded(QStringLiteral("c")));
+        QVERIFY(!ex.isExpanded(QStringLiteral("gone")));
+        QCOMPARE(ex.count(), 1);
     }
 };
 

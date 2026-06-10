@@ -81,7 +81,11 @@ private:
     long attrFor(Role r) const;        // COLOR_PAIR | A_* for a role
     // Paint the row-spanning bandwidth gauge: fill the first `fraction` of
     // line `y` with the gauge tint (256-colour) or reverse-video (fallback).
-    void paintGauge(int y, int width, double fraction, Role role) const;
+    // Paint the row-spanning gauge fill on line `y`; `extra` is OR'd into the
+    // fill cells' attributes (e.g. bold+underline for the cursor row, so the
+    // gauge tint is preserved rather than replaced by a solid bar). Returns the
+    // number of filled columns (0 when there's no traffic).
+    int paintGauge(int y, int width, double fraction, Role role, long extra = 0) const;
     // Paint the modal panel (when f.modal.visible) centred over the body, with
     // the selected row highlighted and its help line below.
     void renderModal(const ModalPanel &m) const;

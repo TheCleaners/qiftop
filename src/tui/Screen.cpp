@@ -112,10 +112,10 @@ void Screen::applyTheme()
     }
 }
 
-void Screen::paintGauge(int y, int width, double fraction, Role role) const
+int Screen::paintGauge(int y, int width, double fraction, Role role, long extra) const
 {
     if (!m_active || width <= 0 || fraction <= 0.0)
-        return;
+        return 0;
     int fill = static_cast<int>(std::lround(fraction * width));
     if (fill <= 0)
         fill = 1;            // a visible sliver for any non-zero traffic
@@ -125,13 +125,14 @@ void Screen::paintGauge(int y, int width, double fraction, Role role) const
     if (m_color256 && m_theme.gaugeBg >= 0) {
         // Re-colour the filled cells to (role fg, gauge bg) without touching
         // the glyphs — the Qt RowGaugeDelegate "tint behind text" look.
-        mvchgat(y, 0, fill, ncursesAttr(m_theme[role].attr),
+        mvchgat(y, 0, fill, extra | ncursesAttr(m_theme[role].attr),
                 static_cast<short>(static_cast<int>(Role::Count) + 1 + r), nullptr);
     } else {
         // Fallback for 8-colour / mono: reverse-video the filled region.
         const short pair = m_hasColor ? static_cast<short>(r + 1) : 0;
-        mvchgat(y, 0, fill, A_REVERSE | ncursesAttr(m_theme[role].attr), pair, nullptr);
+        mvchgat(y, 0, fill, extra | A_REVERSE | ncursesAttr(m_theme[role].attr), pair, nullptr);
     }
+    return fill;
 }
 
 long Screen::attrFor(Role r) const
@@ -317,16 +318,20 @@ void Screen::render(const Frame &f)
         attrset(attrFor(role));
         putLine(3 + i, rowText(f.rows[idx]));
         attrset(A_NORMAL);
+        const double frac = idx < f.rowGauge.size() ? f.rowGauge[idx] : 0.0;
         if (isCursor) {
-            // Current-line selection bar (htop-style): re-colour the whole row
-            // to the Cursor role, replacing the gauge tint for that one line.
-            const ThemeColor &cc = m_theme[Role::Cursor];
-            mvchgat(3 + i, 0, width, ncursesAttr(cc.attr),
-                    m_hasColor ? static_cast<short>(static_cast<int>(Role::Cursor) + 1) : 0,
-                    nullptr);
+            // Current line: keep the bandwidth gauge but mark it bold+underline
+            // (don't replace it with a flat bar — the gauge is information).
+            const long emph = A_BOLD | A_UNDERLINE;
+            const int fill = paintGauge(3 + i, width, frac, role, emph);
+            if (fill < width) {
+                const short pair = m_hasColor
+                    ? static_cast<short>(static_cast<int>(role) + 1) : 0;
+                mvchgat(3 + i, fill, width - fill,
+                        emph | ncursesAttr(m_theme[role].attr), pair, nullptr);
+            }
         } else {
             // Row-spanning bandwidth gauge painted over the text.
-            const double frac = idx < f.rowGauge.size() ? f.rowGauge[idx] : 0.0;
             paintGauge(3 + i, width, frac, role);
         }
         ++shown;

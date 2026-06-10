@@ -167,96 +167,88 @@ inline QString connectionKey(const aggregate::ConnectionAggregator::Row &r)
     return r.current.key();
 }
 
-// --- aptitude-style detail tree lines for an expanded row -------------------
-// Each returned string is one tree line (already prefixed with ├/└ connectors).
-// The caller renders them as dim Detail rows beneath the parent.
+// --- modal row DTO ----------------------------------------------------------
+// Rendering DTO for one modal list entry (label + value + per-row help),
+// shared by Screen, the per-row Detail panel, and the declarative settings
+// model in TuiApp.
+struct SettingRow {
+    QString label;
+    QString value;  // human value: theme name, "on"/"off", "1000 ms", …
+    QString help;   // aptitude-style one-line description
+};
 
-inline QStringList interfaceDetailLines(const aggregate::InterfaceAggregator::Row &r)
+// --- detail rows for the per-row detail modal (label / value pairs) ---------
+// Shown in a centred panel opened with Enter — full width, never reflowing the
+// live list. Empty/optional fields are still listed (with an em-dash) for the
+// interface; connection process/container rows appear only when attributed.
+
+inline QList<SettingRow> interfaceDetailRows(const aggregate::InterfaceAggregator::Row &r)
 {
     const InterfaceStats &s = r.current;
-    QList<QPair<QString, QString>> kv;
-    kv << qMakePair(QStringLiteral("Type"),
-                    s.isLoopback ? QStringLiteral("loopback")
-                                 : (s.type.isEmpty() ? QStringLiteral("—") : s.type));
-    kv << qMakePair(QStringLiteral("Addresses"),
-                    s.addresses.isEmpty() ? QStringLiteral("—")
-                                          : s.addresses.join(QStringLiteral(", ")));
-    kv << qMakePair(QStringLiteral("MTU"), s.mtu ? QString::number(s.mtu) : QStringLiteral("—"));
-    kv << qMakePair(QStringLiteral("State"),
-                    QStringLiteral("%1 (oper %2, ifindex %3)")
-                        .arg(operStateText(s.operState, s.isUp))
-                        .arg(s.operState).arg(s.ifIndex));
-    kv << qMakePair(QStringLiteral("Rates"),
-                    QStringLiteral("\u2193 %1   \u2191 %2")
-                        .arg(util::formatByteRate(r.rxRate), util::formatByteRate(r.txRate)));
-    kv << qMakePair(QStringLiteral("Totals"),
-                    QStringLiteral("\u2193 %1   \u2191 %2")
-                        .arg(util::formatBytes(s.rxBytes), util::formatBytes(s.txBytes)));
-    kv << qMakePair(QStringLiteral("Packets"),
-                    QStringLiteral("\u2193 %1   \u2191 %2")
-                        .arg(s.rxPackets).arg(s.txPackets));
-    kv << qMakePair(QStringLiteral("Errors"),
-                    QStringLiteral("rx %1  tx %2").arg(s.rxErrors).arg(s.txErrors));
-    kv << qMakePair(QStringLiteral("Dropped"),
-                    QStringLiteral("rx %1  tx %2").arg(s.rxDropped).arg(s.txDropped));
-
-    QStringList out;
-    for (int i = 0; i < kv.size(); ++i) {
-        const QChar branch = (i == kv.size() - 1) ? QChar(0x2514) : QChar(0x251c); // └ ├
-        out << QStringLiteral("   %1\u2500 %2  %3")
-                   .arg(branch).arg(kv[i].first.leftJustified(10), kv[i].second);
-    }
-    return out;
+    return {
+        {QStringLiteral("Type"),
+         s.isLoopback ? QStringLiteral("loopback")
+                      : (s.type.isEmpty() ? QStringLiteral("\u2014") : s.type), {}},
+        {QStringLiteral("Addresses"),
+         s.addresses.isEmpty() ? QStringLiteral("\u2014")
+                               : s.addresses.join(QStringLiteral(", ")), {}},
+        {QStringLiteral("MTU"), s.mtu ? QString::number(s.mtu) : QStringLiteral("\u2014"), {}},
+        {QStringLiteral("ifindex"), QString::number(s.ifIndex), {}},
+        {QStringLiteral("State"),
+         QStringLiteral("%1 (oper %2)").arg(operStateText(s.operState, s.isUp)).arg(s.operState), {}},
+        {QStringLiteral("RX rate"), util::formatByteRate(r.rxRate), {}},
+        {QStringLiteral("TX rate"), util::formatByteRate(r.txRate), {}},
+        {QStringLiteral("RX total"), util::formatBytes(s.rxBytes), {}},
+        {QStringLiteral("TX total"), util::formatBytes(s.txBytes), {}},
+        {QStringLiteral("Packets"),
+         QStringLiteral("rx %1  tx %2").arg(s.rxPackets).arg(s.txPackets), {}},
+        {QStringLiteral("Errors"),
+         QStringLiteral("rx %1  tx %2").arg(s.rxErrors).arg(s.txErrors), {}},
+        {QStringLiteral("Dropped"),
+         QStringLiteral("rx %1  tx %2").arg(s.rxDropped).arg(s.txDropped), {}},
+    };
 }
 
-inline QStringList connectionDetailLines(const aggregate::ConnectionAggregator &agg,
-                                         const aggregate::ConnectionAggregator::Row &r)
+inline QList<SettingRow> connectionDetailRows(const aggregate::ConnectionAggregator &agg,
+                                              const aggregate::ConnectionAggregator::Row &r)
 {
     const Connection &c = r.current;
-    QList<QPair<QString, QString>> kv;
-    kv << qMakePair(QStringLiteral("Protocol"), agg.protoLabel(c));
-    kv << qMakePair(QStringLiteral("Local"),  agg.endpointText(c.local));
-    kv << qMakePair(QStringLiteral("Remote"), agg.endpointText(c.remote));
+    QList<SettingRow> rows;
+    rows << SettingRow{QStringLiteral("Protocol"), agg.protoLabel(c), {}};
+    rows << SettingRow{QStringLiteral("Local"),  agg.endpointText(c.local), {}};
+    rows << SettingRow{QStringLiteral("Remote"), agg.endpointText(c.remote), {}};
     const QString dir = c.direction == Direction::Outbound ? QStringLiteral("outbound")
                       : c.direction == Direction::Inbound  ? QStringLiteral("inbound")
                                                            : QStringLiteral("unknown");
-    kv << qMakePair(QStringLiteral("Direction"), dir);
-    if (!c.iface.isEmpty() || c.ifIndex)
-        kv << qMakePair(QStringLiteral("Interface"),
-                        QStringLiteral("%1 (ifindex %2)")
-                            .arg(c.iface.isEmpty() ? QStringLiteral("—") : c.iface)
-                            .arg(c.ifIndex));
+    rows << SettingRow{QStringLiteral("Direction"), dir, {}};
+    rows << SettingRow{QStringLiteral("Interface"),
+                       QStringLiteral("%1 (ifindex %2)")
+                           .arg(c.iface.isEmpty() ? QStringLiteral("\u2014") : c.iface)
+                           .arg(c.ifIndex), {}};
     const QString tcp = tcpStateToString(c.tcpState);
     if (!tcp.isEmpty())
-        kv << qMakePair(QStringLiteral("TCP state"), tcp);
-    if (c.process.valid())
-        kv << qMakePair(QStringLiteral("Process"),
-                        QStringLiteral("%1 [%2] uid %3")
-                            .arg(c.process.comm.isEmpty() ? QStringLiteral("?") : c.process.comm)
-                            .arg(c.process.pid).arg(c.process.uid));
+        rows << SettingRow{QStringLiteral("TCP state"), tcp, {}};
+    // Process + container attribution — shown whenever present, in every view
+    // mode (flat included), not only when grouped.
+    rows << SettingRow{QStringLiteral("Process"),
+                       c.process.valid()
+                           ? QStringLiteral("%1 [%2] uid %3")
+                                 .arg(c.process.comm.isEmpty() ? QStringLiteral("?") : c.process.comm)
+                                 .arg(c.process.pid).arg(c.process.uid)
+                           : QStringLiteral("(unattributed)"), {}};
     if (c.container.valid())
-        kv << qMakePair(QStringLiteral("Container"),
-                        QStringLiteral("%1 %2 (%3)")
-                            .arg(c.container.runtime,
-                                 c.container.name.isEmpty() ? c.container.id : c.container.name,
-                                 c.container.id));
-    kv << qMakePair(QStringLiteral("Rates"),
-                    QStringLiteral("\u2193 %1   \u2191 %2")
-                        .arg(util::formatByteRate(r.rxRate), util::formatByteRate(r.txRate)));
-    kv << qMakePair(QStringLiteral("Totals"),
-                    QStringLiteral("\u2193 %1   \u2191 %2")
-                        .arg(util::formatBytes(c.rxBytes), util::formatBytes(c.txBytes)));
-    kv << qMakePair(QStringLiteral("Packets"),
-                    QStringLiteral("\u2193 %1   \u2191 %2")
-                        .arg(c.rxPackets).arg(c.txPackets));
-
-    QStringList out;
-    for (int i = 0; i < kv.size(); ++i) {
-        const QChar branch = (i == kv.size() - 1) ? QChar(0x2514) : QChar(0x251c);
-        out << QStringLiteral("   %1\u2500 %2  %3")
-                   .arg(branch).arg(kv[i].first.leftJustified(10), kv[i].second);
-    }
-    return out;
+        rows << SettingRow{QStringLiteral("Container"),
+                           QStringLiteral("%1 %2 (%3)")
+                               .arg(c.container.runtime,
+                                    c.container.name.isEmpty() ? c.container.id : c.container.name,
+                                    c.container.id), {}};
+    rows << SettingRow{QStringLiteral("RX rate"), util::formatByteRate(r.rxRate), {}};
+    rows << SettingRow{QStringLiteral("TX rate"), util::formatByteRate(r.txRate), {}};
+    rows << SettingRow{QStringLiteral("RX total"), util::formatBytes(c.rxBytes), {}};
+    rows << SettingRow{QStringLiteral("TX total"), util::formatBytes(c.txBytes), {}};
+    rows << SettingRow{QStringLiteral("Packets"),
+                       QStringLiteral("rx %1  tx %2").arg(c.rxPackets).arg(c.txPackets), {}};
+    return rows;
 }
 
 inline Role rowRoleForInterface(const aggregate::InterfaceAggregator::Row &r)
@@ -430,17 +422,9 @@ inline QString groupLabelFor(GroupBy g, const Connection &c)
 }
 
 // --- settings model ---------------------------------------------------------
-// SettingRow is the rendering DTO for a modal list entry (label + value +
-// per-row help), shared by Screen and the declarative settings model in
-// TuiApp. onOff() is the common bool formatter. The settings list itself is
-// built imperatively in TuiApp (each row carries value()/adjust() closures) so
+// onOff() is the common bool formatter. The settings list itself is built
+// imperatively in TuiApp (each row carries value()/adjust() closures) so
 // adding a preference is a one-liner there, not a switch case here.
-
-struct SettingRow {
-    QString label;
-    QString value;  // human value: theme name, "on"/"off", "1000 ms", …
-    QString help;   // aptitude-style one-line description
-};
 
 inline QString onOff(bool v)
 {

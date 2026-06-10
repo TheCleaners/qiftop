@@ -131,6 +131,10 @@ void TuiApp::handleKey(int key)
         handleInfoKey(key);
         return;
     }
+    if (m_overlay == Overlay::Detail) {
+        handleDetailKey(key);
+        return;
+    }
     if (m_filterEditing) {
         handleFilterKey(key);
         return;
@@ -243,21 +247,18 @@ void TuiApp::handleKey(int key)
     case KEY_HOME:
         moveCursor(-(std::numeric_limits<int>::max() / 2));
         break;
-    // --- expand / collapse the current row (aptitude-style detail tree) ---
+    // --- open the per-row detail inspector (modal overlay) ---
     case '\n':
     case '\r':
     case KEY_ENTER:
     case ' ':
-        toggleExpand(0);
-        break;
     case 'l':
     case KEY_RIGHT:
-        toggleExpand(+1);
+        openDetail();
         break;
     case 'h':
     case KEY_LEFT:
-        toggleExpand(-1);
-        break;
+        break; // reserved (no inline collapse in the live views)
     case KEY_RESIZE:
         break; // Screen reads the new size on the next render
     default:
@@ -278,9 +279,6 @@ Frame TuiApp::buildFrame()
     double aggRx = 0.0, aggTx = 0.0;
 
     m_rowRefs.clear();
-    const auto marker = [](bool open) {
-        return open ? QStringLiteral("\u25be ") : QStringLiteral("\u25b8 "); // ▾ ▸
-    };
 
     if (m_view == View::Interfaces) {
         f.sortCol  = m_ifaceSortCol;
@@ -290,26 +288,14 @@ Frame TuiApp::buildFrame()
             sortedInterfaceIndices(rows, m_ifaceSortCol, m_ifaceSortDesc);
         for (int i : order) {
             const auto &row = rows[i];
-            const QString key = interfaceKey(row);
-            const bool open = m_expandedIface.contains(key);
-            QStringList cells = cellsForInterface(row);
-            cells[0] = marker(open) + cells[0];
-            f.rows     << cells;
+            f.rows     << cellsForInterface(row);
             f.rowRoles << rowRoleForInterface(row);
             const double cr = combinedRate(row);
             rates << cr;
             maxRate = std::max(maxRate, cr);
             aggRx += row.rxRate;
             aggTx += row.txRate;
-            m_rowRefs << RowRef{true, key};
-            if (open) {
-                for (const QString &dl : interfaceDetailLines(row)) {
-                    f.rows     << QStringList{dl};
-                    f.rowRoles << Role::Detail;
-                    rates      << 0.0;
-                    m_rowRefs  << RowRef{false, QString()};
-                }
-            }
+            m_rowRefs << RowRef{true, interfaceKey(row)};
         }
     } else {
         f.sortCol  = m_connSortCol;
@@ -347,26 +333,14 @@ Frame TuiApp::buildFrame()
         if (m_groupBy == GroupBy::None) {
             for (int i : matched) {
                 const auto &row = rows[i];
-                const QString key = connectionKey(row);
-                const bool open = m_expandedConn.contains(key);
-                QStringList cells = cellsForConnection(*m_connAgg, row);
-                cells[0] = marker(open) + cells[0];
-                f.rows     << cells;
+                f.rows     << cellsForConnection(*m_connAgg, row);
                 f.rowRoles << connRole(row);
                 const double cr = combinedRate(row);
                 rates << cr;
                 maxRate = std::max(maxRate, cr);
                 aggRx += row.rxRate;
                 aggTx += row.txRate;
-                m_rowRefs << RowRef{true, key};
-                if (open) {
-                    for (const QString &dl : connectionDetailLines(*m_connAgg, row)) {
-                        f.rows     << QStringList{dl};
-                        f.rowRoles << Role::Detail;
-                        rates      << 0.0;
-                        m_rowRefs  << RowRef{false, QString()};
-                    }
-                }
+                m_rowRefs << RowRef{true, connectionKey(row)};
             }
         } else {
             // Bucket by group key, preserving first-appearance order (which is
@@ -389,7 +363,7 @@ Frame TuiApp::buildFrame()
                     grb += rows[i].current.rxBytes;
                     gtb += rows[i].current.txBytes;
                 }
-                // Group header row (aggregated, not expandable).
+                // Group header row (aggregated; not a selectable target).
                 const QString label = groupLabelFor(m_groupBy, rows[members.first()].current);
                 f.rows << QStringList{
                     QStringLiteral("%1  (%2)").arg(label).arg(members.size()),
@@ -402,27 +376,17 @@ Frame TuiApp::buildFrame()
                 aggRx += grx;
                 aggTx += gtx;
                 m_rowRefs << RowRef{false, QString()};
-                // Member rows (indented, expandable).
+                // Member rows (indented in the flow column).
                 for (int i : members) {
                     const auto &row = rows[i];
-                    const QString key = connectionKey(row);
-                    const bool open = m_expandedConn.contains(key);
                     QStringList mc = cellsForConnection(*m_connAgg, row);
-                    mc[0] = QStringLiteral("  ") + marker(open) + mc[0];
+                    mc[0] = QStringLiteral("  ") + mc[0];
                     f.rows     << mc;
                     f.rowRoles << connRole(row);
                     const double cr = combinedRate(row);
                     rates << cr;
                     maxRate = std::max(maxRate, cr);
-                    m_rowRefs << RowRef{true, key};
-                    if (open) {
-                        for (const QString &dl : connectionDetailLines(*m_connAgg, row)) {
-                            f.rows     << QStringList{QStringLiteral("  ") + dl};
-                            f.rowRoles << Role::Detail;
-                            rates      << 0.0;
-                            m_rowRefs  << RowRef{false, QString()};
-                        }
-                    }
+                    m_rowRefs << RowRef{true, connectionKey(row)};
                 }
             }
         }
@@ -462,6 +426,15 @@ Frame TuiApp::buildFrame()
         f.cursor = -1;
     } else {
         cursor = std::clamp(cursor, 0, total - 1);
+        // Never rest on a non-selectable row (a group header): snap to the
+        // nearest selectable one so j/k and Enter always act on a real row.
+        if (cursor < m_rowRefs.size() && !m_rowRefs[cursor].selectable) {
+            int up = cursor, dn = cursor;
+            while (dn < total && dn < m_rowRefs.size() && !m_rowRefs[dn].selectable) ++dn;
+            while (up >= 0 && up < m_rowRefs.size() && !m_rowRefs[up].selectable) --up;
+            cursor = (dn < total && dn < m_rowRefs.size()) ? dn
+                   : (up >= 0 ? up : cursor);
+        }
         if (body > 0) {
             if (cursor < scroll)
                 scroll = cursor;
@@ -492,7 +465,7 @@ Frame TuiApp::buildFrame()
             {QStringLiteral("q"),     QStringLiteral("quit")},
             {QStringLiteral("Tab"),   QStringLiteral("view")},
             {QStringLiteral("jk"),    QStringLiteral("move")},
-            {QStringLiteral("\u21b5"), QStringLiteral("expand")},
+            {QStringLiteral("\u21b5"), QStringLiteral("details")},
             {QStringLiteral("s/f"),   QStringLiteral("sort")},
             {QStringLiteral("g"),     QStringLiteral("group")},
             {QStringLiteral("/"),     QStringLiteral("filter")},
@@ -508,6 +481,31 @@ Frame TuiApp::buildFrame()
 
 void TuiApp::buildModal(Frame &f) const
 {
+    if (m_overlay == Overlay::Detail) {
+        // Live per-row inspector: re-resolve the target by its stable key each
+        // frame so rates stay fresh and a vanished flow is handled gracefully.
+        f.modal.visible    = true;
+        f.modal.selectable = false;
+        f.modal.footer     = QStringLiteral("↑↓ next/prev · any other key closes");
+        if (m_detailView == View::Interfaces) {
+            for (const auto &r : m_ifaceAgg->rows())
+                if (interfaceKey(r) == m_detailKey) {
+                    f.modal.title = QStringLiteral("Interface — %1").arg(r.current.name);
+                    f.modal.items = interfaceDetailRows(r);
+                    return;
+                }
+        } else {
+            for (const auto &r : m_connAgg->rows())
+                if (connectionKey(r) == m_detailKey) {
+                    f.modal.title = QStringLiteral("Connection — %1").arg(m_connAgg->protoLabel(r.current));
+                    f.modal.items = connectionDetailRows(*m_connAgg, r);
+                    return;
+                }
+        }
+        f.modal.title = QStringLiteral("Detail");
+        f.modal.items = { SettingRow{QStringLiteral("(no longer present)"), {}, {}} };
+        return;
+    }
     if (m_overlay == Overlay::Settings) {
         f.modal.visible  = true;
         f.modal.title    = QStringLiteral("Settings");
@@ -535,8 +533,7 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.items = {
             row(QStringLiteral("Tab / 1 / 2"), QStringLiteral("Switch view (Interfaces / Connections)")),
             row(QStringLiteral("↑↓ / j k"),    QStringLiteral("Move the current-line cursor")),
-            row(QStringLiteral("Enter / Space"), QStringLiteral("Expand / collapse row details")),
-            row(QStringLiteral("l / h"),        QStringLiteral("Expand / collapse the current row")),
+            row(QStringLiteral("Enter / Space"), QStringLiteral("Open the row detail inspector")),
             row(QStringLiteral("PgUp/PgDn ^U/^D"), QStringLiteral("Move cursor by a page / half page")),
             row(QStringLiteral("Home/End  G"),  QStringLiteral("Jump to top / bottom")),
             row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
@@ -601,29 +598,69 @@ void TuiApp::onDataChanged()
 void TuiApp::moveCursor(int delta)
 {
     int &cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
-    // Clamp against the last frame's row count; buildFrame re-clamps too.
     const int total = m_rowRefs.size();
     if (total <= 0) { cursor = 0; requestRedraw(); return; }
-    cursor = std::clamp(cursor + delta, 0, total - 1);
+
+    const int step = (delta >= 0) ? 1 : -1;
+    int remaining = std::abs(delta);
+    int pos = std::clamp(cursor, 0, total - 1);
+    // Advance |delta| selectable rows, hopping over group headers (the only
+    // non-selectable rows now that detail is a modal, not inline).
+    while (remaining > 0) {
+        int next = pos + step;
+        while (next >= 0 && next < total && !m_rowRefs[next].selectable)
+            next += step;                 // skip group headers
+        if (next < 0 || next >= total)
+            break;                        // hit an edge — stay on the last good row
+        pos = next;
+        --remaining;
+    }
+    // If we started on a non-selectable row (e.g. just toggled grouping), make
+    // sure we land on a selectable one in the requested direction.
+    if (!m_rowRefs[pos].selectable) {
+        int p = pos;
+        while (p >= 0 && p < total && !m_rowRefs[p].selectable) p += step;
+        if (p < 0 || p >= total) { p = pos; while (p >= 0 && p < total && !m_rowRefs[p].selectable) p -= step; }
+        if (p >= 0 && p < total) pos = p;
+    }
+    cursor = pos;
     requestRedraw();
 }
 
-void TuiApp::toggleExpand(int dir)
+void TuiApp::openDetail()
 {
     const int cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
     if (cursor < 0 || cursor >= m_rowRefs.size())
         return;
     const RowRef &ref = m_rowRefs[cursor];
-    if (!ref.expandable || ref.key.isEmpty())
-        return;
-    QSet<QString> &exp = (m_view == View::Interfaces) ? m_expandedIface : m_expandedConn;
-    const bool isOpen = exp.contains(ref.key);
-    if (dir > 0)            // expand only
-        exp.insert(ref.key);
-    else if (dir < 0)       // collapse only
-        exp.remove(ref.key);
-    else                    // toggle
-        isOpen ? (void)exp.remove(ref.key) : (void)exp.insert(ref.key);
+    if (!ref.selectable || ref.key.isEmpty())
+        return;                           // group header / empty — nothing to inspect
+    m_detailKey  = ref.key;
+    m_detailView = m_view;
+    m_overlay    = Overlay::Detail;
+    requestRedraw();
+}
+
+void TuiApp::handleDetailKey(int key)
+{
+    // The detail panel is a transient inspector. j/k re-target it to the
+    // previous/next row (browse details without closing); anything else closes.
+    switch (key) {
+    case 'j':
+    case KEY_DOWN:
+    case 'k':
+    case KEY_UP:
+        moveCursor(key == 'j' || key == KEY_DOWN ? 1 : -1);
+        if (const int c = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
+            c >= 0 && c < m_rowRefs.size() && m_rowRefs[c].selectable)
+            m_detailKey = m_rowRefs[c].key;
+        break;
+    case KEY_RESIZE:
+        break;
+    default:
+        m_overlay = Overlay::None;        // Esc / Enter / q / l / any → close
+        break;
+    }
     requestRedraw();
 }
 
