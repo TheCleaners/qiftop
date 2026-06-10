@@ -112,14 +112,23 @@ int main(int argc, char *argv[])
         QStringLiteral("Poll interval in milliseconds (default 1000)."),
         QStringLiteral("ms"), QStringLiteral("1000"));
     QCommandLineOption themeOpt(QStringLiteral("theme"),
-        QStringLiteral("Colour theme: %1 (default dark; 't' cycles live).")
+        QStringLiteral("Colour theme: %1 (default dark; 'z' cycles live).")
             .arg(qiftop::tui::themeNames().join(QStringLiteral(", "))),
         QStringLiteral("name"), QStringLiteral("dark"));
+    QCommandLineOption viewOpt(QStringLiteral("view"),
+        QStringLiteral("Initial tab: interfaces | connections (default: last used)."),
+        QStringLiteral("tab"));
+    QCommandLineOption groupOpt(QStringLiteral("group"),
+        QStringLiteral("Group connections: off | interface | process | container "
+                       "(default: last used)."),
+        QStringLiteral("mode"));
     parser.addOption(sessionOpt);
     parser.addOption(noAgentOpt);
     parser.addOption(verboseOpt);
     parser.addOption(intervalOpt);
     parser.addOption(themeOpt);
+    parser.addOption(viewOpt);
+    parser.addOption(groupOpt);
     parser.process(app);
 
     util::logging::setVerbose(parser.isSet(verboseOpt));
@@ -198,7 +207,9 @@ int main(int argc, char *argv[])
 
     qiftop::tui::TuiApp tui(&screen, &ifaceAgg, &connAgg, sourceLabel,
                             parser.isSet(themeOpt) ? parser.value(themeOpt) : QString(),
-                            parser.isSet(intervalOpt) ? pollMs : 0);
+                            parser.isSet(intervalOpt) ? pollMs : 0,
+                            parser.isSet(viewOpt) ? parser.value(viewOpt) : QString(),
+                            parser.isSet(groupOpt) ? parser.value(groupOpt) : QString());
 
     // The monitors live here, so give the controller a way to push a new poll
     // interval (chosen at runtime in Settings) down to the data source. This

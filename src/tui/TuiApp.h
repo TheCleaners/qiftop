@@ -30,6 +30,8 @@ public:
            QString sourceLabel,
            QString themeName,
            int pollMs,
+           QString viewName = {},   // CLI override: "interfaces"/"connections"
+           QString groupName = {},  // CLI override: off/interface/process/container
            QObject *parent = nullptr);
 
     // Called by main's QSocketNotifier after draining curses input.

@@ -26,6 +26,8 @@ TuiApp::TuiApp(Screen *screen,
                QString sourceLabel,
                QString themeName,
                int pollMs,
+               QString viewName,
+               QString groupName,
                QObject *parent)
     : QObject(parent)
     , m_screen(screen)
@@ -36,7 +38,7 @@ TuiApp::TuiApp(Screen *screen,
     m_themes = builtinThemes();
 
     // Restore persisted state first, then let explicit command-line options
-    // (--theme, -i/--interval > 0) override the saved values.
+    // (--theme, -i/--interval, --view, --group) override the saved values.
     loadSettings();
     if (!themeName.isEmpty()) {
         for (int i = 0; i < m_themes.size(); ++i) {
@@ -48,6 +50,18 @@ TuiApp::TuiApp(Screen *screen,
     }
     if (pollMs > 0)                          // explicit CLI interval wins
         m_pollMs = std::clamp(pollMs, 100, 10000);
+    if (!viewName.isEmpty()) {
+        const QString v = viewName.trimmed().toLower();
+        if (v.startsWith(QLatin1Char('i')))
+            m_view = View::Interfaces;
+        else if (v.startsWith(QLatin1Char('c')))
+            m_view = View::Connections;
+    }
+    if (!groupName.isEmpty()) {
+        const GroupBy g = groupByFromName(groupName);
+        if (g != GroupBy::Count)             // ignore an unrecognised token
+            m_groupBy = g;
+    }
     if (m_screen)
         m_screen->setTheme(m_themes[m_themeIdx]);
     applyAggregatorSettings();   // push restored DNS/UDP/smoothing toggles

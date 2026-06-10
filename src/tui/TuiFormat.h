@@ -266,6 +266,22 @@ inline QString groupByName(GroupBy g)
     return QStringLiteral("off");
 }
 
+// Parse a group-by name (CLI / config). Returns GroupBy::Count when the token
+// is unrecognised so callers can ignore an invalid override.
+inline GroupBy groupByFromName(const QString &name)
+{
+    const QString n = name.trimmed().toLower();
+    if (n == QLatin1String("off") || n == QLatin1String("none") || n == QLatin1String("flat"))
+        return GroupBy::None;
+    if (n == QLatin1String("interface") || n == QLatin1String("iface") || n == QLatin1String("if"))
+        return GroupBy::Interface;
+    if (n == QLatin1String("process") || n == QLatin1String("proc"))
+        return GroupBy::Process;
+    if (n == QLatin1String("container") || n == QLatin1String("ctr"))
+        return GroupBy::Container;
+    return GroupBy::Count; // unrecognised
+}
+
 // Stable bucket key. Empty string is a valid key (the "unattributed" bucket).
 inline QString groupKeyFor(GroupBy g, const Connection &c)
 {
