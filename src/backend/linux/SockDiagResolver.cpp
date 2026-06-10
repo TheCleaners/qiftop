@@ -86,6 +86,7 @@ struct SockDiagResolver::Impl {
     qint64                      lastProcWalkMs = -1;
     bool                        ready = false;
     bool                        warnedAboutEacces = false;
+    bool                        warnedAboutCap = false;
 
     // ----- netlink helpers (delegate to sockdiag:: free functions) ---------
 
@@ -136,7 +137,17 @@ struct SockDiagResolver::Impl {
         // condition is steady-state, not a once-per-tick race).
         int readlinkOk = 0;
         int readlinkEacces = 0;
+        bool capped = false;
         while (auto *de = ::readdir(procDir)) {
+            // M9: hard cap — a malicious fd flood (millions of socket
+            // fds) must not stall or OOM the root agent. Stop the walk
+            // at the cap; the maps are rebuilt from scratch next TTL,
+            // so this is the bounded-cache discipline of AGENTS.md §8a
+            // rule 8 applied to a per-tick map.
+            if (inodeToPid.size() >= sockdiag::kMaxSocketEntries) {
+                capped = true;
+                break;
+            }
             const char *name = de->d_name;
             if (name[0] < '0' || name[0] > '9') continue;
             char *endp = nullptr;
@@ -181,6 +192,13 @@ struct SockDiagResolver::Impl {
             ::closedir(fdDir);
         }
         ::closedir(procDir);
+        if (capped && !warnedAboutCap) {
+            qWarning("SockDiagResolver: /proc fd walk hit the %d-socket "
+                     "cap; flows owned by unwalked processes will report "
+                     "pid=0 this tick (warning once; suppressing repeats).",
+                     sockdiag::kMaxSocketEntries);
+            warnedAboutCap = true;
+        }
         if (!warnedAboutEacces && readlinkOk == 0 && readlinkEacces > 0) {
             qWarning("SockDiagResolver: every /proc/<pid>/fd readlink failed "
                      "with EACCES (%d attempts). Process attribution will "

@@ -42,6 +42,7 @@ public:
     std::optional<ProcessInfo> enrichPid(qint32 pid) override
     {
         ++enrichCalls[pid];
+        if (enrichGenerator) return enrichGenerator(pid, enrichCalls[pid]);
         if (auto it = m_processByPid.constFind(pid);
             it != m_processByPid.constEnd())
             return it.value();
@@ -51,6 +52,7 @@ public:
     std::optional<ContainerInfo> resolveContainerForPid(qint32 pid) override
     {
         ++containerCalls[pid];
+        if (containerGenerator) return containerGenerator(pid, containerCalls[pid]);
         if (auto it = m_containerByPid.constFind(pid);
             it != m_containerByPid.constEnd())
             return it.value();
@@ -83,6 +85,14 @@ public:
     QHash<qint32, int> enrichCalls;
     QHash<qint32, int> containerCalls;
     QHash<qint32, int> chainCalls;
+
+    // Optional per-call generators (PID-reuse tests): when set, they
+    // take precedence over the static maps and receive the per-PID
+    // call number so each "incarnation" can return different data.
+    std::function<std::optional<ProcessInfo>(qint32 pid, int callNo)>
+        enrichGenerator;
+    std::function<std::optional<ContainerInfo>(qint32 pid, int callNo)>
+        containerGenerator;
 
 private:
     QStringList                 m_caps;
@@ -296,6 +306,75 @@ private slots:
         QCOMPARE(r.pidCalls, 1);
         QVERIFY(r.enrichCalls.isEmpty());
         QVERIFY(r.containerCalls.isEmpty());
+    }
+
+    void pidReuseWithinPassGetsFreshAttribution()
+    {
+        // H2 / AGENTS.md §8a rule 2: two flows resolve the SAME pid,
+        // but the kernel recycled it between them (the injected
+        // starttime probe reports a different starttime for each
+        // flow). The (pid, starttime) memo must trigger a SECOND
+        // resolver lookup for the new incarnation instead of serving
+        // the previous owner's process/container attribution.
+        FakeResolver r;
+        ProcessInfo p; p.pid = 777; p.uid = 1; p.comm = QStringLiteral("seed");
+        r.setProcessForLocalPort(8080, p);
+        r.setProcessForLocalPort(8081, p);   // both flows resolve pid 777
+        r.enrichGenerator = [](qint32 pid, int callNo) {
+            ProcessInfo i;
+            i.pid  = pid;
+            i.uid  = 1;
+            i.comm = QStringLiteral("incarnation%1").arg(callNo);
+            return std::optional<ProcessInfo>(i);
+        };
+        r.containerGenerator = [](qint32, int callNo) {
+            return std::optional<ContainerInfo>(
+                ContainerInfo{QStringLiteral("docker"),
+                              QStringLiteral("cid-%1").arg(callNo), {}});
+        };
+
+        qiftop::agent::AttributionOptions opts;
+        quint64 nextStart = 100;
+        opts.startTimeForPid = [&nextStart](qint32) { return nextStart++; };
+
+        QList<Connection> flows = { makeFlow(8080), makeFlow(8081) };
+        qiftop::agent::attributeFlows(flows, &r, opts);
+
+        // No cross-contamination: each incarnation got its own lookup.
+        QCOMPARE(r.enrichCalls.value(777), 2);
+        QCOMPARE(r.containerCalls.value(777), 2);
+        QCOMPARE(flows[0].process.comm, QStringLiteral("incarnation1"));
+        QCOMPARE(flows[1].process.comm, QStringLiteral("incarnation2"));
+        QCOMPARE(flows[0].container.id, QStringLiteral("cid-1"));
+        QCOMPARE(flows[1].container.id, QStringLiteral("cid-2"));
+    }
+
+    void samePidSameStartTimeStillMemoised()
+    {
+        // The (pid, starttime) key must NOT cost the memo its benefit:
+        // 50 flows from one stable (pid, starttime) = 1 enrich + 1
+        // container lookup, exactly as before.
+        FakeResolver r;
+        ProcessInfo p; p.pid = 777; p.uid = 1; p.comm = QStringLiteral("redis");
+        for (quint16 port = 9100; port < 9150; ++port)
+            r.setProcessForLocalPort(port, p);
+        r.setContainerForPid(777,
+            ContainerInfo{QStringLiteral("docker"),
+                          QStringLiteral("abc123def456"), {}});
+
+        qiftop::agent::AttributionOptions opts;
+        opts.startTimeForPid = [](qint32) { return quint64(100); };
+
+        QList<Connection> flows;
+        for (quint16 port = 9100; port < 9150; ++port)
+            flows << makeFlow(port);
+        qiftop::agent::attributeFlows(flows, &r, opts);
+
+        QCOMPARE(r.pidCalls, 50);
+        QCOMPARE(r.enrichCalls.value(777), 1);
+        QCOMPARE(r.containerCalls.value(777), 1);
+        for (const auto &c : flows)
+            QCOMPARE(c.container.id, QStringLiteral("abc123def456"));
     }
 };
 

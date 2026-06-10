@@ -99,6 +99,12 @@ QString userNameForUid(uint uid)
     // so we don't want it on every row render.
     static QReadWriteLock lock;
     static QHash<uint, QString> cache;
+    // Bounded-cache discipline (AGENTS.md §8a rule 8): a flood of
+    // distinct uids (e.g. attacker-controlled flows on a multi-tenant
+    // host) must not grow the cache unboundedly. Clear-on-overflow —
+    // the hot set repopulates immediately. Generous: real hosts have
+    // a few dozen uids.
+    constexpr int kCacheMaxItems = 4096;
     {
         QReadLocker rl(&lock);
         if (const auto it = cache.constFind(uid); it != cache.constEnd())
@@ -118,6 +124,7 @@ QString userNameForUid(uint uid)
         name = QString::fromLocal8Bit(result->pw_name);
 
     QWriteLocker wl(&lock);
+    if (cache.size() >= kCacheMaxItems) cache.clear();
     cache.insert(uid, name);   // cache empty results too (avoids re-probing)
     return name;
 #else

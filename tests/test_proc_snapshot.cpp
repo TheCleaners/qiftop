@@ -67,6 +67,15 @@ private slots:
     {
         QVERIFY(!pidStartTime(0x7fffffff).has_value());
     }
+
+    // pid <= 0 is the "unattributed" sentinel everywhere in the
+    // resolver chain — it must short-circuit to nullopt, never open
+    // /proc/0/stat or /proc/-1/stat.
+    void nonPositivePidReturnsNullopt()
+    {
+        QVERIFY(!pidStartTime(0).has_value());
+        QVERIFY(!pidStartTime(-1).has_value());
+    }
 };
 
 QTEST_MAIN(TestProcSnapshot)

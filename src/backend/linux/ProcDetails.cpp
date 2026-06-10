@@ -66,6 +66,14 @@ ProcessDetails readProcessDetails(qint32 pid, const QString &procRoot)
     ProcessDetails d;
     if (pid <= 0) return d;
 
+    // PID-reuse guard (AGENTS.md §8a rule 2): snapshot starttime BEFORE
+    // any other /proc/<pid>/* read and re-check it AFTER. If the pid
+    // was recycled mid-read, the fields would mix two unrelated
+    // processes — return invalid instead. starttime==0 means the stat
+    // read itself failed (pid gone / EACCES) → invalid too.
+    const quint64 startBefore = readStartTimeJiffies(procRoot, pid);
+    if (startBefore == 0) return d;
+
     quint32 uid = 0;
     const QString comm = readStatusComm(procRoot, pid, uid);
     if (comm.isEmpty()) {
@@ -73,13 +81,23 @@ ProcessDetails readProcessDetails(qint32 pid, const QString &procRoot)
         // sees valid=false, pid=0.
         return d;
     }
+    const QString cmdline = readCmdline(procRoot, pid);
+    const QString exe     = readSymlink(procRoot, pid, "exe");
+    const QString cwd     = readSymlink(procRoot, pid, "cwd");
+
+    if (readStartTimeJiffies(procRoot, pid) != startBefore) {
+        // PID recycled while we were reading — the fields above may
+        // belong to two different processes. Serve nothing.
+        return d;
+    }
+
     d.pid              = pid;
     d.uid              = uid;
     d.comm             = comm;
-    d.cmdline          = readCmdline(procRoot, pid);
-    d.exe              = readSymlink(procRoot, pid, "exe");
-    d.cwd              = readSymlink(procRoot, pid, "cwd");
-    d.startTimeJiffies = readStartTimeJiffies(procRoot, pid);
+    d.cmdline          = cmdline;
+    d.exe              = exe;
+    d.cwd              = cwd;
+    d.startTimeJiffies = startBefore;
     d.valid            = true;
     return d;
 }

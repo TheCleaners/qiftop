@@ -28,6 +28,9 @@ struct ProcessDetails {
 // Read /proc/<pid>/{status, cmdline, exe, cwd, stat}. Returns a struct
 // with valid=false (and pid=0) when /proc/<pid>/status can't be opened
 // at all — typically because the PID is gone or we lack permission.
+// PID-reuse safe: starttime is snapshotted before the reads and
+// re-checked after; a mismatch (pid recycled mid-read) also yields
+// valid=false rather than fields mixed from two processes.
 //
 // procRoot defaults to "/proc" in production; tests pass a fixture
 // directory rooted at a tempdir.

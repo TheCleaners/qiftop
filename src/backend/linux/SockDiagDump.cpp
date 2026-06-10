@@ -21,55 +21,45 @@ namespace qiftop::backend::sockdiag {
 
 namespace {
 
-QHostAddress addrFromDiag(quint8 family, const __be32 buf[4])
+// L3: these helpers run inside per-netns loops (up to 256 namespaces ×
+// 4 dumps per tick, every 5 s). A steady-state failure (kernel without
+// sock_diag, sandbox blocking netlink) would otherwise log per call
+// and drown the journal. Warn ONCE per process lifetime per failure
+// site — the conditions are steady-state, not per-tick races.
+bool warnOnce(QAtomicInt &flag)
 {
-    if (family == AF_INET) {
-        return QHostAddress(qFromBigEndian<quint32>(buf[0]));
-    }
-    Q_IPV6ADDR v6;
-    std::memcpy(&v6, buf, sizeof(v6));
-    return QHostAddress(v6);
+    return flag.testAndSetRelaxed(0, 1);
 }
+
+QAtomicInt g_warnedSocket  = 0;
+QAtomicInt g_warnedBind    = 0;
+QAtomicInt g_warnedSend    = 0;
+QAtomicInt g_warnedRecv    = 0;
+QAtomicInt g_warnedNlError = 0;
+QAtomicInt g_warnedCap     = 0;
 
 } // namespace
-
-QByteArray makeFlowKey(quint8 proto,
-                       const QHostAddress &localAddr,  quint16 localPort,
-                       const QHostAddress &remoteAddr, quint16 remotePort)
-{
-    QByteArray k;
-    k.reserve(48);
-    k.append(static_cast<char>(proto));
-    const auto append = [&](const QHostAddress &a, quint16 port) {
-        if (a.protocol() == QAbstractSocket::IPv6Protocol) {
-            Q_IPV6ADDR v6 = a.toIPv6Address();
-            k.append(reinterpret_cast<const char*>(&v6), sizeof(v6));
-        } else {
-            quint32 v4 = qToBigEndian(a.toIPv4Address());
-            k.append(reinterpret_cast<const char*>(&v4), sizeof(v4));
-        }
-        quint16 p = qToBigEndian(port);
-        k.append(reinterpret_cast<const char*>(&p), sizeof(p));
-    };
-    append(localAddr,  localPort);
-    append(remoteAddr, remotePort);
-    return k;
-}
 
 int openSockDiagSocket()
 {
     const int fd = ::socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC,
                             NETLINK_SOCK_DIAG);
     if (fd < 0) {
-        qCWarning(lcVerbose) << "sockdiag::openSockDiagSocket: socket:"
-                             << std::strerror(errno);
+        if (warnOnce(g_warnedSocket)) {
+            qCWarning(lcVerbose) << "sockdiag::openSockDiagSocket: socket:"
+                                 << std::strerror(errno)
+                                 << "(warning once; suppressing repeats)";
+        }
         return -1;
     }
     sockaddr_nl sa{};
     sa.nl_family = AF_NETLINK;
     if (::bind(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) != 0) {
-        qCWarning(lcVerbose) << "sockdiag::openSockDiagSocket: bind:"
-                             << std::strerror(errno);
+        if (warnOnce(g_warnedBind)) {
+            qCWarning(lcVerbose) << "sockdiag::openSockDiagSocket: bind:"
+                                 << std::strerror(errno)
+                                 << "(warning once; suppressing repeats)";
+        }
         ::close(fd);
         return -1;
     }
@@ -96,8 +86,11 @@ bool dumpSocketsViaFd(int nlFd, quint8 family, quint8 proto,
     msg.req.id             = {};
 
     if (::send(nlFd, &msg, sizeof(msg), 0) < 0) {
-        qCWarning(lcVerbose) << "sockdiag::dumpSocketsViaFd: send:"
-                             << std::strerror(errno);
+        if (warnOnce(g_warnedSend)) {
+            qCWarning(lcVerbose) << "sockdiag::dumpSocketsViaFd: send:"
+                                 << std::strerror(errno)
+                                 << "(warning once; suppressing repeats)";
+        }
         return false;
     }
 
@@ -106,10 +99,17 @@ bool dumpSocketsViaFd(int nlFd, quint8 family, quint8 proto,
         ssize_t n = ::recv(nlFd, buf.data(), buf.size(), MSG_TRUNC);
         if (n < 0) {
             if (errno == EINTR) continue;
-            qCWarning(lcVerbose) << "sockdiag::dumpSocketsViaFd: recv:"
-                                 << std::strerror(errno);
+            if (warnOnce(g_warnedRecv)) {
+                qCWarning(lcVerbose) << "sockdiag::dumpSocketsViaFd: recv:"
+                                     << std::strerror(errno)
+                                     << "(warning once; suppressing repeats)";
+            }
             return false;
         }
+        // MSG_TRUNC makes recv() report the REAL datagram length even
+        // when it exceeded our buffer — in that case the tail was
+        // discarded by the kernel and parsing the partial buffer would
+        // read decapitated messages. Bail on the whole dump.
         if (n > static_cast<ssize_t>(buf.size())) {
             static QAtomicInt warnedOnce = 0;
             if (warnedOnce.testAndSetRelaxed(0, 1)) {
@@ -120,31 +120,31 @@ bool dumpSocketsViaFd(int nlFd, quint8 family, quint8 proto,
             return false;
         }
         if (n == 0) return true;
-        for (auto *nh = reinterpret_cast<nlmsghdr*>(buf.data());
-             NLMSG_OK(nh, n);
-             nh = NLMSG_NEXT(nh, n)) {
-            if (nh->nlmsg_type == NLMSG_DONE) return true;
-            if (nh->nlmsg_type == NLMSG_ERROR) {
-                const auto *err = static_cast<nlmsgerr*>(NLMSG_DATA(nh));
-                if (err->error != 0) {
-                    qCWarning(lcVerbose) << "sockdiag::dumpSocketsViaFd: NLMSG_ERROR:"
-                                         << std::strerror(-err->error);
-                    return false;
-                }
-                return true;
+
+        int nlErrno = 0;
+        switch (parseDumpChunk(buf.data(), n, proto, outMap, &nlErrno)) {
+        case DumpChunkResult::Done:
+            if (outMap.size() >= kMaxSocketEntries
+                && warnOnce(g_warnedCap)) {
+                qWarning("sockdiag: socket table hit the %d-entry cap; "
+                         "flows beyond it stay unattributed this tick "
+                         "(warning once; suppressing repeats)",
+                         kMaxSocketEntries);
             }
-            if (nh->nlmsg_type != SOCK_DIAG_BY_FAMILY) continue;
-            if (nh->nlmsg_len < NLMSG_LENGTH(sizeof(inet_diag_msg))) continue;
-            const auto *m = static_cast<const inet_diag_msg*>(NLMSG_DATA(nh));
-            if (m->idiag_inode == 0) continue;
-            const auto local  = addrFromDiag(m->idiag_family, m->id.idiag_src);
-            const auto remote = addrFromDiag(m->idiag_family, m->id.idiag_dst);
-            const quint16 lport = qFromBigEndian(m->id.idiag_sport);
-            const quint16 rport = qFromBigEndian(m->id.idiag_dport);
-            outMap.insert(makeFlowKey(proto, local, lport, remote, rport),
-                          m->idiag_inode);
+            return true;
+        case DumpChunkResult::Failed:
+            if (warnOnce(g_warnedNlError)) {
+                qCWarning(lcVerbose)
+                    << "sockdiag::dumpSocketsViaFd: NLMSG_ERROR/malformed:"
+                    << (nlErrno ? std::strerror(nlErrno) : "short message")
+                    << "(warning once; suppressing repeats)";
+            }
+            return false;
+        case DumpChunkResult::NeedMore:
+            break;
         }
     }
 }
 
 } // namespace qiftop::backend::sockdiag
+

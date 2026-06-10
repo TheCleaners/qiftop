@@ -15,6 +15,9 @@
 // helper makes no extra synchronisation.
 
 #include <QList>
+#include <QtGlobal>
+
+#include <functional>
 
 struct Connection;
 
@@ -31,6 +34,17 @@ struct AttributionOptions {
     // when the agent doesn't advertise `container-chain-wire`, every
     // flow's containerChain stays empty).
     bool wantContainerChain = false;
+
+    // Identity probe for the per-pass memoisation. attributeFlows keys
+    // its per-PID memo by (pid, starttime) so a PID recycled by the
+    // kernel WITHIN one snapshot pass (AGENTS.md §8a rule 2) cannot be
+    // served the previous owner's process/container attribution.
+    // Returns the pid's current starttime in jiffies, or 0 when the
+    // pid is gone / unreadable (0 degrades the memo key to pid-only,
+    // which is still safe: an unreadable pid yields no enrichment).
+    // When null, the built-in /proc/<pid>/stat reader is used; tests
+    // inject a fake so PID reuse can be simulated without /proc.
+    std::function<quint64(qint32 pid)> startTimeForPid;
 };
 
 // Attribute `flows` in-place. Sets `c.process`, `c.container`, and

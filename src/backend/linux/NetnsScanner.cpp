@@ -208,6 +208,18 @@ private:
             // pid vanished before we got here — silent skip.
             return;
         }
+        // M8 / §8a rule 2+5: verify the fd we just opened still refers
+        // to the netns we enumerated. If repPid died and the kernel
+        // recycled it, /proc/<repPid>/ns/net now points at a DIFFERENT
+        // namespace — setns'ing into it would attribute this nsIno's
+        // flows to a stranger's sockets. fstat's st_ino is the netns
+        // identity; mismatch → silent skip (the recycled pid's netns
+        // gets its own entry on the next tick).
+        struct stat tst{};
+        if (::fstat(targetFd, &tst) != 0 || tst.st_ino != nsIno) {
+            ::close(targetFd);
+            return;
+        }
         // setns into target. If this fails (e.g. EPERM on a host with
         // no CAP_SYS_ADMIN, or ENOENT racing a destroyed netns), we
         // skip — the guard is constructed AFTER a successful setns so
@@ -248,6 +260,12 @@ private:
             for (auto it = nsKeyToInode.constBegin();
                  it != nsKeyToInode.constEnd(); ++it)
             {
+                // M9: bound the merged map (256 netns × per-ns dumps
+                // could otherwise multiply past any sane size).
+                if (outKey.size() >= sockdiag::kMaxSocketEntries) {
+                    warnMapCapOnce();
+                    break;
+                }
                 if (nsInodeToPid.contains(it.value())) {
                     outKey.insert(it.key(), it.value());
                 }
@@ -255,6 +273,10 @@ private:
             for (auto it = nsInodeToPid.constBegin();
                  it != nsInodeToPid.constEnd(); ++it)
             {
+                if (outInode.size() >= sockdiag::kMaxSocketEntries) {
+                    warnMapCapOnce();
+                    break;
+                }
                 outInode.insert(it.key(), it.value());
                 outPid.insert(it.value().pid, it.value().startTime);
             }
@@ -278,6 +300,12 @@ private:
         if (!procDir) return;
         std::vector<char> linkBuf(256);
         while (auto *de = ::readdir(procDir)) {
+            // M9: same hard cap as the merge step — a socket-fd flood
+            // inside one container must not stall/OOM the root agent.
+            if (out.size() >= sockdiag::kMaxSocketEntries) {
+                warnMapCapOnce();
+                break;
+            }
             const char *nm = de->d_name;
             if (nm[0] < '0' || nm[0] > '9') continue;
             char *endp = nullptr;
@@ -319,6 +347,19 @@ private:
         ::closedir(procDir);
     }
 
+    // M9: warn once per process lifetime when any cross-netns map hits
+    // the kMaxSocketEntries cap — flows past the cap stay unattributed,
+    // which would otherwise be an invisible failure mode.
+    void warnMapCapOnce()
+    {
+        if (m_warnedMapCap) return;
+        qWarning("NetnsScanner: cross-netns socket map hit the %d-entry "
+                 "cap; flows beyond it will report as host/unattributed "
+                 "(warning once; suppressing repeats).",
+                 sockdiag::kMaxSocketEntries);
+        m_warnedMapCap = true;
+    }
+
 private:
     NetnsScanner       *m_owner       = nullptr;
     std::atomic<bool>  *m_stop        = nullptr;
@@ -326,6 +367,7 @@ private:
     int                 m_anchorFd    = -1;
     quint64             m_anchorInode = 0;
     bool                m_warnedNetnsCap = false;
+    bool                m_warnedMapCap   = false;
 };
 
 // ===========================================================================
@@ -342,7 +384,17 @@ NetnsScanner::~NetnsScanner()
             QMetaObject::invokeMethod(m_worker, "stop", Qt::BlockingQueuedConnection);
         }
         m_thread->quit();
-        m_thread->wait(2000);
+        // H3: never delete the worker/thread until the thread has
+        // ACTUALLY stopped. A scan tick can legitimately overrun the
+        // grace period (huge /proc walk, slow sock_diag dump); deleting
+        // on a timed-out wait() would leave the still-running worker
+        // dereferencing freed m_owner / m_stop. m_stop is already set,
+        // so the tick bails at its next checkpoint — block until then.
+        if (!m_thread->wait(2000)) {
+            qCWarning(lcVerbose) << "NetnsScanner: worker still busy after"
+                                    " 2s grace; waiting for it to finish";
+            m_thread->wait();   // unbounded — correctness over latency
+        }
         // QThread::finished -> deleteLater would enqueue after the worker
         // event loop stops; delete explicitly once the netns worker thread is
         // stopped (AGENTS.md §8a lifecycle guidance).
