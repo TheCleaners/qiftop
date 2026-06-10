@@ -148,7 +148,7 @@ int Screen::cols() const { return m_active ? getmaxx(stdscr) : 0; }
 
 int Screen::bodyHeight() const
 {
-    const int h = rows() - 3; // tab line + header + footer
+    const int h = rows() - 3; // title bar + menu bar + column header
     return h > 0 ? h : 0;
 }
 
@@ -202,24 +202,39 @@ void Screen::render(const Frame &f)
         return;
     }
 
-    // --- tab line ---
+    // Fill an entire chrome line with a role's colour so lines 0 & 1 read as
+    // part of the "UI" (a coloured title bar + menu bar) distinct from content.
+    const auto fillLine = [&](int y, Role role) {
+        attrset(attrFor(role));
+        mvaddstr(y, 0, QString(width, QLatin1Char(' ')).toUtf8().constData());
+    };
+
+    // --- line 0: title / tab bar (UI chrome) ---
+    fillLine(0, Role::TitleBar);
     {
         int x = 0;
         for (int i = 0; i < f.tabs.size(); ++i) {
             const QString label = QStringLiteral(" %1 ").arg(f.tabs[i]);
-            const long a = attrFor(i == f.activeTab ? Role::TabActive : Role::TabInactive);
-            attrset(a);
+            // Active tab pops; inactive tabs blend into the title bar.
+            attrset(attrFor(i == f.activeTab ? Role::TabActive : Role::TitleBar));
             mvaddstr(0, x, label.toUtf8().constData());
             x += label.size() + 1;
         }
-        attrset(A_NORMAL);
         const QString src = f.sourceLabel;
         const int sx = width - src.size() - 1;
         if (sx > x) {
-            attrset(attrFor(Role::Accent));
+            attrset(attrFor(Role::TitleBar));
             mvaddstr(0, sx, src.toUtf8().constData());
-            attrset(A_NORMAL);
         }
+        attrset(A_NORMAL);
+    }
+
+    // --- line 1: menu / key-help bar (UI chrome) ---
+    fillLine(1, Role::Footer);
+    {
+        attrset(attrFor(Role::Footer));
+        mvaddstr(1, 0, fitCell(f.footer, width, false).toUtf8().constData());
+        attrset(A_NORMAL);
     }
 
     // --- column widths ---
@@ -264,11 +279,11 @@ void Screen::render(const Frame &f)
             headers << h;
         }
         attrset(attrFor(Role::Header));
-        putLine(1, rowText(headers));
+        putLine(2, rowText(headers));
         attrset(A_NORMAL);
     }
 
-    // --- body ---
+    // --- body (starts at line 3: title bar, menu bar, header above) ---
     const int body = bodyHeight();
     const int total = static_cast<int>(f.rows.size());
     int shown = 0;
@@ -276,37 +291,30 @@ void Screen::render(const Frame &f)
         const int idx = f.scrollOffset + i;
         const Role role = idx < f.rowRoles.size() ? f.rowRoles[idx] : Role::Normal;
         attrset(attrFor(role));
-        putLine(2 + i, rowText(f.rows[idx]));
+        putLine(3 + i, rowText(f.rows[idx]));
         attrset(A_NORMAL);
         // Row-spanning bandwidth gauge painted over the text.
         const double frac = idx < f.rowGauge.size() ? f.rowGauge[idx] : 0.0;
-        paintGauge(2 + i, width, frac, role);
+        paintGauge(3 + i, width, frac, role);
         ++shown;
     }
     const int below = total - (f.scrollOffset + shown);
     if (below > 0 && body > 0) {
         attrset(attrFor(Role::Stale));
-        putLine(2 + body - 1,
+        putLine(3 + body - 1,
                 fitCell(QStringLiteral("  … +%1 more (↓ to scroll)").arg(below),
                         width, false));
         attrset(A_NORMAL);
     }
 
-    // --- footer ---
-    {
-        attrset(attrFor(Role::Footer));
-        putLine(height - 1, fitCell(f.footer, width, false));
-        attrset(A_NORMAL);
-    }
-
-    // --- modal settings panel (drawn last, on top of everything) ---
-    if (f.settings.visible)
-        renderSettings(f.settings);
+    // --- modal panel (drawn last, on top of everything) ---
+    if (f.modal.visible)
+        renderModal(f.modal);
 
     refresh();
 }
 
-void Screen::renderSettings(const SettingsModal &s) const
+void Screen::renderModal(const ModalPanel &s) const
 {
     if (!m_active)
         return;

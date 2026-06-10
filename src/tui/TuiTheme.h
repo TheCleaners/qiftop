@@ -27,6 +27,7 @@ enum class Role {
     Forwarded,     // routed THROUGH this host (neither end is us)
     Stale,         // flow absent from the latest tick
     Accent,        // source label, hints
+    TitleBar,      // line 0 chrome fill (tab/title bar)
     Count
 };
 
@@ -95,7 +96,7 @@ inline QList<Theme> builtinThemes()
     using namespace attr;
     QList<Theme> all = {
         makeTheme(QStringLiteral("dark"), {
-            {Role::Header,        {Cyan,    Default, Bold}},
+            {Role::Header,        {Black,   Yellow,  Bold}},
             {Role::TabActive,     {Default, Default, Reverse | Bold}},
             {Role::TabInactive,   {Default, Default, Dim}},
             {Role::Footer,        {Default, Default, Reverse}},
@@ -105,9 +106,10 @@ inline QList<Theme> builtinThemes()
             {Role::Forwarded,     {Yellow,  Default, None}},
             {Role::Stale,         {Default, Default, Dim}},
             {Role::Accent,        {Blue,    Default, Bold}},
+            {Role::TitleBar,      {White,   Blue,    Bold}},
         }),
         makeTheme(QStringLiteral("light"), {
-            {Role::Header,        {Blue,    Default, Bold}},
+            {Role::Header,        {Black,   Yellow,  Bold}},
             {Role::TabActive,     {Default, Default, Reverse | Bold}},
             {Role::TabInactive,   {Default, Default, Dim}},
             {Role::Footer,        {Default, Default, Reverse}},
@@ -117,9 +119,10 @@ inline QList<Theme> builtinThemes()
             {Role::Forwarded,     {Magenta, Default, None}},
             {Role::Stale,         {Default, Default, Dim}},
             {Role::Accent,        {Blue,    Default, Bold}},
+            {Role::TitleBar,      {White,   Blue,    Bold}},
         }),
         makeTheme(QStringLiteral("colorblind"), {
-            {Role::Header,        {Cyan,    Default, Bold}},
+            {Role::Header,        {Black,   Yellow,  Bold}},
             {Role::TabActive,     {Default, Default, Reverse | Bold}},
             {Role::TabInactive,   {Default, Default, Dim}},
             {Role::Footer,        {Default, Default, Reverse}},
@@ -129,9 +132,10 @@ inline QList<Theme> builtinThemes()
             {Role::Forwarded,     {Yellow,  Default, None}},
             {Role::Stale,         {Default, Default, Dim}},
             {Role::Accent,        {Cyan,    Default, Bold}},
+            {Role::TitleBar,      {White,   Blue,    Bold}},
         }),
         makeTheme(QStringLiteral("mono"), {
-            {Role::Header,        {Default, Default, Bold | Underline}},
+            {Role::Header,        {Default, Default, Reverse}},
             {Role::TabActive,     {Default, Default, Reverse | Bold}},
             {Role::TabInactive,   {Default, Default, Dim}},
             {Role::Footer,        {Default, Default, Reverse}},
@@ -141,12 +145,13 @@ inline QList<Theme> builtinThemes()
             {Role::Forwarded,     {Default, Default, Underline}},
             {Role::Stale,         {Default, Default, Dim}},
             {Role::Accent,        {Default, Default, Bold}},
+            {Role::TitleBar,      {Default, Default, Reverse | Bold}},
         }),
     };
     // Row-spanning gauge fill tint (256-colour only; -1 -> reverse fallback).
-    all[0].gaugeBg = 236; // dark      : very dark gray
+    all[0].gaugeBg = 240; // dark      : medium gray (clearly visible)
     all[1].gaugeBg = 252; // light     : light gray
-    all[2].gaugeBg = 236; // colorblind: very dark gray
+    all[2].gaugeBg = 240; // colorblind: medium gray (clearly visible)
     all[3].gaugeBg = -1;  // mono      : reverse-video fill
     return all;
 }

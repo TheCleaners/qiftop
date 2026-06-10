@@ -12,10 +12,11 @@
 
 namespace qiftop::tui {
 
-// A modal settings panel painted on top of the table (top's `f` fields screen /
-// aptitude's Options dialog). When visible, Screen draws a bordered, centred
-// box over the body and shows the selected row's help line.
-struct SettingsModal {
+// A modal panel painted on top of the table (top's `f` fields screen /
+// aptitude's Options dialog). Reused by both the Settings panel and the Fields
+// (sort) selector. When visible, Screen draws a bordered, centred box over the
+// body and shows the selected row's help line.
+struct ModalPanel {
     bool                 visible = false;
     QString              title;
     QList<SettingRow>    items;
@@ -36,7 +37,7 @@ struct Frame {
     QList<double> rowGauge;          // per-row bandwidth fraction [0,1] (parallel)
     int           scrollOffset = 0;  // index of the first visible body row
     QString       footer;            // key help line
-    SettingsModal settings;          // when .visible, painted over the body
+    ModalPanel    modal;             // when .visible, painted over the body
 };
 
 class Screen {
@@ -69,9 +70,9 @@ private:
     // Paint the row-spanning bandwidth gauge: fill the first `fraction` of
     // line `y` with the gauge tint (256-colour) or reverse-video (fallback).
     void paintGauge(int y, int width, double fraction, Role role) const;
-    // Paint the modal settings panel (when f.settings.visible) centred over
-    // the body, with the selected row highlighted and its help line below.
-    void renderSettings(const SettingsModal &s) const;
+    // Paint the modal panel (when f.modal.visible) centred over the body, with
+    // the selected row highlighted and its help line below.
+    void renderModal(const ModalPanel &m) const;
 
     bool  m_active   = false;
     bool  m_hasColor = false;

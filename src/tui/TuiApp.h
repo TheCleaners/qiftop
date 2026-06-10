@@ -38,8 +38,9 @@ public:
 private:
     void  doRedraw();
     Frame buildFrame();
-    void  buildSettingsModal(Frame &f) const;  // fill f.settings when open
-    void  handleSettingsKey(int key);          // key routing while modal open
+    void  buildModal(Frame &f) const;          // fill f.modal for the open overlay
+    void  handleSettingsKey(int key);          // key routing while Settings open
+    void  handleFieldsKey(int key);            // key routing while Fields open
     void  applyAggregatorSettings();           // push flags into the aggregator
 
     Screen                           *m_screen   = nullptr;
@@ -56,10 +57,15 @@ private:
     int  m_ifaceScroll  = 0;
     int  m_connScroll   = 0;
 
+    // Modal overlays (only one open at a time). Settings = runtime toggles,
+    // Fields = top-style sort-column selector.
+    enum class Overlay { None, Settings, Fields };
+    Overlay m_overlay = Overlay::None;
+    int  m_settingsSel    = 0;
+    int  m_fieldsSel      = 0;
+
     // Runtime-toggleable settings (the modal). Defaults mirror main.cpp's
     // initial aggregator wiring (smoothing on @ 300ms, UDP-by-peer on).
-    bool m_settingsOpen   = false;
-    int  m_settingsSel    = 0;
     bool m_gaugeEnabled   = true;
     bool m_dnsEnabled     = false;
     bool m_udpAggregate   = true;

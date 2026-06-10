@@ -150,6 +150,22 @@ private slots:
             QVERIFY(!r.help.isEmpty());
         }
     }
+
+    void sortFieldsModel()
+    {
+        // Fields overlay lists every column; only the active sort column shows
+        // a direction marker, and it flips with the descending flag.
+        const QList<Column> cols = columnsFor(View::Connections);
+        const QList<SettingRow> desc = sortFieldRows(cols, 1, true);
+        QCOMPARE(desc.size(), cols.size());
+        QVERIFY(desc[1].value.contains(QStringLiteral("desc")));
+        QVERIFY(desc[0].value.isEmpty());        // non-sort columns: no marker
+        QVERIFY(!desc[1].label.isEmpty());
+        QVERIFY(!desc[1].help.isEmpty());
+        const QList<SettingRow> asc = sortFieldRows(cols, 0, false);
+        QVERIFY(asc[0].value.contains(QStringLiteral("asc")));
+        QVERIFY(asc[1].value.isEmpty());
+    }
 };
 
 QTEST_MAIN(TestTuiFormat)

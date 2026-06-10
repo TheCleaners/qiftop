@@ -87,8 +87,12 @@ void TuiApp::doRedraw()
 
 void TuiApp::handleKey(int key)
 {
-    if (m_settingsOpen) {
+    if (m_overlay == Overlay::Settings) {
         handleSettingsKey(key);
+        return;
+    }
+    if (m_overlay == Overlay::Fields) {
+        handleFieldsKey(key);
         return;
     }
 
@@ -105,7 +109,12 @@ void TuiApp::handleKey(int key)
         return;
     case 'S':
     case KEY_F(2):
-        m_settingsOpen = true;
+        m_overlay = Overlay::Settings;
+        break;
+    case 'f':
+    case 'F':
+        m_fieldsSel = sortCol;          // start on the current sort column
+        m_overlay = Overlay::Fields;
         break;
     case '\t':
     case KEY_BTAB:
@@ -124,8 +133,8 @@ void TuiApp::handleKey(int key)
     case 'R':
         sortDesc = !sortDesc;
         break;
-    case 't':
-    case 'T':
+    case 'z':
+    case 'Z':
         if (!m_themes.isEmpty()) {
             m_themeIdx = (m_themeIdx + 1) % m_themes.size();
             if (m_screen)
@@ -223,24 +232,32 @@ Frame TuiApp::buildFrame()
     f.scrollOffset = scroll;
 
     f.footer = QStringLiteral(
-        " q quit · Tab/1/2 view · s sort · r reverse · t theme · S settings · ↑↓/PgUp/PgDn scroll ");
+        " q quit · Tab/1/2 view · s sort · f fields · r reverse · z theme · S settings · ↑↓/PgUp/PgDn scroll ");
 
-    buildSettingsModal(f);
+    buildModal(f);
     return f;
 }
 
-void TuiApp::buildSettingsModal(Frame &f) const
+void TuiApp::buildModal(Frame &f) const
 {
-    if (!m_settingsOpen)
-        return;
-    f.settings.visible  = true;
-    f.settings.title    = QStringLiteral("Settings");
-    f.settings.items    = settingsRows(m_themes.isEmpty() ? QString()
-                                                          : m_themes[m_themeIdx].name,
-                                        m_gaugeEnabled, m_dnsEnabled,
-                                        m_udpAggregate, m_smoothing);
-    f.settings.selected = m_settingsSel;
-    f.settings.footer   = QStringLiteral("↑↓ move · ←/→/Space change · S/Esc close");
+    if (m_overlay == Overlay::Settings) {
+        f.modal.visible  = true;
+        f.modal.title    = QStringLiteral("Settings");
+        f.modal.items    = settingsRows(m_themes.isEmpty() ? QString()
+                                                           : m_themes[m_themeIdx].name,
+                                         m_gaugeEnabled, m_dnsEnabled,
+                                         m_udpAggregate, m_smoothing);
+        f.modal.selected = m_settingsSel;
+        f.modal.footer   = QStringLiteral("↑↓ move · ←/→/Space change · S/Esc close");
+    } else if (m_overlay == Overlay::Fields) {
+        const int sortCol  = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
+        const bool sortDesc = (m_view == View::Interfaces) ? m_ifaceSortDesc : m_connSortDesc;
+        f.modal.visible  = true;
+        f.modal.title    = QStringLiteral("Sort field");
+        f.modal.items    = sortFieldRows(columnsFor(m_view), sortCol, sortDesc);
+        f.modal.selected = m_fieldsSel;
+        f.modal.footer   = QStringLiteral("↑↓ move · Enter/Space sort · r reverse · f/Esc close");
+    }
 }
 
 void TuiApp::applyAggregatorSettings()
@@ -277,7 +294,7 @@ void TuiApp::handleSettingsKey(int key)
     case 'q':
     case 'Q':
     case 27: // Esc
-        m_settingsOpen = false;
+        m_overlay = Overlay::None;
         break;
     case KEY_UP:
         m_settingsSel = (m_settingsSel - 1 + n) % n;
@@ -292,6 +309,51 @@ void TuiApp::handleSettingsKey(int key)
     case '\r':
     case KEY_ENTER:
         change();
+        break;
+    case KEY_RESIZE:
+        break;
+    default:
+        return; // ignore, no repaint
+    }
+    requestRedraw();
+}
+
+void TuiApp::handleFieldsKey(int key)
+{
+    const int nCols = static_cast<int>(columnsFor(m_view).size());
+    int &sortCol = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
+    bool &sortDesc = (m_view == View::Interfaces) ? m_ifaceSortDesc : m_connSortDesc;
+
+    switch (key) {
+    case 'f':
+    case 'F':
+    case 'q':
+    case 'Q':
+    case 27: // Esc
+        m_overlay = Overlay::None;
+        break;
+    case KEY_UP:
+        m_fieldsSel = (m_fieldsSel - 1 + nCols) % nCols;
+        break;
+    case KEY_DOWN:
+        m_fieldsSel = (m_fieldsSel + 1) % nCols;
+        break;
+    case ' ':
+    case '\n':
+    case '\r':
+    case KEY_ENTER:
+        // Selecting the current sort column toggles direction; otherwise make
+        // the highlighted column the sort column (keeping the direction).
+        if (sortCol == m_fieldsSel)
+            sortDesc = !sortDesc;
+        else
+            sortCol = m_fieldsSel;
+        break;
+    case 'r':
+    case 'R':
+    case KEY_LEFT:
+    case KEY_RIGHT:
+        sortDesc = !sortDesc;
         break;
     case KEY_RESIZE:
         break;

@@ -242,4 +242,22 @@ inline QList<SettingRow> settingsRows(const QString &theme, bool gauge, bool dns
     };
 }
 
+// Build the Fields/sort-selector list (top's `f` screen): one row per column,
+// the active sort column marked with its direction. selected index maps onto a
+// column index in `cols`.
+inline QList<SettingRow> sortFieldRows(const QList<Column> &cols, int sortCol,
+                                       bool sortDesc)
+{
+    QList<SettingRow> rows;
+    for (int c = 0; c < cols.size(); ++c) {
+        const QString value = (c == sortCol)
+            ? (sortDesc ? QStringLiteral("\u25bc desc") : QStringLiteral("\u25b2 asc"))
+            : QString();
+        rows.append({cols[c].title, value,
+                     QStringLiteral("Sort by %1. Enter selects; r/←/→ reverses.")
+                         .arg(cols[c].title)});
+    }
+    return rows;
+}
+
 } // namespace qiftop::tui
