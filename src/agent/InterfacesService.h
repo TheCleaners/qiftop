@@ -8,6 +8,8 @@
 
 class NetworkMonitor;
 
+namespace qiftop::backend { class ProcessResolver; }
+
 namespace qiftop::agent {
 
 class IdleManager;
@@ -33,6 +35,11 @@ public:
     explicit InterfacesService(NetworkMonitor *monitor, QObject *parent = nullptr);
 
     void setIdleManager(IdleManager *idle);
+    // Optional: a ProcessResolver whose runtime-detected capability tokens
+    // are merged into the agent's Capabilities property. Pass null (the
+    // default) to advertise only the base agent capabilities — used when
+    // attribution features are compiled out or the runtime probe failed.
+    void setProcessResolver(backend::ProcessResolver *resolver);
 
     [[nodiscard]] QString     version()      const;
     [[nodiscard]] QStringList capabilities() const;
@@ -73,8 +80,9 @@ private slots:
     void onCadenceChanged(int ms);
 
 private:
-    NetworkMonitor              *m_monitor = nullptr;
-    IdleManager                 *m_idle    = nullptr;
+    NetworkMonitor              *m_monitor  = nullptr;
+    IdleManager                 *m_idle     = nullptr;
+    backend::ProcessResolver    *m_resolver = nullptr;
     dbus::InterfaceStatsDtoList  m_last;
     QElapsedTimer                m_clock;        // started in ctor; drives snapshot timestamps
 };

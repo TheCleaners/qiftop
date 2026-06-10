@@ -1,0 +1,157 @@
+#pragma once
+
+#include <QByteArray>
+#include <QHash>
+#include <QHostAddress>
+#include <QtEndian>
+
+#include <cstring>
+
+#include <sys/socket.h>
+
+#include <linux/inet_diag.h>
+#include <linux/netlink.h>
+#include <linux/sock_diag.h>
+
+namespace qiftop::backend::sockdiag {
+
+// M9: hard cap on every socket→inode / inode→pid map built by the
+// resolver layer (host dump, per-netns dumps, /proc fd walks). A
+// hostile or pathological workload can hold millions of sockets; an
+// unbounded map would stall the dump loop and OOM the root agent.
+// Mirrors the CgroupClassifier::kCacheMaxItems bounded-cache rule
+// (AGENTS.md §8a rule 8) — these maps are rebuilt from scratch every
+// refresh tick, so the bounded analogue of clear-on-overflow is
+// "stop enrolling at the cap": attribution stays intact for the
+// first kMaxSocketEntries sockets and the tick completes in bounded
+// time/memory. Generous: a busy host has a few thousand sockets.
+inline constexpr int kMaxSocketEntries = 65536;
+
+// Compose the 4-tuple lookup key used across the resolver layer. proto
+// is the IANA L4 number (TCP=6, UDP=17). The byte order and field
+// order MUST stay stable — any change is a silent cache-miss event for
+// every in-process resolver. Exposed here so NetnsScanner / future
+// resolvers produce IDENTICAL keys to SockDiagResolver. Header-inline
+// so the pure parser below (and its unit test) need no extra TU.
+[[nodiscard]] inline QByteArray makeFlowKey(quint8 proto,
+                                            const QHostAddress &localAddr,
+                                            quint16            localPort,
+                                            const QHostAddress &remoteAddr,
+                                            quint16            remotePort)
+{
+    QByteArray k;
+    k.reserve(48);
+    k.append(static_cast<char>(proto));
+    const auto append = [&](const QHostAddress &a, quint16 port) {
+        if (a.protocol() == QAbstractSocket::IPv6Protocol) {
+            Q_IPV6ADDR v6 = a.toIPv6Address();
+            k.append(reinterpret_cast<const char*>(&v6), sizeof(v6));
+        } else {
+            quint32 v4 = qToBigEndian(a.toIPv4Address());
+            k.append(reinterpret_cast<const char*>(&v4), sizeof(v4));
+        }
+        quint16 p = qToBigEndian(port);
+        k.append(reinterpret_cast<const char*>(&p), sizeof(p));
+    };
+    append(localAddr,  localPort);
+    append(remoteAddr, remotePort);
+    return k;
+}
+
+// Open + bind a NETLINK_SOCK_DIAG socket in the calling thread's
+// CURRENT network namespace. Returns the fd on success, -1 on failure
+// (with a single qCWarning). Caller closes via ::close. Must be opened
+// AFTER any setns(2) call — netlink sockets are bound to the netns
+// they were created in for life.
+[[nodiscard]] int openSockDiagSocket();
+
+// Issue one sock_diag dump on an already-opened netlink fd for the
+// given (family, proto) pair, populating `outMap[4-tuple-key] = inode`.
+// `seqHint` is used as nlmsg_seq for the dump request — any nonzero
+// value works; we just take it so concurrent dumps on separate fds
+// don't share a seq.
+//
+// Returns true on a successful dump (including the empty case),
+// false on netlink error.
+[[nodiscard]] bool dumpSocketsViaFd(int                                 nlFd,
+                                    quint8                              family,
+                                    quint8                              proto,
+                                    QHash<QByteArray, quint64>         &outMap,
+                                    quint32                             seqHint);
+
+// ---------------------------------------------------------------------------
+// Pure buffer-level parsing of one recv()'d chunk of a sock_diag dump.
+// Header-inline so unit tests can drive it with synthetic netlink
+// buffers — no socket, no kernel (tests/test_sockdiag_parse.cpp).
+// ---------------------------------------------------------------------------
+
+enum class DumpChunkResult {
+    NeedMore,   // chunk fully consumed; the dump continues
+    Done,       // NLMSG_DONE (or an ACK NLMSG_ERROR) seen — dump complete
+    Failed,     // NLMSG_ERROR with a nonzero error, or malformed message
+};
+
+namespace detail {
+inline QHostAddress addrFromDiag(quint8 family, const __be32 buf[4])
+{
+    if (family == AF_INET) {
+        return QHostAddress(qFromBigEndian<quint32>(buf[0]));
+    }
+    Q_IPV6ADDR v6;
+    std::memcpy(&v6, buf, sizeof(v6));
+    return QHostAddress(v6);
+}
+} // namespace detail
+
+// Walk the netlink messages in `buf[0..n)`, inserting flow-key → inode
+// entries into outMap (capped at kMaxSocketEntries — see above). On
+// Failed, *nlErrno (when non-null) receives the positive errno carried
+// by a well-formed NLMSG_ERROR, or 0 for a malformed/truncated message.
+//
+// M10: every header- and payload-length is validated BEFORE the
+// payload is dereferenced. NLMSG_OK only guarantees the message fits
+// the buffer and is >= sizeof(nlmsghdr) — an NLMSG_ERROR whose
+// nlmsg_len is shorter than NLMSG_LENGTH(sizeof(nlmsgerr)) would
+// otherwise be an over-read off the end of a short datagram.
+inline DumpChunkResult parseDumpChunk(const char *buf, qsizetype n,
+                                      quint8 proto,
+                                      QHash<QByteArray, quint64> &outMap,
+                                      int *nlErrno = nullptr)
+{
+    if (nlErrno) *nlErrno = 0;
+    auto remaining = static_cast<int>(n);
+    for (const auto *nh = reinterpret_cast<const nlmsghdr*>(buf);
+         NLMSG_OK(nh, remaining);
+         nh = NLMSG_NEXT(nh, remaining)) {
+        if (nh->nlmsg_type == NLMSG_DONE) return DumpChunkResult::Done;
+        if (nh->nlmsg_type == NLMSG_ERROR) {
+            // Validate the payload really holds a struct nlmsgerr
+            // before touching it (M10).
+            if (nh->nlmsg_len < NLMSG_LENGTH(sizeof(nlmsgerr))) {
+                return DumpChunkResult::Failed;
+            }
+            const auto *err = static_cast<const nlmsgerr*>(
+                NLMSG_DATA(const_cast<nlmsghdr*>(nh)));
+            if (err->error != 0) {
+                if (nlErrno) *nlErrno = -err->error;
+                return DumpChunkResult::Failed;
+            }
+            return DumpChunkResult::Done;   // ACK
+        }
+        if (nh->nlmsg_type != SOCK_DIAG_BY_FAMILY) continue;
+        if (nh->nlmsg_len < NLMSG_LENGTH(sizeof(inet_diag_msg))) continue;
+        const auto *m = static_cast<const inet_diag_msg*>(
+            NLMSG_DATA(const_cast<nlmsghdr*>(nh)));
+        if (m->idiag_inode == 0) continue;
+        if (outMap.size() >= kMaxSocketEntries) continue;   // M9 cap
+        const auto local  = detail::addrFromDiag(m->idiag_family, m->id.idiag_src);
+        const auto remote = detail::addrFromDiag(m->idiag_family, m->id.idiag_dst);
+        const quint16 lport = qFromBigEndian(m->id.idiag_sport);
+        const quint16 rport = qFromBigEndian(m->id.idiag_dport);
+        outMap.insert(makeFlowKey(proto, local, lport, remote, rport),
+                      m->idiag_inode);
+    }
+    return DumpChunkResult::NeedMore;
+}
+
+} // namespace qiftop::backend::sockdiag

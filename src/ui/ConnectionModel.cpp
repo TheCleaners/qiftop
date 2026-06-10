@@ -1,37 +1,16 @@
 #include "ConnectionModel.h"
 #include "util/ConnectionHeuristics.h"
+#include "backend/PlatformInfo.h"
 #include "dns/DnsResolver.h"
 #include "util/Units.h"
 
 #include <QApplication>
-#include <QFile>
 #include <QFont>
 #include <QPalette>
-#include <QRegularExpression>
 
 #include <algorithm>
 
 namespace {
-
-// Read /proc/sys/net/ipv4/ip_local_port_range once. Returns (low, high);
-// falls back to the kernel's compiled-in defaults if anything goes wrong.
-std::pair<quint16, quint16> readEphemeralRange()
-{
-    QFile f(QStringLiteral("/proc/sys/net/ipv4/ip_local_port_range"));
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        const QString s = QString::fromLatin1(f.readAll()).trimmed();
-        static const QRegularExpression ws(QStringLiteral("\\s+"));
-        const QStringList parts = s.split(ws, Qt::SkipEmptyParts);
-        if (parts.size() == 2) {
-            bool ok1 = false, ok2 = false;
-            const int lo = parts[0].toInt(&ok1);
-            const int hi = parts[1].toInt(&ok2);
-            if (ok1 && ok2 && lo > 0 && hi >= lo && hi <= 65535)
-                return {static_cast<quint16>(lo), static_cast<quint16>(hi)};
-        }
-    }
-    return {32768, 60999};
-}
 
 } // namespace
 
@@ -39,7 +18,7 @@ ConnectionModel::ConnectionModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
     m_elapsed.start();
-    std::tie(m_ephemeralLow, m_ephemeralHigh) = readEphemeralRange();
+    std::tie(m_ephemeralLow, m_ephemeralHigh) = qiftop::platform::ephemeralPortRange();
     m_loopbackAddrs.insert(QHostAddress(QHostAddress::LocalHost));
     m_loopbackAddrs.insert(QHostAddress(QHostAddress::LocalHostIPv6));
 }
@@ -344,6 +323,26 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
             const double v = txReference(row);
             return v > 0.0 ? util::formatByteRate(v) : QStringLiteral("—");
         }
+        case Column::Process:
+            if (c.process.pid > 0) {
+                const QString name = c.process.comm.isEmpty()
+                                         ? QStringLiteral("pid %1").arg(c.process.pid)
+                                         : c.process.comm;
+                return QStringLiteral("%1  [%2]").arg(name).arg(c.process.pid);
+            }
+            return QStringLiteral("—");
+        case Column::Container: {
+            const auto &ci = c.container;
+            if (ci.runtime.isEmpty() && ci.name.isEmpty() && ci.id.isEmpty())
+                return QStringLiteral("(host)");
+            const QString display = !ci.name.isEmpty() ? ci.name : ci.id.left(12);
+            const QString primary = ci.runtime.isEmpty()
+                                        ? display
+                                        : QStringLiteral("%1:%2").arg(ci.runtime, display);
+            if (c.containerChain.size() >= 2)
+                return QStringLiteral("%1  ▸").arg(primary);
+            return primary;
+        }
         case Column::ColumnCount: break;
         }
         return {};
@@ -358,6 +357,16 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
         case Column::TxTotal: return static_cast<qulonglong>(c.txBytes);
         case Column::RxMax:   return rxReference(row);
         case Column::TxMax:   return txReference(row);
+        case Column::Process: return static_cast<qulonglong>(c.process.pid);
+        case Column::Container: {
+            // Sort key: prefer name, fall back to id; never empty so
+            // (host) rows clump together at the top/bottom rather than
+            // scattering.
+            const auto &ci = c.container;
+            if (!ci.name.isEmpty()) return ci.name;
+            if (!ci.id.isEmpty())   return ci.id;
+            return QStringLiteral("\u0001(host)"); // sort to one end
+        }
         case Column::ColumnCount: break;
         }
         return {};
@@ -390,6 +399,67 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
     case HostnameRemoteRole:
         return (m_resolveEnabled && m_resolver) ? m_resolver->cachedName(c.remote.address)
                                                 : QString();
+    case ProcessPidRole:
+        return c.process.pid;
+    case ProcessCommRole:
+        return c.process.comm;
+    case ContainerRuntimeRole:
+        return c.container.runtime;
+    case ContainerIdRole:
+        return c.container.id;
+    case ContainerNameRole:
+        return c.container.name;
+    case ContainerChainRole: {
+        QStringList out;
+        out.reserve(c.containerChain.size());
+        for (const auto &ci : c.containerChain) {
+            const QString display = !ci.name.isEmpty() ? ci.name : ci.id.left(12);
+            out << (ci.runtime.isEmpty()
+                        ? display
+                        : QStringLiteral("%1:%2").arg(ci.runtime, display));
+        }
+        return out;
+    }
+
+    case Qt::ToolTipRole: {
+        // Tooltip injection hardening (M2): Qt auto-detects rich text in
+        // tooltips, and comm / container runtime/id/name are attacker-
+        // controlled (prctl(PR_SET_NAME), image labels...). Escape every
+        // dynamic field and render the tooltip as DELIBERATE rich text
+        // (<qt> + <br>) so the escaping displays correctly.
+        const auto esc = [](const QString &s) { return s.toHtmlEscaped(); };
+        switch (col) {
+        case Column::Process:
+            if (c.process.pid <= 0) return QStringLiteral("Unattributed flow");
+            return QStringLiteral("<qt>pid: %1<br>comm: %2<br>uid: %3<br><br>Right-click → Details for cmdline / exe / cwd</qt>")
+                .arg(c.process.pid)
+                .arg(c.process.comm.isEmpty() ? QStringLiteral("?")
+                                              : esc(c.process.comm))
+                .arg(c.process.uid);
+        case Column::Container: {
+            if (c.container.runtime.isEmpty() && c.container.id.isEmpty()
+                && c.container.name.isEmpty()) {
+                return QStringLiteral("Host process (no container)");
+            }
+            QString s = QStringLiteral("runtime: %1<br>id: %2<br>name: %3")
+                .arg(c.container.runtime.isEmpty() ? QStringLiteral("?") : esc(c.container.runtime),
+                     c.container.id.isEmpty()      ? QStringLiteral("?") : esc(c.container.id),
+                     c.container.name.isEmpty()    ? QStringLiteral("?") : esc(c.container.name));
+            if (c.containerChain.size() >= 2 && m_showContainerChainInTooltip) {
+                s += QStringLiteral("<br><br>Nesting (outer → inner):");
+                for (const auto &ci : c.containerChain) {
+                    const QString disp = !ci.name.isEmpty() ? ci.name
+                                                            : ci.id.left(12);
+                    s += QStringLiteral("<br>&nbsp;&nbsp;• %1:%2")
+                             .arg(ci.runtime.isEmpty() ? QStringLiteral("?") : esc(ci.runtime),
+                                  esc(disp));
+                }
+            }
+            return QStringLiteral("<qt>%1</qt>").arg(s);
+        }
+        default: return {};
+        }
+    }
 
     case GaugeFractionRole: {
         if (!m_gaugeEnabled)
@@ -489,6 +559,8 @@ QVariant ConnectionModel::headerData(int section, Qt::Orientation orientation, i
     case Column::TxTotal: return tr("TX total");
     case Column::RxMax:   return tr("Max RX");
     case Column::TxMax:   return tr("Max TX");
+    case Column::Process: return tr("Process");
+    case Column::Container: return tr("Container");
     case Column::ColumnCount: break;
     }
     return {};
@@ -512,6 +584,12 @@ QStringList ConnectionModel::exportHeaders() const
         QStringLiteral("txBytesPerSec"),
         QStringLiteral("rxBytesPerSecRef"),
         QStringLiteral("txBytesPerSecRef"),
+        QStringLiteral("pid"),
+        QStringLiteral("uid"),
+        QStringLiteral("comm"),
+        QStringLiteral("containerRuntime"),
+        QStringLiteral("containerId"),
+        QStringLiteral("containerName"),
     };
 }
 
@@ -545,6 +623,12 @@ QVariantList ConnectionModel::exportRow(int row) const
         r.txRate,
         rxReference(r),
         txReference(r),
+        c.process.pid,
+        c.process.uid,
+        c.process.comm,
+        c.container.runtime,
+        c.container.id,
+        c.container.name,
     };
 }
 
@@ -571,8 +655,14 @@ void ConnectionModel::updateConnections(QList<Connection> connections)
     // and have local.port masked to 0 ("*"); inbound rows share local.{
     // addr,port} and have remote.port masked to 0. Direction::Unknown
     // flows are left alone (can't tell which port is ephemeral).
+    //
+    // Aggregate counters come from retained per-member state (m_udpAgg),
+    // NOT from summing the current snapshot: UDP conntrack entries are
+    // timed out aggressively, and a member dropping out of the snapshot
+    // must not subtract its accumulated bytes from the aggregate (the
+    // total would regress and the m_prev rate diff would clamp to 0).
     if (m_udpAggregateByPeer) {
-        QHash<QString, Connection> agg;
+        QHash<QString, Connection> agg;   // aggKey → representative (masked) flow
         QList<Connection>          passthrough;
         agg.reserve(connections.size());
         for (const Connection &c : std::as_const(connections)) {
@@ -583,21 +673,72 @@ void ConnectionModel::updateConnections(QList<Connection> connections)
             Connection k = c;
             if (k.direction == Direction::Outbound) k.local.port  = 0;
             else                                    k.remote.port = 0;
-            const QString aggKey = k.key();
-            auto it = agg.find(aggKey);
-            if (it == agg.end()) {
-                agg.insert(aggKey, k);
-            } else {
-                it->rxBytes   += c.rxBytes;
-                it->txBytes   += c.txBytes;
-                it->rxPackets += c.rxPackets;
-                it->txPackets += c.txPackets;
+            const QString aggKey    = k.key();
+            const QString memberKey = c.key();
+            UdpAggState &st = m_udpAgg[aggKey];
+            st.lastSeenMs = nowMs;
+            UdpAggMember &mem = st.members[memberKey];
+            if (c.rxBytes < mem.rxBytes || c.txBytes < mem.txBytes) {
+                // Conntrack recycled the member tuple (counters reset):
+                // fold the previous incarnation's high-water mark into
+                // the base so the aggregate never regresses.
+                st.rxBase    += mem.rxBytes;   st.txBase    += mem.txBytes;
+                st.rxPktBase += mem.rxPackets; st.txPktBase += mem.txPackets;
             }
+            mem.rxBytes    = c.rxBytes;   mem.txBytes    = c.txBytes;
+            mem.rxPackets  = c.rxPackets; mem.txPackets  = c.txPackets;
+            mem.lastSeenMs = nowMs;
+            if (!agg.contains(aggKey))
+                agg.insert(aggKey, k);    // counters materialised below
         }
+
+        // Compact retained state: aggregates unseen beyond the UDP
+        // retention window are dropped wholesale (their model row has
+        // been pruned by then — a reappearing peer starts a fresh row);
+        // long-expired members are folded into the base and erased so
+        // the per-aggregate member map stays bounded under ephemeral-
+        // port churn. Members absent for LESS than the window keep
+        // their last counters in the sum — so a freshly expired member
+        // never drops bytes, and a member that merely flickered out of
+        // a capped snapshot isn't double-counted on return.
+        for (auto it = m_udpAgg.begin(); it != m_udpAgg.end();) {
+            UdpAggState &st = it.value();
+            if (nowMs - st.lastSeenMs > m_staleRetentionMsUdp) {
+                it = m_udpAgg.erase(it);
+                continue;
+            }
+            for (auto mIt = st.members.begin(); mIt != st.members.end();) {
+                if (nowMs - mIt->lastSeenMs > m_staleRetentionMsUdp) {
+                    st.rxBase    += mIt->rxBytes;   st.txBase    += mIt->txBytes;
+                    st.rxPktBase += mIt->rxPackets; st.txPktBase += mIt->txPackets;
+                    mIt = st.members.erase(mIt);
+                } else {
+                    ++mIt;
+                }
+            }
+            ++it;
+        }
+
+        // Materialise the aggregate counters: base + Σ retained members.
+        for (auto it = agg.begin(); it != agg.end(); ++it) {
+            const auto stIt = m_udpAgg.constFind(it.key());
+            if (stIt == m_udpAgg.constEnd()) continue;  // pruned above (retention 0)
+            quint64 rx = stIt->rxBase,    tx = stIt->txBase;
+            quint64 rxp = stIt->rxPktBase, txp = stIt->txPktBase;
+            for (const UdpAggMember &m : stIt->members) {
+                rx  += m.rxBytes;   tx  += m.txBytes;
+                rxp += m.rxPackets; txp += m.txPackets;
+            }
+            it->rxBytes   = rx;  it->txBytes   = tx;
+            it->rxPackets = rxp; it->txPackets = txp;
+        }
+
         connections = std::move(passthrough);
         connections.reserve(connections.size() + agg.size());
         for (auto it = agg.cbegin(); it != agg.cend(); ++it)
             connections.append(it.value());
+    } else if (!m_udpAgg.isEmpty()) {
+        m_udpAgg.clear();
     }
 
     // Index the (post-aggregation) snapshot by key so we can do row-level

@@ -1,9 +1,9 @@
 build/
 build-*/
 
-# Vagrant scaffolding for dev VMs (not part of the project source)
+# Vagrant scaffolding for ad-hoc dev VMs (root-level scratch space)
 .vagrant/
-Vagrantfile
+/Vagrantfile
 *.iso
 
 # Editor / OS junk

@@ -13,6 +13,10 @@ enum class Field {
     BytesIn, BytesOut, Bytes,
     PktsIn,  PktsOut,  Pkts,
     RateIn,  RateOut,  Rate,
+    // v0.4 attribution fields. Numeric: Pid, Uid. String single-haystack:
+    // Comm, Runtime. String multi-haystack (like Host): Container (matches
+    // runtime+id+name) and ChainHas (any chain entry's runtime+id+name).
+    Pid, Uid, Comm, Runtime, Container, ChainHas,
 };
 
 enum class Op { Contains, Equals, NotEquals, Regex, Lt, Le, Gt, Ge };
@@ -65,6 +69,13 @@ const QHash<QString, FieldInfo> &fieldTable()
         { QStringLiteral("rate_in"),   {Field::RateIn,    true}  },
         { QStringLiteral("rate_out"),  {Field::RateOut,   true}  },
         { QStringLiteral("rate"),      {Field::Rate,      true}  },
+        // v0.4 attribution
+        { QStringLiteral("pid"),       {Field::Pid,       true}  },
+        { QStringLiteral("uid"),       {Field::Uid,       true}  },
+        { QStringLiteral("comm"),      {Field::Comm,      false} },
+        { QStringLiteral("runtime"),   {Field::Runtime,   false} },
+        { QStringLiteral("container"), {Field::Container, false} },
+        { QStringLiteral("chain_has"), {Field::ChainHas,  false} },
     };
     return t;
 }
@@ -143,6 +154,32 @@ QString extractText(Field f, const Context &ctx)
     case Field::Iface:     return c.iface;
     case Field::Family:    return familyName(c);
     case Field::Direction: return directionName(c.direction);
+    case Field::Comm:      return c.process.comm;
+    case Field::Runtime:   return c.container.runtime;
+    case Field::Container:
+        // Multi-haystack: runtime + id + name on separate lines so the
+        // multi-line matcher in evalPredicate handles it the same way as
+        // Host. Empty when the flow has no container.
+        if (c.container.runtime.isEmpty() && c.container.id.isEmpty()
+            && c.container.name.isEmpty())
+            return {};
+        return c.container.runtime + QLatin1Char('\n')
+             + c.container.id      + QLatin1Char('\n')
+             + c.container.name;
+    case Field::ChainHas: {
+        // Flatten OUTER→INNER chain into one newline-joined haystack:
+        // runtime+id+name for each entry. Multi-line matcher then
+        // searches across every ancestor in one pass.
+        if (c.containerChain.isEmpty()) return {};
+        QString out;
+        for (const auto &ci : c.containerChain) {
+            if (!out.isEmpty()) out += QLatin1Char('\n');
+            out += ci.runtime + QLatin1Char('\n')
+                 + ci.id      + QLatin1Char('\n')
+                 + ci.name;
+        }
+        return out;
+    }
     default: break;
     }
     return {};
@@ -164,6 +201,8 @@ double extractNumber(Field f, const Context &ctx)
     case Field::RateIn:   return ctx.rxRate;
     case Field::RateOut:  return ctx.txRate;
     case Field::Rate:     return ctx.rxRate + ctx.txRate;
+    case Field::Pid:      return double(c.process.pid);
+    case Field::Uid:      return double(c.process.uid);
     default: break;
     }
     return 0.0;
@@ -171,6 +210,13 @@ double extractNumber(Field f, const Context &ctx)
 
 bool evalPredicate(const Predicate &p, const Context &ctx)
 {
+    // Fields whose extractText returns a newline-joined list of haystacks
+    // (any-match semantics for : / = / ~, all-match for !=). Keep this in
+    // sync with extractText.
+    auto isMultiLineField = [](Field f) {
+        return f == Field::Host || f == Field::Container || f == Field::ChainHas;
+    };
+
     if (p.op == Op::Regex) {
         const QString s = extractText(p.field, ctx);
         if (p.field == Field::Port) {
@@ -180,8 +226,8 @@ bool evalPredicate(const Predicate &p, const Context &ctx)
             const QString dp = QString::number(ctx.c.remote.port);
             return p.rx.match(sp).hasMatch() || p.rx.match(dp).hasMatch();
         }
-        if (p.field == Field::Host) {
-            // Host is multi-line; match if any line matches.
+        if (isMultiLineField(p.field)) {
+            // Match if any line matches.
             for (const QString &line : s.split(QLatin1Char('\n')))
                 if (p.rx.match(line).hasMatch()) return true;
             return false;
@@ -195,6 +241,7 @@ bool evalPredicate(const Predicate &p, const Context &ctx)
         case Field::BytesIn: case Field::BytesOut: case Field::Bytes:
         case Field::PktsIn:  case Field::PktsOut:  case Field::Pkts:
         case Field::RateIn:  case Field::RateOut:  case Field::Rate:
+        case Field::Pid:     case Field::Uid:
             return true;
         default: return false;
         }
@@ -235,9 +282,11 @@ bool evalPredicate(const Predicate &p, const Context &ctx)
 
     // String predicate.
     const QString val = p.textValue;
-    if (p.field == Field::Host) {
-        // ":"/"=" search across both ends + hostnames.
-        const QString s = extractText(Field::Host, ctx);
+    if (isMultiLineField(p.field)) {
+        // ":"/"=" search across each haystack line (host: both endpoints
+        // + both hostnames; container: runtime/id/name; chain_has: every
+        // ancestor's runtime/id/name).
+        const QString s = extractText(p.field, ctx);
         const auto cmpLine = [&](const QString &line) {
             if (p.op == Op::Equals)    return line.compare(val, Qt::CaseInsensitive) == 0;
             if (p.op == Op::NotEquals) return line.compare(val, Qt::CaseInsensitive) != 0;
@@ -591,11 +640,17 @@ QString helpHtml()
         "</table>"
         "<p><b>Text fields:</b> <code>proto</code>, <code>src</code>, <code>dst</code>,"
         " <code>host</code>, <code>iface</code>, <code>family</code>,"
-        " <code>direction</code></p>"
+        " <code>direction</code>, <code>comm</code>, <code>runtime</code>,"
+        " <code>container</code>, <code>chain_has</code></p>"
         "<p><b>Numeric fields:</b> <code>sport</code>, <code>dport</code>, <code>port</code>,"
         " <code>bytes_in</code>/<code>_out</code>/<code>bytes</code>,"
         " <code>pkts_in</code>/<code>_out</code>/<code>pkts</code>,"
-        " <code>rate_in</code>/<code>_out</code>/<code>rate</code></p>"
+        " <code>rate_in</code>/<code>_out</code>/<code>rate</code>,"
+        " <code>pid</code>, <code>uid</code></p>"
+        "<p><b>Attribution notes:</b> <code>container</code> matches across"
+        " runtime + id + name (like <code>host</code> across endpoints);"
+        " <code>chain_has</code> matches any entry in the container nesting"
+        " ancestry; <code>pid=0</code> selects unattributed flows.</p>"
         "<p><b>Byte suffixes:</b> <code>K M G T</code> (×1000),"
         " <code>Ki Mi Gi Ti</code> (×1024)</p>"
         "<p><b>Examples:</b><br>"
@@ -603,7 +658,10 @@ QString helpHtml()
         "&nbsp;&nbsp;<code>host:google.com</code><br>"
         "&nbsp;&nbsp;<code>src ~ ^192\\.168\\. and rate &gt; 1Mi</code><br>"
         "&nbsp;&nbsp;<code>iface=wlp228s0 and not direction:in</code><br>"
-        "&nbsp;&nbsp;<code>port:80 or port:443</code>"
+        "&nbsp;&nbsp;<code>port:80 or port:443</code><br>"
+        "&nbsp;&nbsp;<code>runtime=docker and comm:nginx</code><br>"
+        "&nbsp;&nbsp;<code>chain_has:kubernetes and rate &gt; 100Ki</code><br>"
+        "&nbsp;&nbsp;<code>pid=0</code>  (unattributed flows only)"
         "</p>");
 }
 

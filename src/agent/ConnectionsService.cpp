@@ -2,19 +2,19 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
-#include <QFile>
-#include <QRegularExpression>
-#include <QStringList>
 
 #include <algorithm>
-
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
+#include <limits>
 
 #include "IdleManager.h"
+#include "Attribution.h"
 #include "backend/ConnectionMonitor.h"
+#include "backend/PlatformInfo.h"
 #include "util/ConnectionHeuristics.h"
+
+#ifdef BACKEND_LINUX
+#include "backend/linux/ProcDetails.h"
+#endif
 
 namespace qiftop::agent {
 
@@ -33,40 +33,11 @@ struct HostContext {
 HostContext gatherHostContext()
 {
     HostContext ctx;
-
-    struct ifaddrs *head = nullptr;
-    if (getifaddrs(&head) == 0) {
-        for (auto *p = head; p; p = p->ifa_next) {
-            if (!p->ifa_addr) continue;
-            const int fam = p->ifa_addr->sa_family;
-            if (fam != AF_INET && fam != AF_INET6) continue;
-            QHostAddress addr;
-            addr.setAddress(p->ifa_addr);
-            if (addr.isNull()) continue;
-            if (addr.isLoopback()) ctx.loopbackAddrs.insert(addr);
-            else                   ctx.localAddrs.insert(addr);
-        }
-        freeifaddrs(head);
-    }
-
-    // /proc/sys/net/ipv4/ip_local_port_range is two integers separated
-    // by whitespace (typically a single tab). The IPv6 ephemeral range
-    // mirrors the IPv4 one on Linux, so reading one file is enough.
-    QFile portRange(QStringLiteral("/proc/sys/net/ipv4/ip_local_port_range"));
-    if (portRange.open(QIODevice::ReadOnly)) {
-        const auto parts = QString::fromLatin1(portRange.readAll())
-                               .split(QRegularExpression(QStringLiteral("\\s+")),
-                                      Qt::SkipEmptyParts);
-        if (parts.size() >= 2) {
-            bool ok1 = false, ok2 = false;
-            const auto lo = parts[0].toUShort(&ok1);
-            const auto hi = parts[1].toUShort(&ok2);
-            if (ok1 && ok2 && hi > lo) {
-                ctx.ephemeralLow  = lo;
-                ctx.ephemeralHigh = hi;
-            }
-        }
-    }
+    ctx.localAddrs    = qiftop::platform::localAddresses();
+    ctx.loopbackAddrs = qiftop::platform::loopbackAddresses();
+    const auto [lo, hi] = qiftop::platform::ephemeralPortRange();
+    ctx.ephemeralLow  = lo;
+    ctx.ephemeralHigh = hi;
     return ctx;
 }
 
@@ -95,12 +66,33 @@ void ConnectionsService::SetDesiredIntervalMs(uint intervalMs)
 {
     if (!m_idle) return;
     const QString sender = calledFromDBus() ? message().service() : QString();
-    // Only count this call as activity if the hint was actually accepted.
-    // Otherwise a rejected peer (hint table full, empty sender) could keep
-    // the agent out of idle by hammering this method even though we did
-    // no real work.
+    // See ConnectionsService::SetDesiredIntervalMs — only count accepted
+    // hints as activity (see commit message for rationale).
     if (m_idle->setClientHint(sender, static_cast<int>(intervalMs)))
         m_idle->noteActivity();
+}
+
+dbus::ProcessDetailsDto ConnectionsService::GetProcessDetails(uint pid)
+{
+    if (m_idle) m_idle->noteActivity();
+    dbus::ProcessDetailsDto out;
+    if (pid == 0 || pid > quint32(std::numeric_limits<qint32>::max()))
+        return out;
+
+#ifdef BACKEND_LINUX
+    const auto d = backend::linux_::readProcessDetails(static_cast<qint32>(pid));
+    if (!d.valid) return out;
+    out.pid              = quint32(d.pid);
+    out.uid              = d.uid;
+    out.comm             = d.comm;
+    out.exe              = d.exe;
+    out.cmdline          = d.cmdline;
+    out.cwd              = d.cwd;
+    out.startTimeJiffies = d.startTimeJiffies;
+#else
+    Q_UNUSED(pid);
+#endif
+    return out;
 }
 
 void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
@@ -137,6 +129,12 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
             c, ctx.localAddrs, ctx.loopbackAddrs,
             ctx.ephemeralLow, ctx.ephemeralHigh);
     }
+
+    // Populate process + container attribution from the wired resolver.
+    // No-op when resolver is null or returns nothing useful. Socket PID
+    // resolution is per-flow, but /proc enrichment and container/chain
+    // lookups are memoised by PID in agent::attributeFlows.
+    attributeFlows(kept, m_resolver, AttributionOptions{m_wantContainerChain});
 
     m_last = dbus::toDtos(kept);
     emit ConnectionsChanged(static_cast<qulonglong>(m_clock.elapsed()), m_last);

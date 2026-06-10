@@ -61,6 +61,47 @@ public:
     //   CumulativeAverage = lifetime CMA of the connection's rate samples
     enum class ThroughputMaxMode : int { Windowed = 0, CumulativeAverage = 1 };
     [[nodiscard]] ThroughputMaxMode throughputMaxMode() const { return m_throughputMaxMode; }
+
+    // Connections view layout. Flat = v0.1 iftop-style table. The grouped
+    // modes turn the view into a tree where each top-level row aggregates
+    // the SUM of its children's rates and is annotated with a flow count.
+    // Children are individual flows, rendered identically to Flat mode
+    // so the color-coded gauge / direction tint stay meaningful.
+    enum class ConnectionViewMode : int {
+        Flat = 0,
+        ByInterface = 1,
+        ByContainer = 2,
+        ByProcess = 3,
+    };
+    [[nodiscard]] ConnectionViewMode connectionViewMode() const { return m_connViewMode; }
+    // Process / Container attribution column visibility. Gated in the
+    // Settings dialog by the agent's process-attribution-wire /
+    // container-attribution-wire capability tokens, but the values
+    // persist regardless so they survive switching backends. The
+    // "show chain in tooltip" toggle is independent — it controls
+    // whether the Container column's tooltip lists the full
+    // OUTER→INNER nesting (container-chain-wire token).
+    [[nodiscard]] bool showProcessColumn() const   { return m_showProcessColumn; }
+    [[nodiscard]] bool showContainerColumn() const { return m_showContainerColumn; }
+    [[nodiscard]] bool showContainerChainInTooltip() const { return m_showContainerChainInTooltip; }
+    [[nodiscard]] bool showGroupHeaderDetails() const { return m_showGroupHeaderDetails; }
+
+    // --- Group-header chip palette (configurable; distinct from the
+    //     peer src/dst colours used in the flow column). Four semantic
+    //     roles map the chip kinds: primary (process/container/iface
+    //     name), user (uid→name), id (container id), detail (pid /
+    //     cmdline / flow count). Stored + returned as #rrggbb strings
+    //     (Settings stays Qt6::Core-only — the UI converts to QColor);
+    //     defaults are deliberately off the blue/amber peer palette. ---
+    [[nodiscard]] QString chipColorPrimary() const { return m_chipColorPrimary; }
+    [[nodiscard]] QString chipColorUser()    const { return m_chipColorUser; }
+    [[nodiscard]] QString chipColorId()      const { return m_chipColorId; }
+    [[nodiscard]] QString chipColorDetail()  const { return m_chipColorDetail; }
+
+    [[nodiscard]] static QString defaultChipColorPrimary() { return QStringLiteral("#b58bff"); } // violet
+    [[nodiscard]] static QString defaultChipColorUser()    { return QStringLiteral("#5fd0c5"); } // teal
+    [[nodiscard]] static QString defaultChipColorId()      { return QStringLiteral("#e08ab8"); } // rose
+    [[nodiscard]] static QString defaultChipColorDetail()  { return QStringLiteral("#9aa0a6"); } // grey
     [[nodiscard]] int  throughputWindowSecs() const          { return m_throughputWindowSecs; }
     // EMA time constant (milliseconds) for smoothing per-connection
     // instantaneous rx/tx rates. 0 = no smoothing (raw per-tick deltas).
@@ -116,6 +157,18 @@ public:
     void setShowStatusInTitle(bool v);
     void setStartOnLogin(bool v);
     void setConnectionFilterExpr(const QString &expr);
+    void setConnectionViewMode(ConnectionViewMode m);
+    void setShowProcessColumn(bool v);
+    void setShowContainerColumn(bool v);
+    void setShowContainerChainInTooltip(bool v);
+    void setShowGroupHeaderDetails(bool v);
+
+    void setChipColorPrimary(const QString &hex);
+    void setChipColorUser(const QString &hex);
+    void setChipColorId(const QString &hex);
+    void setChipColorDetail(const QString &hex);
+    // Restore all four chip colours to their defaults (single changed()).
+    void resetChipColors();
 
 signals:
     void changed();
@@ -148,4 +201,16 @@ private:
     int  m_rateSmoothingMs               = 0;   // 0 = off (EMA τ in ms; sub-second supported)
     bool m_showStatusInTitle             = false;
     QString m_connFilterExpr;
+    ConnectionViewMode m_connViewMode    = ConnectionViewMode::Flat;
+    bool m_showProcessColumn             = false;
+    bool m_showContainerColumn           = false;
+    bool m_showContainerChainInTooltip   = true;
+    // When grouping (ByInterface/ByContainer/ByProcess), show extra
+    // attribution detail inline on the group header rows (pid, user,
+    // container id, etc). On by default — it's the point of grouping.
+    bool m_showGroupHeaderDetails        = true;
+    QString m_chipColorPrimary = defaultChipColorPrimary();
+    QString m_chipColorUser    = defaultChipColorUser();
+    QString m_chipColorId      = defaultChipColorId();
+    QString m_chipColorDetail  = defaultChipColorDetail();
 };

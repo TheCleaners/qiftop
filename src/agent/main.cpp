@@ -20,6 +20,7 @@
 
 #include "Application.h"
 #include "Config.h"
+#include "backend/ProcessResolverFactory.h"
 #include "dbus/Types.h"
 #include "util/Logging.h"
 
@@ -28,11 +29,18 @@
 #include "backend/linux/NetlinkMonitor.h"
 #endif
 
+// QIFTOP_VERSION is injected by CMake (project() version, single source of
+// truth). Fall back to a sentinel only if someone builds without it so the
+// translation unit still compiles.
+#ifndef QIFTOP_VERSION
+#define QIFTOP_VERSION "0.0-dev"
+#endif
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("qiftop-agent"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(QIFTOP_VERSION));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral(
@@ -79,7 +87,9 @@ int main(int argc, char *argv[])
 #endif
 
     const auto idleCfg = qiftop::agent::loadIdleConfig(parser.value(configOpt));
-    qiftop::agent::Application application(bus, &netMonitor, &connMonitor, idleCfg);
+    auto resolver = qiftop::backend::createProcessResolver({});
+    qiftop::agent::Application application(bus, &netMonitor, &connMonitor,
+                                           idleCfg, std::move(resolver));
     if (!application.start()) {
         qCritical().noquote() << "agent:" << application.errorString();
         return 3;

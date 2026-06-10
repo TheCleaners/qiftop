@@ -78,6 +78,104 @@ private slots:
         Settings s;
         QCOMPARE(s.rateSmoothingMs(), 0);
     }
+
+    void chip_colors_roundtrip_and_reset()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        redirectSettings(dir.path());
+
+        {
+            Settings s;
+            // Defaults present on a fresh store.
+            QCOMPARE(s.chipColorPrimary(), Settings::defaultChipColorPrimary());
+
+            s.setChipColorPrimary(QStringLiteral("#123456"));
+            s.setChipColorUser(QStringLiteral("#abcdef"));
+            // Invalid hex is rejected (value unchanged).
+            const QString beforeId = s.chipColorId();
+            s.setChipColorId(QStringLiteral("not-a-color"));
+            QCOMPARE(s.chipColorId(), beforeId);
+        }
+        {
+            // Persisted across reconstruction.
+            Settings s;
+            QCOMPARE(s.chipColorPrimary(), QStringLiteral("#123456"));
+            QCOMPARE(s.chipColorUser(),    QStringLiteral("#abcdef"));
+
+            // Reset restores all four defaults.
+            s.resetChipColors();
+            QCOMPARE(s.chipColorPrimary(), Settings::defaultChipColorPrimary());
+            QCOMPARE(s.chipColorUser(),    Settings::defaultChipColorUser());
+            QCOMPARE(s.chipColorId(),      Settings::defaultChipColorId());
+            QCOMPARE(s.chipColorDetail(),  Settings::defaultChipColorDetail());
+        }
+        {
+            // Reset persisted too.
+            Settings s;
+            QCOMPARE(s.chipColorPrimary(), Settings::defaultChipColorPrimary());
+        }
+    }
+
+    // TESTS-#6: round-trip persistence for the v0.2 attribution view settings
+    // (connection view mode + the capability-gated Process/Container column
+    // toggles + container-chain-in-tooltip). None had coverage before.
+    void attribution_view_settings_roundtrip()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        redirectSettings(dir.path());
+
+        {
+            // Defaults on a fresh store.
+            Settings s;
+            QCOMPARE(s.connectionViewMode(), Settings::ConnectionViewMode::Flat);
+            QCOMPARE(s.showProcessColumn(),   false);
+            QCOMPARE(s.showContainerColumn(), false);
+            QCOMPARE(s.showContainerChainInTooltip(), true);
+
+            s.setConnectionViewMode(Settings::ConnectionViewMode::ByContainer);
+            s.setShowProcessColumn(true);
+            s.setShowContainerColumn(true);
+            s.setShowContainerChainInTooltip(false);
+        }
+        {
+            // Persisted across reconstruction.
+            Settings s;
+            QCOMPARE(s.connectionViewMode(), Settings::ConnectionViewMode::ByContainer);
+            QCOMPARE(s.showProcessColumn(),   true);
+            QCOMPARE(s.showContainerColumn(), true);
+            QCOMPARE(s.showContainerChainInTooltip(), false);
+        }
+    }
+
+    // TESTS-#6: an out-of-range persisted view mode (e.g. written by a newer
+    // build with more modes, or a corrupted store) must clamp to the Flat
+    // default rather than yielding an invalid enum — see the load guard in
+    // Settings.cpp.
+    void connection_view_mode_out_of_range_clamps_to_flat()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        redirectSettings(dir.path());
+
+        {
+            QSettings raw;
+            raw.setValue("connections/viewMode", 99); // beyond ByProcess(3)
+            raw.sync();
+        }
+        Settings s;
+        QCOMPARE(s.connectionViewMode(), Settings::ConnectionViewMode::Flat);
+
+        // A negative value is equally invalid and must also clamp.
+        {
+            QSettings raw;
+            raw.setValue("connections/viewMode", -1);
+            raw.sync();
+        }
+        Settings s2;
+        QCOMPARE(s2.connectionViewMode(), Settings::ConnectionViewMode::Flat);
+    }
 };
 
 QTEST_MAIN(TestSettingsMigration)

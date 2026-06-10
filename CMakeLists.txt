@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(qiftop VERSION 0.1 LANGUAGES CXX)
+project(qiftop VERSION 0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +11,45 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network DBus)
 
+# --- Per-flow process / container attribution (v0.2+) -----------------------
+# Three independent compile-time toggles. Each gates a layer of the
+# ProcessResolver pipeline; absent flags mean the corresponding source
+# files are simply not compiled (and the resolver layer is unavailable
+# at runtime, not greyed-out in the UI — the UI follows the runtime
+# Capabilities token list). Defaults: ON on Linux, OFF elsewhere.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(QIFTOP_ATTRIBUTION_DEFAULT ON)
+else()
+    set(QIFTOP_ATTRIBUTION_DEFAULT OFF)
+endif()
+option(QIFTOP_ENABLE_PROCESS_ATTRIBUTION
+    "Enable per-flow process attribution (NETLINK_SOCK_DIAG + /proc walk on Linux)"
+    ${QIFTOP_ATTRIBUTION_DEFAULT})
+option(QIFTOP_ENABLE_CONTAINER_ATTRIBUTION
+    "Enable per-flow container attribution (cgroup classifier on Linux)"
+    ${QIFTOP_ATTRIBUTION_DEFAULT})
+option(QIFTOP_ENABLE_NETNS_SCAN
+    "Enable cross-network-namespace socket scanning (setns + sock_diag; Linux only, needs CAP_SYS_ADMIN)"
+    ${QIFTOP_ATTRIBUTION_DEFAULT})
+
+# Expose the toggles to all targets as compile definitions, so the
+# resolver factory and concrete impls can #ifdef on them. Non-Linux
+# builds get NONE of these defines regardless of the user's setting.
+function(qiftop_apply_attribution_defs target)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        return()
+    endif()
+    if(QIFTOP_ENABLE_PROCESS_ATTRIBUTION)
+        target_compile_definitions(${target} PRIVATE QIFTOP_ENABLE_PROCESS_ATTRIBUTION)
+    endif()
+    if(QIFTOP_ENABLE_CONTAINER_ATTRIBUTION)
+        target_compile_definitions(${target} PRIVATE QIFTOP_ENABLE_CONTAINER_ATTRIBUTION)
+    endif()
+    if(QIFTOP_ENABLE_NETNS_SCAN)
+        target_compile_definitions(${target} PRIVATE QIFTOP_ENABLE_NETNS_SCAN)
+    endif()
+endfunction()
+
 # --- Shared DBus type marshalling (used by both client and agent) -----------
 add_library(qiftop_dbus STATIC
     src/dbus/Types.cpp
@@ -19,10 +58,16 @@ target_include_directories(qiftop_dbus PUBLIC src)
 target_link_libraries(qiftop_dbus PUBLIC Qt6::Core Qt6::Network Qt6::DBus)
 
 # --- Client (qiftop) --------------------------------------------------------
-add_executable(qiftop
-    src/main.cpp
+# qiftop_ui is a static library carrying every translation unit of the GUI
+# client EXCEPT main.cpp. Both the qiftop executable and the widget-level
+# smoke tests (tests/test_mainwindow_smoke.cpp) link against it so the
+# tests exercise the real production widget tree, models, and proxies —
+# not stand-in lookalikes.
+add_library(qiftop_ui STATIC
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
+    src/backend/PlatformInfo.cpp
+    src/backend/ProcessResolverFactory.cpp
     src/backend/dbus/DBusNetworkMonitor.cpp
     src/backend/dbus/DBusConnectionMonitor.cpp
     src/config/Settings.cpp
@@ -34,8 +79,10 @@ add_executable(qiftop
     src/ui/InterfaceNameDelegate.cpp
     src/ui/ConnectionModel.cpp
     src/ui/ConnectionFilterProxy.cpp
+    src/ui/ConnectionGroupProxy.cpp
     src/ui/ConnectionFlowDelegate.cpp
     src/ui/RowGaugeDelegate.cpp
+    src/ui/ConnectionAttributionDelegate.cpp
     src/ui/SettingsDialog.cpp
     src/ui/TrayManager.cpp
     src/util/Autostart.cpp
@@ -46,19 +93,27 @@ add_executable(qiftop
     src/util/Logging.cpp
     src/util/PrivilegeEscalator.cpp
 )
+target_include_directories(qiftop_ui PUBLIC src)
+target_link_libraries(qiftop_ui PUBLIC
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::DBus qiftop_dbus)
 
-target_include_directories(qiftop PRIVATE src)
+add_executable(qiftop src/main.cpp)
+target_link_libraries(qiftop PRIVATE qiftop_ui)
+# Single source of truth for the release version: derive the runtime
+# --version string from the CMake project() version instead of hardcoding it
+# in main.cpp (which silently drifted from 0.1 to 0.2).
+target_compile_definitions(qiftop PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
 
 # Platform backend selection (shared between client and agent)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_subdirectory(src/backend/linux)
-    target_link_libraries(qiftop PRIVATE backend_linux)
-    target_compile_definitions(qiftop PRIVATE BACKEND_LINUX)
+    target_link_libraries(qiftop_ui PUBLIC backend_linux)
+    target_compile_definitions(qiftop_ui PUBLIC BACKEND_LINUX)
 else()
     message(FATAL_ERROR "No backend available for platform: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-target_link_libraries(qiftop PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::DBus qiftop_dbus)
+qiftop_apply_attribution_defs(qiftop_ui)
 
 # --- Privileged agent (qiftop-agent) ----------------------------------------
 add_executable(qiftop-agent
@@ -67,16 +122,37 @@ add_executable(qiftop-agent
     src/agent/Config.cpp
     src/agent/InterfacesService.cpp
     src/agent/ConnectionsService.cpp
+    src/agent/Attribution.cpp
     src/agent/IdleManager.cpp
     src/backend/NetworkMonitor.cpp
     src/backend/ConnectionMonitor.cpp
+    src/backend/PlatformInfo.cpp
+    src/backend/ProcessResolverFactory.cpp
     src/util/Logging.cpp
 )
 target_include_directories(qiftop-agent PRIVATE src)
 target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qiftop_dbus)
+target_compile_definitions(qiftop-agent PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(qiftop-agent PRIVATE backend_linux)
     target_compile_definitions(qiftop-agent PRIVATE BACKEND_LINUX)
+endif()
+qiftop_apply_attribution_defs(qiftop-agent)
+
+# --- Demo harness (privacy-safe synthetic GUI driver) -----------------------
+# Off by default. Builds docs/demo/qiftop-demo.cpp, which drives the real
+# MainWindow from the in-memory test fakes with fabricated data (RFC 5737
+# doc IPs + RFC 2606 example.* hostnames) for generating the README capture.
+option(QIFTOP_BUILD_DEMO "Build the synthetic GUI demo harness (docs/demo)" OFF)
+if(QIFTOP_BUILD_DEMO)
+    add_executable(qiftop-demo
+        docs/demo/qiftop-demo.cpp
+        tests/fakes/FakeMonitors.h)
+    target_link_libraries(qiftop-demo PRIVATE qiftop_ui Qt6::Widgets)
+    # The fakes live under tests/ and are included as "fakes/FakeMonitors.h".
+    target_include_directories(qiftop-demo PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    qiftop_apply_attribution_defs(qiftop-demo)
 endif()
 
 # --- Install rules ----------------------------------------------------------
@@ -152,11 +228,19 @@ if(NOT DEFINED CPACK_STRIP_FILES)
 endif()
 set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_SOURCE_DIR}/LICENSE")
 set(CPACK_RESOURCE_FILE_README      "${CMAKE_SOURCE_DIR}/README.md")
-set(CPACK_PACKAGE_VERSION           "${PROJECT_VERSION}")
+# Defaults to the project() version. Overridable: pre-release tags
+# (release.yml) pass e.g. -DCPACK_PACKAGE_VERSION=0.2~rc1 so the .deb
+# version + filename carry the full tag. The Debian "~" makes a prerelease
+# sort BEFORE the final (0.2~rc1 < 0.2), so apt upgrades rc → final cleanly;
+# a literal "-rc1" would sort NEWER than 0.2 and block the upgrade.
+if(NOT DEFINED CPACK_PACKAGE_VERSION)
+    set(CPACK_PACKAGE_VERSION       "${PROJECT_VERSION}")
+endif()
 
 set(CPACK_DEB_COMPONENT_INSTALL ON)
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS ON)
-# One file per component, named e.g. qiftop_0.1_amd64.deb
+# One file per component, named e.g. qiftop_0.2_amd64.deb (or, for a
+# pre-release tag, qiftop_0.2~rc1_amd64.deb).
 set(CPACK_DEBIAN_FILE_NAME          "DEB-DEFAULT")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS  ON)
 set(CPACK_DEBIAN_PACKAGE_SECTION    "net")
@@ -165,7 +249,9 @@ set(CPACK_DEBIAN_PACKAGE_PRIORITY   "optional")
 # --- GUI package ------------------------------------------------------------
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_NAME         "qiftop")
 set(CPACK_DEBIAN_QIFTOP_PACKAGE_DEPENDS      "libc6, libqt6core6t64 | libqt6core6, libqt6widgets6, libqt6network6, libqt6dbus6")
-set(CPACK_DEBIAN_QIFTOP_PACKAGE_RECOMMENDS   "qiftop-agent (= ${PROJECT_VERSION})")
+# Pin to the exact package version built in this run (incl. any ~rcN suffix)
+# so the GUI Recommends matches the agent .deb produced alongside it.
+set(CPACK_DEBIAN_QIFTOP_PACKAGE_RECOMMENDS   "qiftop-agent (= ${CPACK_PACKAGE_VERSION})")
 set(CPACK_DEBIAN_QIFTOP_DESCRIPTION
 "Qt6 iftop-style network monitor (GUI).
 qiftop is a Qt 6 desktop application that displays live per-interface
@@ -191,6 +277,69 @@ with CAP_NET_ADMIN only.")
 # Run systemctl/dbus reload hooks on install/remove + declare /etc conffiles.
 set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_CONTROL_EXTRA
     "${CMAKE_SOURCE_DIR}/dist/debian/postinst;${CMAKE_SOURCE_DIR}/dist/debian/postrm;${CMAKE_SOURCE_DIR}/dist/debian/conffiles")
+
+# --- RPM generator (Fedora / openSUSE etc.) ---------------------------------
+# Mirrors the DEB config above. Built with `cpack -G RPM` (needs rpmbuild +
+# the Fedora -devel libs). Library Requires are discovered automatically by
+# rpmbuild's find-requires (CPACK_RPM_PACKAGE_AUTOREQ defaults ON), so we only
+# declare the non-library deps. Filenames follow RPM convention:
+# name-version-release.dist.arch.rpm, e.g. qiftop-0.2~rc1-1.fc44.x86_64.rpm
+# (rpm 4.10+ sorts the '~' before the final release, matching the DEB '~rcN').
+set(CPACK_RPM_COMPONENT_INSTALL ON)
+set(CPACK_RPM_FILE_NAME            "RPM-DEFAULT")
+set(CPACK_RPM_PACKAGE_LICENSE      "GPLv2+")
+set(CPACK_RPM_PACKAGE_GROUP        "Applications/System")
+set(CPACK_RPM_PACKAGE_URL          "${CPACK_PACKAGE_HOMEPAGE_URL}")
+set(CPACK_RPM_PACKAGE_VENDOR       "${CPACK_PACKAGE_VENDOR}")
+# Append the %{?dist} tag (.fc44 etc.) — standard Fedora practice.
+set(CPACK_RPM_PACKAGE_RELEASE      "1")
+set(CPACK_RPM_PACKAGE_RELEASE_DIST ON)
+
+# GUI subpackage
+set(CPACK_RPM_QIFTOP_PACKAGE_NAME     "qiftop")
+set(CPACK_RPM_QIFTOP_PACKAGE_SUMMARY  "Qt6 iftop-style network monitor (GUI)")
+# Weak dep on the agent (rpm Recommends), matching the DEB Recommends. Pinned
+# to the exact version built alongside it.
+set(CPACK_RPM_QIFTOP_PACKAGE_RECOMMENDS "qiftop-agent = ${CPACK_PACKAGE_VERSION}")
+
+# Agent subpackage
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_NAME    "qiftop-agent")
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_SUMMARY "Privileged DBus agent for qiftop")
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_REQUIRES   "dbus, shadow-utils")
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables")
+# Preserve user edits to the config file across upgrades (Fedora %config(noreplace)).
+set(CPACK_RPM_QIFTOP-AGENT_USER_FILELIST "%config(noreplace) /etc/qiftop/agent.conf")
+# Group creation + user enrollment + systemd reload, mirroring the DEB
+# maintainer scripts (RPM scriptlet semantics differ — see the files).
+set(CPACK_RPM_QIFTOP-AGENT_POST_INSTALL_SCRIPT_FILE
+    "${CMAKE_SOURCE_DIR}/dist/rpm/post-agent.sh")
+set(CPACK_RPM_QIFTOP-AGENT_POST_UNINSTALL_SCRIPT_FILE
+    "${CMAKE_SOURCE_DIR}/dist/rpm/postun-agent.sh")
+# Don't claim ownership of standard system directories that are already owned
+# by the `filesystem`, `systemd`, `dbus`, and `hicolor-icon-theme` packages —
+# otherwise rpm reports a file conflict (notably `/lib`, which is a usrmerge
+# symlink owned by `filesystem`). The package-specific dirs (/etc/qiftop,
+# /usr/share/qiftop) are deliberately NOT excluded so we keep owning them.
+set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+    "/lib;/lib/systemd;/lib/systemd/system;/usr/share/dbus-1;/usr/share/dbus-1/system.d;/usr/share/dbus-1/system-services;/usr/share/applications;/usr/share/icons;/usr/share/icons/hicolor;/usr/share/icons/hicolor/scalable;/usr/share/icons/hicolor/scalable/apps")
+
+# Pre-release RPMs keep inline debug info (unstripped), mirroring the
+# unstripped pre-release .deb so user-reported crash backtraces are
+# debuggable. CPACK_STRIP_FILES=OFF is the release workflow's signal for a
+# "debuggable build" (set for pre-release tags); for it we neutralise BOTH
+# of rpmbuild's symbol-shedding passes that would otherwise discard the
+# DWARF that CPACK_STRIP_FILES=OFF preserved at install time:
+#   * `debug_package %{nil}`  — don't split symbols into a -debuginfo
+#     subpackage (the .deb keeps them inline, so the .rpm does too).
+#   * `__strip /bin/true`     — neutralise brp-strip so the binaries in the
+#     payload stay unstripped with their .debug_* sections intact.
+# Final tags strip normally (CPACK_STRIP_FILES defaults TRUE above).
+if(NOT CPACK_STRIP_FILES)
+    set(CPACK_RPM_DEBUGINFO_PACKAGE OFF)
+    set(CPACK_RPM_SPEC_MORE_DEFINE
+"%global debug_package %{nil}
+%global __strip /bin/true")
+endif()
 
 include(CPack)
 cpack_add_component(qiftop

@@ -1,0 +1,48 @@
+# qiftop-dark — minimal dark Openbox theme (orange accent) used only for
+# generating the README demo capture, so the window title bar blends with
+# qiftop's dark UI. The orange accent ties into the app's address/direction
+# colouring and the amber in the icon.
+
+border.width: 1
+padding.width: 8
+padding.height: 5
+window.handle.width: 0
+window.client.padding.width: 0
+window.client.padding.height: 0
+window.label.text.justify: left
+
+window.active.border.color: #0d0e10
+window.inactive.border.color: #0d0e10
+
+window.active.title.bg: flat solid
+window.active.title.bg.color: #1f2024
+window.inactive.title.bg: flat solid
+window.inactive.title.bg.color: #161719
+
+window.active.label.bg: parentrelative
+window.inactive.label.bg: parentrelative
+# Orange accent: the active window title text.
+window.active.label.text.color: #e8913a
+window.inactive.label.text.color: #6f7074
+
+window.active.button.unpressed.bg: flat solid
+window.active.button.unpressed.bg.color: #1f2024
+window.active.button.unpressed.image.color: #cfd0d4
+window.active.button.hover.bg: flat solid
+window.active.button.hover.bg.color: #2a2b30
+window.active.button.hover.image.color: #f0a35e
+window.active.button.pressed.bg: flat solid
+window.active.button.pressed.bg.color: #2a2b30
+window.active.button.pressed.image.color: #ffb066
+window.inactive.button.unpressed.bg: flat solid
+window.inactive.button.unpressed.bg.color: #161719
+window.inactive.button.unpressed.image.color: #6a6b6f
+
+menu.border.color: #0d0e10
+menu.title.bg.color: #1f2024
+menu.title.text.color: #e8913a
+menu.items.bg.color: #1b1c1f
+menu.items.text.color: #e2e3e6
+menu.items.active.bg.color: #e8913a
+menu.items.active.text.color: #1b1c1f
+

@@ -3,9 +3,13 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QPainter>
 #include <QPalette>
+#include <QTableView>
 #include <QTextDocument>
+#include <QTextOption>
+#include <QTreeView>
 
 namespace {
 
@@ -39,6 +43,63 @@ FlowColors pickFlowColors(const QStyleOptionViewItem &option, bool selected)
     return { muted.name(QColor::HexArgb),
              src  .name(QColor::HexArgb),
              dst  .name(QColor::HexArgb) };
+}
+
+// Colour for a group-header chip "kind", using the configurable chip
+// palette (distinct from the flow-row peer colours). Selected rows fall
+// back to HighlightedText for contrast; invalid palette entries fall
+// back to the theme's muted colour.
+QString chipColor(const QStyleOptionViewItem &option, bool selected,
+                  const QString &kind, const ChipPalette &pal)
+{
+    if (selected)
+        return option.palette.color(QPalette::HighlightedText).name(QColor::HexArgb);
+    const QColor muted = option.palette.color(QPalette::PlaceholderText);
+    const auto pick = [&](const QColor &c) {
+        return (c.isValid() ? c : muted).name(QColor::HexArgb);
+    };
+    if (kind == QLatin1String("process") || kind == QLatin1String("container")
+        || kind == QLatin1String("iface"))
+        return pick(pal.primary);
+    if (kind == QLatin1String("user"))
+        return pick(pal.user);
+    if (kind == QLatin1String("id"))
+        return pick(pal.id);
+    // pid / cmdline / count → detail colour.
+    return pick(pal.detail);
+}
+
+QTextDocument *buildGroupDoc(const QStyleOptionViewItem &option,
+                             const QVariantList &chips,
+                             const ChipPalette &pal)
+{
+    const bool selected = option.state & QStyle::State_Selected;
+    QStringList spans;
+    for (const QVariant &v : chips) {
+        const QVariantMap m = v.toMap();
+        const QString text = m.value(QStringLiteral("text")).toString().toHtmlEscaped();
+        const QString kind = m.value(QStringLiteral("kind")).toString();
+        const QString color = chipColor(option, selected, kind, pal);
+        const bool bold = (kind == QLatin1String("process")
+                           || kind == QLatin1String("container")
+                           || kind == QLatin1String("iface"));
+        spans << QStringLiteral("<span style=\"color:%1;%2\">%3</span>")
+                     .arg(color,
+                          bold ? QStringLiteral("font-weight:bold;") : QString(),
+                          text);
+    }
+    const QString sep = QStringLiteral(
+        " <span style=\"color:%1;\">·</span> ")
+        .arg(option.palette.color(QPalette::PlaceholderText).name(QColor::HexArgb));
+
+    auto *doc = new QTextDocument;
+    doc->setDocumentMargin(0);
+    doc->setDefaultFont(option.font);
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    doc->setDefaultTextOption(wrap);
+    doc->setHtml(spans.join(sep));
+    return doc;
 }
 
 QTextDocument *buildDoc(const QStyleOptionViewItem &option,
@@ -88,11 +149,28 @@ QTextDocument *buildDoc(const QStyleOptionViewItem &option,
     auto *doc = new QTextDocument;
     doc->setDocumentMargin(0);
     doc->setDefaultFont(option.font);
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    doc->setDefaultTextOption(wrap);
     doc->setHtml(html);
     return doc;
 }
 
 } // namespace
+
+// Returns the group-header chip document when `index` is a group row
+// (GroupChipsRole non-empty), else the normal flow-endpoint document.
+static QTextDocument *chooseDoc(const QStyleOptionViewItem &option,
+                                const QModelIndex &index,
+                                bool colorCode,
+                                const ChipPalette &chipPalette)
+{
+    const QVariantList chips =
+        index.data(ConnectionModel::GroupChipsRole).toList();
+    if (!chips.isEmpty())
+        return buildGroupDoc(option, chips, chipPalette);
+    return buildDoc(option, index, colorCode);
+}
 
 void ConnectionFlowDelegate::paint(QPainter *painter,
                                    const QStyleOptionViewItem &option,
@@ -114,7 +192,7 @@ void ConnectionFlowDelegate::paint(QPainter *painter,
 
     const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
 
-    QTextDocument *doc = buildDoc(opt, index, m_colorCode);
+    QTextDocument *doc = chooseDoc(opt, index, m_colorCode, m_chipPalette);
     doc->setTextWidth(textRect.width());
 
     painter->save();
@@ -137,8 +215,24 @@ QSize ConnectionFlowDelegate::sizeHint(const QStyleOptionViewItem &option,
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
 
-    QTextDocument *doc = buildDoc(opt, index, m_colorCode);
-    doc->setTextWidth(-1);
+    QTextDocument *doc = chooseDoc(opt, index, m_colorCode, m_chipPalette);
+
+    // Measure at the live column width so wrapped content (long IPv6
+    // endpoints in a narrow window) reports its true multi-line height
+    // — only the affected row grows (the view takes the per-row max of
+    // all columns' sizeHints, and only the Flow column wraps). Fall
+    // back to the unwrapped single-line width before the view has laid
+    // out (column width 0).
+    int colWidth = 0;
+    if (auto *tree = qobject_cast<QTreeView*>(view()))
+        colWidth = tree->columnWidth(index.column());
+    else if (auto *table = qobject_cast<QTableView*>(view()))
+        colWidth = table->columnWidth(index.column());
+    if (colWidth > 8) {
+        doc->setTextWidth(colWidth - 6);   // small text margin
+    } else {
+        doc->setTextWidth(-1);
+    }
     const QSize hint = doc->size().toSize();
     delete doc;
     return {hint.width(), hint.height() + 4};

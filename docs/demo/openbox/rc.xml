@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimal Openbox config for the qiftop demo capture: dark theme, and
+     maximize+anchor any window so the headless capture is a clean full frame. -->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <theme>
+    <name>qiftop-dark</name>
+    <titleLayout>LIMC</titleLayout>
+    <font place="ActiveWindow">
+      <name>sans</name>
+      <size>9</size>
+      <weight>bold</weight>
+      <slant>normal</slant>
+    </font>
+    <font place="InactiveWindow">
+      <name>sans</name>
+      <size>9</size>
+      <weight>normal</weight>
+      <slant>normal</slant>
+    </font>
+  </theme>
+  <placement>
+    <policy>Smart</policy>
+  </placement>
+  <applications>
+    <!-- Maximize + anchor only the MAIN window (type normal) so the headless
+         capture is a clean full frame; dialogs (Settings/Preferences) keep
+         their natural centered size. -->
+    <application type="normal">
+      <maximized>yes</maximized>
+      <position force="yes"><x>0</x><y>0</y></position>
+      <decor>yes</decor>
+    </application>
+  </applications>
+</openbox_config>

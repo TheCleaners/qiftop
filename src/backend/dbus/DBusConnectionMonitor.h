@@ -16,6 +16,7 @@ public:
     void start() override;
     void stop()  override;
     void setDesiredIntervalMs(int ms) override;
+    void requestProcessDetails(qint32 pid) override;
 
 private slots:
     void onConnectionsChanged(const QDBusMessage &msg);

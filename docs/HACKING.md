@@ -65,7 +65,7 @@ Useful overrides:
 |---------------------------------|---------|------------------------------------------------------|
 | `CMAKE_BUILD_TYPE`              | (empty) | `Debug`, `Release`, `RelWithDebInfo`.                |
 | `CMAKE_INSTALL_PREFIX`          | `/usr/local` | Where `cmake --install` lands. Use `/usr` for `.deb`. |
-| `QIFTOP_BUILD_TESTS`            | `OFF`   | Build the (forthcoming) test suite under `tests/`.   |
+| `QIFTOP_BUILD_TESTS`            | `ON`    | Build the test suite under `tests/`. Turn `OFF` for distro builds that don't want QtTest in the build deps. |
 | `QIFTOP_AUTO_PACKAGE`           | `ON`    | Run `cpack -G DEB` automatically after each agent re-link. |
 
 ### Incremental rebuild
@@ -102,6 +102,38 @@ qiftop-agent_<ver>_amd64.deb   (daemon + systemd + dbus policy + /etc conffile)
 
 `dpkg-deb -c <file>.deb` to inspect contents; `dpkg-deb -e <file>.deb /tmp/d`
 then `cat /tmp/d/conffiles` to confirm config files are correctly tagged.
+
+### Building the `.rpm`s (Fedora)
+
+RPMs need `rpmbuild` + the Fedora `-devel` libraries, so they can't be
+built on the Debian dev box directly. Build them inside a `fedora`
+container — the helper script does configure → build → `cpack -G RPM`
+→ a clean-container install + verification in one shot:
+
+```bash
+docker run --rm -v "$PWD":/src:ro fedora:44 bash /src/dist/rpm/build-and-verify.sh
+```
+
+Output (RPM naming convention, `name-version-release.dist.arch`):
+```
+qiftop-<ver>-1.fc44.x86_64.rpm          (GUI)
+qiftop-agent-<ver>-1.fc44.x86_64.rpm    (daemon + systemd + dbus + /etc config)
+```
+
+`rpm -qpR <file>.rpm` lists Requires (library deps auto-discovered by
+find-requires); `rpm -qp --recommends <file>.rpm` shows the weak deps
+(`nftables`, the GUI's `qiftop-agent` pin); `rpm -qc qiftop-agent`
+confirms `/etc/qiftop/agent.conf` is `%config(noreplace)`. The CPack RPM
+config lives in `CMakeLists.txt` (the `CPACK_RPM_*` block); the native
+`%post`/`%postun` scriptlets are `dist/rpm/{post,postun}-agent.sh`. The
+release workflow builds both `.deb` and `.rpm` on tag push.
+
+> **usrmerge gotcha**: the systemd unit installs to `/lib/systemd/system`
+> (a `/usr/lib` symlink on Fedora). Without
+> `CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION` listing `/lib` and the
+> other shared system dirs, rpm tries to own `/lib` and conflicts with
+> the `filesystem` package. The exclusion drops *directory ownership*
+> only — the files inside are still packaged.
 
 > **Implementation note** (don't repeat the mistake): the auto-package step
 > uses `add_custom_command(TARGET qiftop-agent POST_BUILD …)`, **not** an
@@ -161,12 +193,16 @@ sudo usermod -a -G netdev "$USER"
 ```
 
 The Debian `postinst` creates the `netdev` group if it doesn't already
-exist, but never auto-adds users to it (we don't silently relax
-permissions). On distros without a stock `netdev` group, either add it
-(`sudo groupadd -r netdev`) or change the `<policy group="netdev">`
-stanza to a group that exists on your system.
+exist AND auto-adds the installing user — preferring `$SUDO_USER`
+(populated when `apt`/`dpkg` runs under `sudo`), falling back to
+`$PKEXEC_UID` (populated when GNOME Software / KDE Discover install via
+`pkexec`). The user still needs to log out and back in (or
+`newgrp netdev`) for the new group membership to take effect. On
+distros without a stock `netdev` group, `postinst` creates one;
+the bus policy file (`dist/dbus/org.qiftop.NetworkAgent1.conf`) hard-
+codes the name, so changing it requires editing that stanza too.
 
-`agentReachable()` (in `src/main.cpp`) probes the agent with a real
+`probeAgent()` (in `src/main.cpp`) probes the agent with a real
 `GetInterfaces` call now, so a user who isn't in `netdev` falls back
 cleanly to the in-process backend instead of staring at an empty UI.
 
@@ -336,6 +372,24 @@ Unit tests live under `tests/` and are built by default
      tests.
   3. `cmake --build build && (cd build && ctest --output-on-failure)`.
 
+* **TDD it whenever practical.** For the cgroup classifier work
+  (steps 3 + Tier-1 fixtures + nspawn), the rhythm was: write the
+  fixture/test FIRST → confirm it fails for the *expected reason* →
+  add the regex → confirm green. This protects against the failure
+  mode where you write a test that passes trivially because the new
+  code path was never actually exercised.
+
+* **Fixture-hex-length trap.** Cgroup regexes are anchored to
+  EXACTLY `{64}` hex chars. Test fixtures that build a 64-hex CID
+  by concatenating short tokens (`"abc123" + "def456" + ...`) are
+  easy to get wrong — once we shipped a fixture with 88 chars
+  pretending to be 64. Always use `QString(64, QLatin1Char('c'))`
+  for predictable length; reach for concatenation only when the
+  test specifically needs distinguishing prefixes (e.g. the
+  chain-depth test in `test_cgroup_parse.cpp::chainCapsAtMaxDepth`
+  uses `%1` + zero-padding to keep IDs distinct yet exactly 64
+  chars).
+
 * **What's worth testing here:** pure helpers — the heuristics in
   `src/util/ConnectionHeuristics.h`, `Settings` migration on the
   `QSettings` ini path, `Exporter` formatting, anything in `util/`
@@ -459,7 +513,7 @@ root user. If you renamed the service, the policy needs updating too.
 
 Most common cause after the June 2026 hardening: your user isn't in the
 `netdev` group, so the DBus policy denies every method call. The
-`agentReachable()` probe in `src/main.cpp` calls `GetInterfaces` with a
+`probeAgent()` helper in `src/main.cpp` calls `GetInterfaces` with a
 1 s timeout; AccessDenied makes it return `false` and the GUI drops into
 the in-process path. To confirm:
 
@@ -506,7 +560,7 @@ should not appear.
 The auto-package `add_custom_command(POST_BUILD)` is wired to the
 `qiftop-agent` target only — client-only edits (e.g. anything in
 `src/ui/`) build & link the new `qiftop` binary but **do not** trigger
-a `.deb` regen, so `dpkg -i build/qiftop_0.1_amd64.deb` keeps
+a `.deb` regen, so `dpkg -i build/qiftop_*_amd64.deb` keeps
 installing the *previous* client. Symptom: edits seem to have no
 effect at runtime even though the build succeeded.
 
@@ -514,7 +568,7 @@ Two fixes:
 
 ```bash
 # Force a repackage by hand:
-(cd build && cpack -G DEB && sudo dpkg -i qiftop_0.1_amd64.deb)
+(cd build && cpack -G DEB && sudo dpkg -i qiftop_*_amd64.deb)
 
 # Or touch the agent so the POST_BUILD hook fires:
 touch src/agent/main.cpp && cmake --build build -j$(nproc)
@@ -668,9 +722,14 @@ Before opening / merging:
 
 CI is wired up in `.github/workflows/`:
 
-* **`ci.yml`** — runs on every push / PR to `master`/`main`. Matrix of
-  Ubuntu 22.04 + 24.04, Debug + Release. Builds with Ninja, runs
-  `ctest` under `dbus-run-session` with `QT_QPA_PLATFORM=offscreen`.
+* **`ci.yml`** — runs on every push / PR to `master`/`main`. Native
+  ubuntu-24.04 runner × Debug + Release, plus a containerised matrix
+  for `ubuntu:26.04` and `fedora:44` (× Debug + Release). The
+  containerised slot for 26.04 is a temporary measure until GitHub
+  Actions publishes a native `ubuntu-26.04` runner image — swap it
+  back to a `runs-on:` entry as soon as that's available. Builds with
+  Ninja, runs `ctest` under `dbus-run-session` with
+  `QT_QPA_PLATFORM=offscreen`.
 * **`release.yml`** — triggered on `v*` tag push. Builds .debs on a
   clean ubuntu-24.04 runner, verifies the tag matches
   `project(qiftop VERSION ...)`, computes SHA256SUMS, and publishes a

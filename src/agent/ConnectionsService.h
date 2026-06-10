@@ -7,6 +7,8 @@
 
 class ConnectionMonitor;
 
+namespace qiftop::backend { class ProcessResolver; }
+
 namespace qiftop::agent {
 
 class IdleManager;
@@ -27,11 +29,37 @@ public:
 
     void setIdleManager(IdleManager *idle) { m_idle = idle; }
 
+    // Wire in the resolver used to enrich each emitted snapshot with
+    // process + container attribution. Optional: when null, attribution
+    // fields on the wire stay zero/empty (capability tokens
+    // `process-attribution-wire` / `container-attribution-wire` are
+    // gated by InterfacesService on the resolver's own capability
+    // tokens, so they won't be advertised either).
+    //
+    // `wantContainerChain` should mirror whether the resolver
+    // advertises `container-chain`; passing true with a resolver that
+    // doesn't implement the chain just yields single-entry chains
+    // (default base-class behaviour wraps resolveContainerForPid).
+    void setProcessResolver(backend::ProcessResolver *resolver,
+                            bool wantContainerChain = false)
+    {
+        m_resolver = resolver;
+        m_wantContainerChain = wantContainerChain;
+    }
+
 public slots:
     dbus::ConnectionDtoList GetConnections();
 
     // See InterfacesService::SetDesiredIntervalMs for semantics.
     void SetDesiredIntervalMs(uint intervalMs);
+
+    // On-demand process details fetch (capability: on-demand-process-details).
+    // Returns a struct with pid=0 when the PID is gone or unreadable —
+    // never throws. Cheap (a handful of /proc reads); intended for UI
+    // affordances (Copy cmdline, expand process row, etc.) and is NOT
+    // called per-tick. Clients should cache by (pid, startTimeJiffies)
+    // to survive PID reuse within one boot.
+    dbus::ProcessDetailsDto GetProcessDetails(uint pid);
 
 signals:
     // See InterfacesService::StatsChanged for the meaning of `monotonicMs`.
@@ -48,6 +76,8 @@ private slots:
 private:
     ConnectionMonitor       *m_monitor = nullptr;
     IdleManager             *m_idle    = nullptr;
+    backend::ProcessResolver*m_resolver= nullptr;
+    bool                     m_wantContainerChain = false;
     dbus::ConnectionDtoList  m_last;
     bool                     m_accountingEnabled = true;
     QElapsedTimer            m_clock;       // started in ctor; drives snapshot timestamps

@@ -83,12 +83,12 @@ tests/                                     # Qt6::Test unit tests, gated by QIFT
 
 ## DBus contract (`org.qiftop.NetworkAgent1`)
 
-| Path | Methods | Signals |
-|------|---------|---------|
-| `/.../Interfaces`  | `GetInterfaces()`, `SetDesiredIntervalMs(u)` | `StatsChanged` |
-| `/.../Connections` | `GetConnections()`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged`, `PermissionDenied`, `accountingChanged` |
+| Path | Methods | Signals | Properties |
+|------|---------|---------|------------|
+| `/.../Interfaces`  | `GetInterfaces()`, `SetDesiredIntervalMs(u)` | `StatsChanged`, `CadenceChanged` | `Version`, `Capabilities` |
+| `/.../Connections` | `GetConnections()`, `GetProcessDetails(u)`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged`, `PermissionDenied`, `AccountingChanged` | |
 
-Wire format is **native Qt marshalling, NOT JSON** (`a(yysqysqtttts)` for connections — see `src/dbus/Types.cpp`). Breaking DTO changes ⇒ bump to `NetworkAgent2`.
+Wire format is **native Qt marshalling, NOT JSON** (`a(yysqysqttttsyuyuussssa(sss))` for connections — 22 outer fields incl. the v0.2 process/container attribution columns + nested chain; see `src/dbus/Types.cpp` and the authoritative contract in `AGENTS.md §4`). Breaking DTO changes ⇒ bump to `NetworkAgent2`.
 
 **Idle manager gotcha**: the agent only resets activity on incoming method calls. Subscribing to signals alone is NOT enough — clients must heartbeat via `SetDesiredIntervalMs` every ≤ `hintTtlMs/2` (default 4s) or polling slows at 30s and pauses at 60s. The GUI does this in `MainWindow::applySettingsToUi`.
 
@@ -121,7 +121,7 @@ Wire format is **native Qt marshalling, NOT JSON** (`a(yysqysqtttts)` for connec
 
 ## Filter expression mini-language
 
-The Connections view supports a filter mini-language implemented in `src/util/ConnectionFilter.{h,cpp}` (pure, no Qt model/view dep). Grammar: boolean (`and`/`or`/`not`, parens), string fields (`proto`, `src`, `dst`, `host`, `iface`, `family`, `direction`), numeric fields (`sport/dport/port`, `bytes_in/out/total`, `pkts_in/out/total`, `rate_in/out/total`), ops (`: = != ~ < <= > >=`), byte suffixes (`K/Ki/M/Mi/G/Gi/T/Ti`). Evaluated against a `qiftop::filter::Context` built from model roles. See `helpHtml()` for the user-facing syntax sheet.
+The Connections view supports a filter mini-language implemented in `src/util/ConnectionFilter.{h,cpp}` (pure, no Qt model/view dep). Grammar: boolean (`and`/`or`/`not`, parens), string fields (`proto`, `src`, `dst`, `host`, `iface`, `family`, `direction`, `comm`, `runtime`, `container`, `chain_has`), numeric fields (`sport/dport/port`, `bytes_in/out/total`, `pkts_in/out/total`, `rate_in/out/total`, `pid`, `uid`), ops (`: = != ~ < <= > >=`), byte suffixes (`K/Ki/M/Mi/G/Gi/T/Ti`). Multi-haystack fields (`host`, `container`, `chain_has`) split their value into multiple lines and use any-match for `:`/`=`/`~`, all-match for `!=`. Evaluated against a `qiftop::filter::Context` built from model roles. See `helpHtml()` for the user-facing syntax sheet.
 
 ## Dependencies
 
@@ -147,7 +147,7 @@ busctl --system call org.qiftop.NetworkAgent1 \
     org.qiftop.NetworkAgent1.Interfaces GetInterfaces
 ```
 
-The `qiftop` .deb has a `POST_BUILD` cpack hook on the **agent** target only — client-only edits need `cd build && cpack -G DEB && sudo dpkg -i qiftop_0.1_amd64.deb` (or `touch src/agent/main.cpp` first to trigger).
+The `qiftop` .deb has a `POST_BUILD` cpack hook on the **agent** target only — client-only edits need `cd build && cpack -G DEB && sudo dpkg -i qiftop_*_amd64.deb` (or `touch src/agent/main.cpp` first to trigger).
 
 ## Adding a New Platform Backend
 
@@ -168,6 +168,6 @@ Tests are Qt6::Test, one executable per `.cpp`, gated by `option(QIFTOP_BUILD_TE
 
 ## Further reading
 
-- **[`HACKING.md`](../HACKING.md)** — recipe-level cookbook: build/run/debug recipes, common dev tasks, debugging gotchas. Update when changing dev loops.
+- **[`docs/HACKING.md`](../docs/HACKING.md)** — recipe-level cookbook: build/run/debug recipes, common dev tasks, debugging gotchas. Update when changing dev loops.
 - **[`AGENTS.md`](../AGENTS.md)** — architecture reference + changelog. Append a changelog entry for every non-trivial change.
 

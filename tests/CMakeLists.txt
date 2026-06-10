@@ -135,6 +135,65 @@ qiftop_add_test(test_priv_escalator
     ${CMAKE_SOURCE_DIR}/src/util/PrivilegeEscalator.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
 
+qiftop_add_test(test_process_resolver_null
+    test_process_resolver_null.cpp)
+
+qiftop_add_test(test_resolver_factory
+    test_resolver_factory.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/InterfacesService.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/IdleManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/ConnectionMonitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/NetworkMonitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/ProcessResolverFactory.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/Types.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
+target_link_libraries(test_resolver_factory PRIVATE Qt6::DBus)
+
+qiftop_add_test(test_attribution
+    test_attribution.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/Attribution.cpp)
+
+qiftop_add_test(test_composite_resolver
+    test_composite_resolver.cpp)
+
+# Widget-level smoke test. Links against the full qiftop_ui static
+# library so MainWindow, all delegates, all proxies, and the real
+# Settings code path are exercised end-to-end. Uses Fake monitors
+# (tests/fakes/FakeMonitors.h) to feed canned snapshots through the
+# same signal edges the production backends do. Runs offscreen
+# under QT_QPA_PLATFORM=offscreen so CI doesn't need a display.
+qiftop_add_test(test_mainwindow_smoke
+    test_mainwindow_smoke.cpp
+    fakes/FakeMonitors.h)
+target_link_libraries(test_mainwindow_smoke PRIVATE qiftop_ui Qt6::Widgets)
+target_include_directories(test_mainwindow_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests)
+
+qiftop_add_test(test_group_proxy
+    test_group_proxy.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/ConnectionGroupProxy.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp)
+target_link_libraries(test_group_proxy PRIVATE Qt6::Widgets)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    qiftop_add_test(test_sockdiag_parse
+        test_sockdiag_parse.cpp)
+    qiftop_add_test(test_cgroup_parse
+        test_cgroup_parse.cpp)
+
+    qiftop_add_test(test_cgroup_real_fixtures
+        test_cgroup_real_fixtures.cpp)
+    target_compile_definitions(test_cgroup_real_fixtures PRIVATE
+        QIFTOP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cgroup_real")
+
+    qiftop_add_test(test_proc_snapshot
+        test_proc_snapshot.cpp)
+
+    qiftop_add_test(test_proc_details
+        test_proc_details.cpp
+        ${CMAKE_SOURCE_DIR}/src/backend/linux/ProcDetails.cpp)
+endif()
+
 # Integration test: spawns the actual qiftop-agent binary against a session
 # bus and drives the live DBus contract end-to-end. Slow (~6 s; baseline +
 # fast windows + spawn/teardown per test method) so it's gated behind
@@ -147,4 +206,13 @@ if(QIFTOP_BUILD_INTEGRATION_TESTS)
     target_compile_definitions(test_agent_integration PRIVATE
         "QIFTOP_AGENT_BINARY=\"$<TARGET_FILE:qiftop-agent>\"")
     add_dependencies(test_agent_integration qiftop-agent)
+endif()
+
+# Tier-2 attribution integration harness. OFF by default — requires root,
+# CAP_NET_ADMIN+CAP_SYS_ADMIN, and a working container runtime. Enable
+# explicitly via scripts/integration-test.sh or the integration.yml CI.
+option(QIFTOP_BUILD_ATTRIBUTION_INTEGRATION
+       "Build per-runtime attribution integration tests (requires docker/podman/k3d/crio at runtime)" OFF)
+if(QIFTOP_BUILD_ATTRIBUTION_INTEGRATION)
+    add_subdirectory(integration/attribution)
 endif()

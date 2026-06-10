@@ -2,6 +2,7 @@
 #include "config/Settings.h"
 
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -10,15 +11,16 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QTabWidget>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QWidget>
 
 namespace {
-// Small helper: build a tab page whose content is a single QFormLayout
-// (the common shape of every Preferences tab here). Returns the new
+// Small helper: build a page whose content is a single QFormLayout
+// (the common shape of every Preferences page here). Returns the new
 // page widget and outputs the form layout to fill.
 QWidget *makeFormTab(QFormLayout *&form)
 {
@@ -29,14 +31,30 @@ QWidget *makeFormTab(QFormLayout *&form)
 }
 } // namespace
 
-SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
+SettingsDialog::SettingsDialog(Settings *settings,
+                               const QStringList &agentCapabilities,
+                               QWidget *parent)
     : QDialog(parent)
     , m_settings(settings)
+    , m_agentCaps(agentCapabilities)
 {
     setWindowTitle(tr("Preferences"));
     setModal(true);
 
-    auto *tabs = new QTabWidget(this);
+    // Category navigation on the left (KiCad / VSCode style), pages in a
+    // stack on the right. addNavPage() keeps list index == stack index.
+    m_navList = new QListWidget;
+    m_navList->setObjectName(QStringLiteral("settingsNavList"));
+    m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_navList->setMaximumWidth(180);
+    m_navList->setMinimumWidth(130);
+    m_stack = new QStackedWidget;
+    const auto addNavPage = [this](QWidget *page, const QString &title) {
+        m_stack->addWidget(page);
+        m_navList->addItem(title);
+    };
+    connect(m_navList, &QListWidget::currentRowChanged,
+            m_stack, &QStackedWidget::setCurrentIndex);
 
     // --- Monitoring tab ---
     QFormLayout *monitorForm = nullptr;
@@ -83,7 +101,7 @@ SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
     m_udpAggregateBox->setChecked(m_settings->udpAggregateByPeer());
     monitorForm->addRow(m_udpAggregateBox);
 
-    tabs->addTab(monitorTab, tr("Monitoring"));
+    addNavPage(monitorTab, tr("Monitoring"));
 
     // --- Display tab ---
     QFormLayout *displayForm = nullptr;
@@ -216,7 +234,82 @@ SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
             this, syncThroughputEnabled);
     syncThroughputEnabled();
 
-    tabs->addTab(displayTab, tr("Display"));
+    // --- Process & Container Attribution (display section) ----------------
+    // Gated by the agent's *-attribution-wire capability tokens: clients
+    // talking to an old agent or to the in-process fallback (no resolver)
+    // see the toggles disabled with an explanatory tooltip — the values
+    // still persist so they take effect when the user later runs against
+    // an attribution-capable agent.
+    const bool hasProcessWire   = m_agentCaps.contains(
+        QStringLiteral("process-attribution-wire"));
+    const bool hasContainerWire = m_agentCaps.contains(
+        QStringLiteral("container-attribution-wire"));
+    const bool hasChainWire     = m_agentCaps.contains(
+        QStringLiteral("container-chain-wire"));
+
+    auto *sep2 = new QFrame;
+    sep2->setFrameShape(QFrame::HLine);
+    sep2->setFrameShadow(QFrame::Sunken);
+    displayForm->addRow(sep2);
+
+    auto *attribHeader = new QLabel(tr("<b>Process &amp; Container Attribution</b>"));
+    displayForm->addRow(attribHeader);
+
+    const QString offTip = tr(
+        "The connected agent does not advertise this capability — "
+        "the column would be empty. The setting still persists and "
+        "will take effect when the agent supports it.");
+
+    m_showProcessColumnBox = new QCheckBox(tr("Show Process column"));
+    m_showProcessColumnBox->setChecked(m_settings->showProcessColumn());
+    if (!hasProcessWire) {
+        m_showProcessColumnBox->setEnabled(false);
+        m_showProcessColumnBox->setToolTip(offTip);
+    } else {
+        m_showProcessColumnBox->setToolTip(tr(
+            "Reveal the per-flow owning process (comm + pid). "
+            "Toggleable any time via the column header's right-click menu."));
+    }
+    displayForm->addRow(m_showProcessColumnBox);
+
+    m_showContainerColumnBox = new QCheckBox(tr("Show Container column"));
+    m_showContainerColumnBox->setChecked(m_settings->showContainerColumn());
+    if (!hasContainerWire) {
+        m_showContainerColumnBox->setEnabled(false);
+        m_showContainerColumnBox->setToolTip(offTip);
+    } else {
+        m_showContainerColumnBox->setToolTip(tr(
+            "Reveal the container runtime + name (or \"(host)\" "
+            "for non-containerised flows). A small \"▸ N×\" badge "
+            "indicates nested containers."));
+    }
+    displayForm->addRow(m_showContainerColumnBox);
+
+    m_showChainInTooltipBox = new QCheckBox(tr("Show full container chain in tooltip"));
+    m_showChainInTooltipBox->setChecked(m_settings->showContainerChainInTooltip());
+    if (!hasChainWire) {
+        m_showChainInTooltipBox->setEnabled(false);
+        m_showChainInTooltipBox->setToolTip(offTip);
+    } else {
+        m_showChainInTooltipBox->setToolTip(tr(
+            "When a container is nested (e.g. pod → sidecar), the "
+            "Container tooltip lists each level from outermost to "
+            "innermost. Disable for a one-line summary only."));
+    }
+    displayForm->addRow(m_showChainInTooltipBox);
+
+    m_showGroupHeaderDetailsBox =
+        new QCheckBox(tr("Show extra info on grouping header rows"));
+    m_showGroupHeaderDetailsBox->setChecked(m_settings->showGroupHeaderDetails());
+    m_showGroupHeaderDetailsBox->setToolTip(tr(
+        "When grouping the Connections view by Process or Container, "
+        "show extra attribution detail inline on each group header — "
+        "the owning user (for Process) or the short container id (for "
+        "Container) — plus a full breakdown on hover. Applies only in "
+        "the grouped view modes."));
+    displayForm->addRow(m_showGroupHeaderDetailsBox);
+
+    addNavPage(displayTab, tr("Display"));
 
     // --- DNS tab ---
     QFormLayout *dnsForm = nullptr;
@@ -236,7 +329,7 @@ SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
     m_aliasIfaceBox->setChecked(m_settings->resolveIfaceAddrsAsLocalhost());
     dnsForm->addRow(m_aliasIfaceBox);
 
-    tabs->addTab(dnsTab, tr("DNS"));
+    addNavPage(dnsTab, tr("DNS"));
 
     // --- Tray tab ---
     QFormLayout *trayForm = nullptr;
@@ -254,7 +347,69 @@ SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
         "in the system tray rather than popping a window."));
     trayForm->addRow(m_startOnLoginBox);
 
-    tabs->addTab(trayTab, tr("Tray"));
+    addNavPage(trayTab, tr("Tray"));
+
+    // --- Colors tab (group-header chip palette) ---
+    QFormLayout *colorsForm = nullptr;
+    QWidget     *colorsTab  = makeFormTab(colorsForm);
+
+    auto *colorsHeader = new QLabel(tr(
+        "<b>Grouping header colours</b><br>"
+        "<span style=\"color:gray;\">Colours for the process / container "
+        "info shown on group header rows. Deliberately separate from the "
+        "peer (source/destination) colours used in the Flow column.</span>"));
+    colorsHeader->setWordWrap(true);
+    colorsForm->addRow(colorsHeader);
+
+    m_chipPrimary = QColor(m_settings->chipColorPrimary());
+    m_chipUser    = QColor(m_settings->chipColorUser());
+    m_chipId      = QColor(m_settings->chipColorId());
+    m_chipDetail  = QColor(m_settings->chipColorDetail());
+
+    // Builds a swatch button bound to a working colour member. Clicking
+    // opens a colour picker; the swatch repaints to the chosen colour.
+    const auto makeSwatch = [this](QColor *working) {
+        auto *btn = new QPushButton;
+        btn->setFixedWidth(120);
+        const auto refresh = [btn, working] {
+            btn->setText(working->name());
+            const bool dark = working->lightness() < 128;
+            btn->setStyleSheet(QStringLiteral(
+                "background-color:%1; color:%2;")
+                .arg(working->name(), dark ? QStringLiteral("white")
+                                           : QStringLiteral("black")));
+        };
+        refresh();
+        connect(btn, &QPushButton::clicked, this, [this, working, refresh] {
+            const QColor c = QColorDialog::getColor(
+                *working, this, tr("Choose colour"));
+            if (c.isValid()) { *working = c; refresh(); }
+        });
+        // Stash the refresh so Reset can repaint every swatch.
+        m_chipSwatchRefreshers.append(refresh);
+        return btn;
+    };
+
+    m_chipPrimaryBtn = makeSwatch(&m_chipPrimary);
+    colorsForm->addRow(tr("Process / Container / Interface:"), m_chipPrimaryBtn);
+    m_chipUserBtn = makeSwatch(&m_chipUser);
+    colorsForm->addRow(tr("User:"), m_chipUserBtn);
+    m_chipIdBtn = makeSwatch(&m_chipId);
+    colorsForm->addRow(tr("Container ID:"), m_chipIdBtn);
+    m_chipDetailBtn = makeSwatch(&m_chipDetail);
+    colorsForm->addRow(tr("PID / cmdline / count:"), m_chipDetailBtn);
+
+    auto *resetChips = new QPushButton(tr("Reset to defaults"));
+    connect(resetChips, &QPushButton::clicked, this, [this] {
+        m_chipPrimary = Settings::defaultChipColorPrimary();
+        m_chipUser    = Settings::defaultChipColorUser();
+        m_chipId      = Settings::defaultChipColorId();
+        m_chipDetail  = Settings::defaultChipColorDetail();
+        for (const auto &r : std::as_const(m_chipSwatchRefreshers)) r();
+    });
+    colorsForm->addRow(QString(), resetChips);
+
+    addNavPage(colorsTab, tr("Colors"));
 
     // --- Buttons ---
     auto *buttons = new QDialogButtonBox(
@@ -265,8 +420,14 @@ SettingsDialog::SettingsDialog(Settings *settings, QWidget *parent)
             this, &SettingsDialog::apply);
 
     auto *root = new QVBoxLayout(this);
-    root->addWidget(tabs);
+    auto *split = new QHBoxLayout;
+    split->addWidget(m_navList);
+    split->addWidget(m_stack, /*stretch*/ 1);
+    root->addLayout(split, /*stretch*/ 1);
     root->addWidget(buttons);
+
+    // Start on the first category.
+    m_navList->setCurrentRow(0);
 }
 
 void SettingsDialog::apply()
@@ -291,6 +452,14 @@ void SettingsDialog::apply()
     m_settings->setThroughputWindowSecs(m_throughputWindowSpin->value());
     m_settings->setRateSmoothingMs(int(qRound(m_rateSmoothingSpin->value() * 1000.0)));
     m_settings->setShowStatusInTitle(m_showStatusInTitleBox->isChecked());
+    m_settings->setShowProcessColumn(m_showProcessColumnBox->isChecked());
+    m_settings->setShowContainerColumn(m_showContainerColumnBox->isChecked());
+    m_settings->setShowContainerChainInTooltip(m_showChainInTooltipBox->isChecked());
+    m_settings->setShowGroupHeaderDetails(m_showGroupHeaderDetailsBox->isChecked());
+    m_settings->setChipColorPrimary(m_chipPrimary.name());
+    m_settings->setChipColorUser(m_chipUser.name());
+    m_settings->setChipColorId(m_chipId.name());
+    m_settings->setChipColorDetail(m_chipDetail.name());
     m_settings->setCloseToTray(m_closeToTrayBox->isChecked());
     m_settings->setStartOnLogin(m_startOnLoginBox->isChecked());
 }

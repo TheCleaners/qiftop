@@ -6,6 +6,7 @@
 #include <QHeaderView>
 #include <QPainter>
 #include <QTableView>
+#include <QTreeView>
 
 RowGaugeDelegate::RowGaugeDelegate(QAbstractItemView *view, QObject *parent)
     : QStyledItemDelegate(parent)
@@ -43,12 +44,15 @@ bool RowGaugeDelegate::paintGaugeBackground(QPainter *painter,
     const QColor dark = qvariant_cast<QColor>(darkVar);
 
     // Compute the gauge boundary in row-local coordinates by querying the
-    // table's horizontal header geometry. This is what makes the gauge
+    // view's horizontal header geometry. This is what makes the gauge
     // appear as one continuous bar across all columns instead of restarting
-    // per cell.
-    auto *tv = qobject_cast<QTableView*>(m_view.data());
-    if (!tv) return painted;
-    QHeaderView *header = tv->horizontalHeader();
+    // per cell. Works for both QTableView (v0.1 connections view) and
+    // QTreeView (v0.2 connections view, used to host grouped modes).
+    QHeaderView *header = nullptr;
+    if (auto *tv = qobject_cast<QTableView*>(m_view.data()))
+        header = tv->horizontalHeader();
+    else if (auto *tree = qobject_cast<QTreeView*>(m_view.data()))
+        header = tree->header();
     if (!header) return painted;
 
     const int rowWidth = header->length();

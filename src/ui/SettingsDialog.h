@@ -1,12 +1,19 @@
 #pragma once
 
+#include <QColor>
 #include <QDialog>
+#include <QList>
+
+#include <functional>
 
 class Settings;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QListWidget;
+class QPushButton;
 class QSpinBox;
+class QStackedWidget;
 
 // Modal preferences dialog. Edits a working copy and writes to Settings only
 // when the user accepts.
@@ -14,13 +21,16 @@ class SettingsDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit SettingsDialog(Settings *settings, QWidget *parent = nullptr);
+    explicit SettingsDialog(Settings *settings,
+                            const QStringList &agentCapabilities = {},
+                            QWidget *parent = nullptr);
 
 private slots:
     void apply();
 
 private:
     Settings *m_settings;
+    QStringList m_agentCaps;
 
     QSpinBox  *m_pollIntervalSpin = nullptr;
     QSpinBox  *m_staleRetentionSpin = nullptr;
@@ -42,4 +52,20 @@ private:
     QSpinBox  *m_throughputWindowSpin = nullptr;
     QDoubleSpinBox *m_rateSmoothingSpin = nullptr;
     QCheckBox *m_showStatusInTitleBox = nullptr;
+    QCheckBox *m_showProcessColumnBox   = nullptr;
+    QCheckBox *m_showContainerColumnBox = nullptr;
+    QCheckBox *m_showChainInTooltipBox  = nullptr;
+    QCheckBox *m_showGroupHeaderDetailsBox = nullptr;
+
+    // Left-hand category navigation (KiCad/VSCode style) → page stack.
+    QListWidget    *m_navList = nullptr;
+    QStackedWidget *m_stack   = nullptr;
+
+    // Group-header chip palette working copies + their swatch buttons.
+    QColor m_chipPrimary, m_chipUser, m_chipId, m_chipDetail;
+    QPushButton *m_chipPrimaryBtn = nullptr;
+    QPushButton *m_chipUserBtn    = nullptr;
+    QPushButton *m_chipIdBtn      = nullptr;
+    QPushButton *m_chipDetailBtn  = nullptr;
+    QList<std::function<void()>> m_chipSwatchRefreshers;
 };

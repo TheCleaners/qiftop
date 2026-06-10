@@ -16,6 +16,12 @@ on:
   release:
     types: [published]
 
+# Default to the minimum: read-only access to repository contents. These
+# jobs only checkout + build + run tests; they never write to the repo,
+# packages, or releases. Pinned per CodeQL `actions/missing-workflow-permissions`.
+permissions:
+  contents: read
+
 jobs:
   attribution-docker:
     name: attribution / docker / ubuntu-24.04
@@ -83,3 +89,15 @@ jobs:
 
       - name: run attribution probe against podman
         run: sudo --preserve-env=PATH ctest --test-dir build -R attribution_podman --output-on-failure -V
+
+  # NOTE: attribution_k3d is deliberately NOT a CI job.
+  #   - Cold k3d cluster bring-up is ~30s on a fresh GHA runner.
+  #   - The runner needs docker + kubectl + k3d + a 200MB k3s image
+  #     pull; total job wall-time is 3-4 minutes vs ~30s for docker/podman.
+  #   - The chain shape it exercises (docker → kubernetes → containerd)
+  #     is unit-tested in tests/test_cgroup_parse.cpp::k3sPodInDockerPrefersInnermost
+  #     and ::k8sCgroupfsDriverK3dShape — the value of the integration
+  #     test is end-to-end via NetnsScanner, not regex coverage.
+  #   - Run locally inside the Vagrant VM via
+  #     `scripts/local-integration.sh --runtime k3d` whenever the
+  #     classifier or NetnsScanner changes.

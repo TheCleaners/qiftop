@@ -23,6 +23,7 @@
 #include "util/Units.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QClipboard>
 #include <QCloseEvent>
@@ -43,6 +44,11 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTableView>
+#include <QTreeView>
+#include <QComboBox>
+
+#include "ui/ConnectionGroupProxy.h"
+#include "ui/ConnectionAttributionDelegate.h"
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -52,6 +58,7 @@
 #include <QToolTip>
 #include <QVBoxLayout>
 
+#include <functional>
 #include <memory>
 
 MainWindow::MainWindow(Settings          *settings,
@@ -135,6 +142,21 @@ MainWindow::MainWindow(Settings          *settings,
             this,          &MainWindow::onConnectionsPermissionDenied);
     connect(m_connMonitor, &ConnectionMonitor::accountingUnavailable,
             this,          &MainWindow::onConnectionsAccountingUnavailable);
+    // On-demand process details (exe/cmdline/cwd) arriving from the
+    // agent's GetProcessDetails RPC — cache by pid and refresh the
+    // grouped-view tooltips so the next hover shows the enriched data.
+    // The cache is bounded (clear-on-overflow, repopulated on demand)
+    // so heavy pid churn can't grow it without bound.
+    connect(m_connMonitor, &ConnectionMonitor::processDetailsReady, this,
+            [this](qiftop::backend::ProcessDetails d) {
+                if (d.pid <= 0) return;
+                constexpr qsizetype kProcDetailsCacheMax = 1024;
+                if (m_procDetails.size() >= kProcDetailsCacheMax
+                    && !m_procDetails.contains(d.pid))
+                    m_procDetails.clear();
+                m_procDetails.insert(d.pid, d);
+                if (m_connGroupProxy) m_connGroupProxy->refreshGroupTooltips();
+            });
 }
 
 MainWindow::~MainWindow() = default;
@@ -151,6 +173,7 @@ void MainWindow::setupUi()
     m_netProxy->setSortRole(NetworkModel::SortRole);
 
     m_netView = new QTableView;
+    m_netView->setObjectName(QStringLiteral("netView"));
     m_netView->setModel(m_netProxy);
     m_netView->setSortingEnabled(true);
     m_netView->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -171,6 +194,15 @@ void MainWindow::setupUi()
     m_netView->sortByColumn(static_cast<int>(NetworkModel::Column::Name),
                             Qt::AscendingOrder);
 
+    // Right-click on the interfaces table header → checkable per-column
+    // visibility toggles. Visual order + width persistence already lives
+    // in saveHeaderState(); this menu only manages hidden-ness on top.
+    m_netView->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_netView->horizontalHeader(), &QWidget::customContextMenuRequested,
+            this, &MainWindow::showNetHeaderMenu);
+    // Allow drag-reordering of columns (state captured by saveState()).
+    m_netView->horizontalHeader()->setSectionsMovable(true);
+
     // --- Connections tab ---
     m_connModel = new ConnectionModel(this);
     m_connModel->setDnsResolver(m_dnsResolver);
@@ -179,16 +211,83 @@ void MainWindow::setupUi()
     m_connProxy->setSourceModel(m_connModel);
     m_connProxy->setSortRole(ConnectionModel::SortRole);
 
-    m_connView = new QTableView;
-    m_connView->setModel(m_connProxy);
+    // Group proxy: pass-through in Flat mode (default), tree-of-groups
+    // in the by-X modes. Sits BETWEEN the filter proxy and the view so
+    // grouping always sees post-filter rows. Mode is applied in
+    // applySettingsToUi() based on Settings::connectionViewMode().
+    m_connGroupProxy = new ConnectionGroupProxy(this);
+    m_connGroupProxy->setSourceModel(m_connProxy);
+
+    m_connView = new QTreeView;
+    m_connView->setObjectName(QStringLiteral("connView"));
+    m_connView->setModel(m_connGroupProxy);
+    m_connGroupProxy->setProcessDetailsCache(&m_procDetails);
+    // Prefetch on-demand process details when the user expands a
+    // ByProcess group (bounded, intuitive: you expand to inspect → the
+    // exe/cmdline/cwd are fetched so they're ready on hover). No-op on
+    // backends without the RPC (in-process / old agent).
+    connect(m_connView, &QTreeView::expanded, this,
+            [this](const QModelIndex &idx) {
+                if (!m_connGroupProxy || !m_connMonitor) return;
+                const qint32 pid = m_connGroupProxy->representativePid(idx);
+                if (pid <= 0) return;
+                const auto it = m_procDetails.constFind(pid);
+                bool needFetch = (it == m_procDetails.constEnd());
+                if (!needFetch) {
+                    // PID-reuse guard: if the cached entry's comm no
+                    // longer matches the group's live comm, the kernel
+                    // recycled the pid for a different process — drop
+                    // the stale entry and re-request.
+                    const QString liveComm =
+                        m_connGroupProxy->index(0, 0, idx)
+                            .data(ConnectionModel::ProcessCommRole).toString();
+                    if (!liveComm.isEmpty() && !it->comm.isEmpty()
+                        && it->comm != liveComm) {
+                        m_procDetails.remove(pid);
+                        needFetch = true;
+                    }
+                }
+                if (needFetch)
+                    m_connMonitor->requestProcessDetails(pid);
+            });
     m_connView->setSortingEnabled(true);
     m_connView->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_connView->setAlternatingRowColors(true);
-    m_connView->verticalHeader()->setVisible(false);
-    m_connView->setShowGrid(false);
-    m_connView->horizontalHeader()->setStretchLastSection(false);
-    m_connView->horizontalHeader()->setSectionResizeMode(
+    // Variable row heights: the Flow column wraps long content (e.g.
+    // big IPv6 endpoints in a narrow window) and the affected row grows
+    // to fit. uniformRowHeights MUST be off for per-row heights — the
+    // view then takes the per-row max of all columns' sizeHints, and
+    // only the Flow column reports a multi-line height.
+    m_connView->setUniformRowHeights(false);
+    m_connView->setWordWrap(true);
+    // Flat-mode defaults — match v0.1's QTableView geometry exactly so
+    // the RowGaugeDelegate / ConnectionFlowDelegate keep painting at
+    // the same coordinates. The mode-switch path in applySettingsToUi()
+    // toggles these for the grouped modes.
+    m_connView->setRootIsDecorated(false);
+    m_connView->setItemsExpandable(false);
+    m_connView->setIndentation(0);
+    m_connView->setExpandsOnDoubleClick(false);
+    m_connView->header()->setStretchLastSection(false);
+    m_connView->header()->setSectionResizeMode(
         static_cast<int>(ConnectionModel::Column::Flow), QHeaderView::Stretch);
+    // When the Flow column width changes (window resize, user drag), the
+    // wrapped-content row heights must be recomputed — QTreeView caches
+    // per-row heights and won't re-measure on its own. Debounce via a
+    // 0-timer so a burst of resize events coalesces into one relayout.
+    {
+        auto *relayout = new QTimer(this);
+        relayout->setSingleShot(true);
+        relayout->setInterval(0);
+        connect(relayout, &QTimer::timeout, this, [this] {
+            if (m_connView) m_connView->doItemsLayout();
+        });
+        connect(m_connView->header(), &QHeaderView::sectionResized, this,
+                [relayout](int logical, int, int) {
+                    if (logical == static_cast<int>(ConnectionModel::Column::Flow))
+                        relayout->start();
+                });
+    }
     m_connFlowDelegate = new ConnectionFlowDelegate(m_connView);
     m_connView->setItemDelegateForColumn(
         static_cast<int>(ConnectionModel::Column::Flow),
@@ -197,23 +296,49 @@ void MainWindow::setupUi()
     // throughput gauge background before chaining to the standard styled
     // item rendering. Owned by the view (parent).
     m_connView->setItemDelegate(new RowGaugeDelegate(m_connView, m_connView));
+    // Process + Container columns get a richer delegate that paints
+    // a small grey pid badge / chain-depth chevron next to the
+    // primary text. It inherits from RowGaugeDelegate so the
+    // throughput gauge still works underneath.
+    auto *attribDelegate = new ConnectionAttributionDelegate(m_connView, m_connView);
+    m_connView->setItemDelegateForColumn(
+        static_cast<int>(ConnectionModel::Column::Process), attribDelegate);
+    m_connView->setItemDelegateForColumn(
+        static_cast<int>(ConnectionModel::Column::Container), attribDelegate);
     // Max columns are only meaningful with the gauge enabled; hide by
     // default and (un)hide in applySettingsToUi() based on the setting.
     m_connView->setColumnHidden(
         static_cast<int>(ConnectionModel::Column::RxMax), true);
     m_connView->setColumnHidden(
         static_cast<int>(ConnectionModel::Column::TxMax), true);
+    // Attribution columns are hidden by default — they only make sense
+    // when the agent advertises the matching wire-attribution tokens,
+    // and the Settings > Display sub-section (s5-settings) lets the
+    // user enable them. Until then they're available through the
+    // header right-click menu.
+    m_connView->setColumnHidden(
+        static_cast<int>(ConnectionModel::Column::Process), true);
+    m_connView->setColumnHidden(
+        static_cast<int>(ConnectionModel::Column::Container), true);
     m_connView->sortByColumn(static_cast<int>(ConnectionModel::Column::RxRate),
                              Qt::DescendingOrder);
     m_connView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_connView, &QWidget::customContextMenuRequested,
             this,        &MainWindow::showConnectionContextMenu);
 
+    // Right-click on the connections table header → per-column visibility
+    // toggles. Same model as the interfaces header (above).
+    m_connView->header()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_connView->header(), &QWidget::customContextMenuRequested,
+            this, &MainWindow::showConnHeaderMenu);
+    m_connView->header()->setSectionsMovable(true);
+
     // Empty-state placeholder: a centered hint shown when the model has
     // zero rows. Parented to the viewport so it scrolls with the (empty)
     // canvas and inherits the table's palette. Visibility is driven by
     // onConnectionsUpdated() and the proxy's rowsInserted/rowsRemoved.
     m_connEmptyOverlay = new QLabel(m_connView->viewport());
+    m_connEmptyOverlay->setObjectName(QStringLiteral("connEmptyOverlay"));
     m_connEmptyOverlay->setAlignment(Qt::AlignCenter);
     m_connEmptyOverlay->setWordWrap(true);
     m_connEmptyOverlay->setText(tr(
@@ -255,6 +380,7 @@ void MainWindow::setupUi()
     refreshEmpty();
 
     m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("mainTabs"));
     m_tabs->addTab(m_netView,  tr("Interfaces"));
 
     // Wrap the connections view in a vbox so we can stack a privilege banner
@@ -278,6 +404,7 @@ void MainWindow::setupUi()
     auto *bannerLayout = new QHBoxLayout(m_connBanner);
     bannerLayout->setContentsMargins(8, 4, 8, 4);
     m_connBannerLbl = new QLabel(m_connBanner);
+    m_connBannerLbl->setObjectName(QStringLiteral("connBannerLabel"));
     m_connBannerLbl->setWordWrap(true);
     auto *relaunchBtn = new QPushButton(
         QIcon::fromTheme(QStringLiteral("system-lock-screen")),
@@ -296,8 +423,10 @@ void MainWindow::setupUi()
     // --- Status bar ---
     m_statusInterfaces  = new QLabel(tr("0 interfaces"));
     m_statusConnections = new QLabel(tr("0 connections"));
+    m_statusConnections->setObjectName(QStringLiteral("statusConnections"));
     m_statusThroughput  = new QLabel(QStringLiteral("↓ 0 B   ↑ 0 B"));
     m_statusBackend     = new QLabel(tr("backend: unknown"));
+    m_statusBackend->setObjectName(QStringLiteral("statusBackend"));
     m_statusBackend->setToolTip(tr("Active data source. Hover the value once "
                                    "set for the agent version and capabilities."));
     statusBar()->addPermanentWidget(m_statusBackend);
@@ -402,6 +531,7 @@ void MainWindow::setupMenuAndToolbar()
 
     m_pauseAction = toolbar->addAction(
         QIcon::fromTheme(QStringLiteral("media-playback-pause")), tr("Pause"));
+    m_pauseAction->setObjectName(QStringLiteral("pauseAction"));
     m_pauseAction->setCheckable(true);
     m_pauseAction->setToolTip(tr("Pause updates"));
     connect(m_pauseAction, &QAction::toggled, this, &MainWindow::togglePaused);
@@ -445,6 +575,7 @@ void MainWindow::setupMenuAndToolbar()
 
     toolbar->addSeparator();
     m_connIfaceFilterBtn = new QToolButton(toolbar);
+    m_connIfaceFilterBtn->setObjectName(QStringLiteral("connIfaceFilterBtn"));
     m_connIfaceFilterBtn->setIcon(QIcon::fromTheme(QStringLiteral("view-filter")));
     m_connIfaceFilterBtn->setText(tr("All interfaces"));
     m_connIfaceFilterBtn->setToolTip(tr("Show connections on…"));
@@ -456,6 +587,41 @@ void MainWindow::setupMenuAndToolbar()
     connect(m_connIfaceFilterBtn, &QToolButton::clicked, m_connIfaceFilterBtn,
             &QToolButton::showMenu);
     m_connIfaceFilterToolbarAct = toolbar->addWidget(m_connIfaceFilterBtn);
+
+    // "View as" dropdown (Flat / by Interface / by Container / by
+    // Process). Same visibility rules as the iface filter button —
+    // only the Connections tab cares — wired up via
+    // updateConnIfaceFilterVisibility() below.
+    auto *viewModeBox    = new QWidget(toolbar);
+    viewModeBox->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    auto *viewModeLayout = new QHBoxLayout(viewModeBox);
+    viewModeLayout->setContentsMargins(6, 0, 0, 0);
+    viewModeLayout->setSpacing(6);
+    auto *viewModeLabel  = new QLabel(tr("View:"), viewModeBox);
+    viewModeLabel->setForegroundRole(QPalette::WindowText);
+    m_connViewModeCombo  = new QComboBox(viewModeBox);
+    m_connViewModeCombo->setObjectName(QStringLiteral("connViewModeCombo"));
+    m_connViewModeCombo->addItem(tr("Flat"),
+                                 static_cast<int>(Settings::ConnectionViewMode::Flat));
+    m_connViewModeCombo->addItem(tr("by Interface"),
+                                 static_cast<int>(Settings::ConnectionViewMode::ByInterface));
+    m_connViewModeCombo->addItem(tr("by Container"),
+                                 static_cast<int>(Settings::ConnectionViewMode::ByContainer));
+    m_connViewModeCombo->addItem(tr("by Process"),
+                                 static_cast<int>(Settings::ConnectionViewMode::ByProcess));
+    m_connViewModeCombo->setToolTip(tr(
+        "Group connections. \"Flat\" matches the classic iftop view."));
+    m_connViewModeCombo->setCurrentIndex(
+        static_cast<int>(m_settings->connectionViewMode()));
+    connect(m_connViewModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+                if (i < 0) return;
+                m_settings->setConnectionViewMode(
+                    static_cast<Settings::ConnectionViewMode>(i));
+            });
+    viewModeLayout->addWidget(viewModeLabel);
+    viewModeLayout->addWidget(m_connViewModeCombo);
+    m_connViewModeToolbarAct = toolbar->addWidget(viewModeBox);
 
     // Visual breathing room between the iface dropdown and the filter
     // line edit. QToolBar::addSeparator() draws a vertical divider which
@@ -483,6 +649,7 @@ void MainWindow::setupMenuAndToolbar()
     auto *filterLabel     = new QLabel(tr("Filter:"), filterBox);
     filterLabel->setForegroundRole(QPalette::WindowText);
     m_connFilterEdit      = new QLineEdit(filterBox);
+    m_connFilterEdit->setObjectName(QStringLiteral("connFilterEdit"));
     m_connFilterEdit->setClearButtonEnabled(true);
     m_connFilterEdit->setPlaceholderText(
         tr("e.g.  proto:tcp and dport=443"));
@@ -526,6 +693,37 @@ void MainWindow::setupMenuAndToolbar()
     viewMenu->addSeparator();
     viewMenu->addAction(m_pauseAction);
     viewMenu->addSeparator();
+
+    // "Group Connections" radio submenu — mirrors the toolbar's view-mode
+    // dropdown so the grouping modes are reachable from the menu bar too
+    // (e.g. when the toolbar is hidden). Exclusive QActionGroup; each
+    // action carries its ConnectionViewMode in data(). Enabled only on the
+    // Connections tab (see updateConnIfaceFilterVisibility) and kept in
+    // sync with the dropdown / Settings via applySettingsToUi().
+    m_connViewModeMenu  = new QMenu(tr("&Group Connections"), this);
+    m_connViewModeMenu->setObjectName(QStringLiteral("connViewModeMenu"));
+    m_connViewModeGroup = new QActionGroup(this);
+    m_connViewModeGroup->setExclusive(true);
+    auto addViewModeAction = [this](const QString &text,
+                                    Settings::ConnectionViewMode mode) {
+        QAction *act = m_connViewModeMenu->addAction(text);
+        act->setCheckable(true);
+        act->setData(static_cast<int>(mode));
+        act->setChecked(m_settings->connectionViewMode() == mode);
+        m_connViewModeGroup->addAction(act);
+    };
+    addViewModeAction(tr("&Flat"),         Settings::ConnectionViewMode::Flat);
+    addViewModeAction(tr("by &Interface"), Settings::ConnectionViewMode::ByInterface);
+    addViewModeAction(tr("by &Container"), Settings::ConnectionViewMode::ByContainer);
+    addViewModeAction(tr("by &Process"),   Settings::ConnectionViewMode::ByProcess);
+    connect(m_connViewModeGroup, &QActionGroup::triggered, this,
+            [this](QAction *act) {
+                if (!act) return;
+                m_settings->setConnectionViewMode(
+                    static_cast<Settings::ConnectionViewMode>(act->data().toInt()));
+            });
+    m_connViewModeMenuAct = viewMenu->addMenu(m_connViewModeMenu);
+
     m_connIfaceFilterMenuAct = viewMenu->addMenu(m_connIfaceFilterMenu);
 
     // --- Help menu: About qiftop + About Qt -----------------------------
@@ -584,6 +782,57 @@ void MainWindow::applySettingsToUi()
             static_cast<int>(ConnectionModel::Column::RxMax), !showMax);
         m_connView->setColumnHidden(
             static_cast<int>(ConnectionModel::Column::TxMax), !showMax);
+        // Attribution columns: visibility driven by Settings, but only
+        // when the connected agent actually carries the matching wire
+        // tokens. Without them the columns would just render "—" /
+        // "(host)" everywhere, which is misleading rather than helpful.
+        const bool procWire = m_agentCaps.contains(
+            QStringLiteral("process-attribution-wire"));
+        const bool contWire = m_agentCaps.contains(
+            QStringLiteral("container-attribution-wire"));
+        m_connView->setColumnHidden(
+            static_cast<int>(ConnectionModel::Column::Process),
+            !(procWire && m_settings->showProcessColumn()));
+        m_connView->setColumnHidden(
+            static_cast<int>(ConnectionModel::Column::Container),
+            !(contWire && m_settings->showContainerColumn()));
+        m_connModel->setShowContainerChainInTooltip(
+            m_settings->showContainerChainInTooltip());
+    }
+    if (m_connView && m_connGroupProxy) {
+        // Apply the persisted view mode to the group proxy and adjust
+        // the QTreeView decorations so Flat mode stays pixel-identical
+        // to v0.1 (no indent, no branch markers) and grouped modes
+        // expose the normal tree branches.
+        const auto mode = m_settings->connectionViewMode();
+        m_connGroupProxy->setShowGroupDetails(m_settings->showGroupHeaderDetails());
+        m_connGroupProxy->setViewMode(mode);
+        const bool flat = (mode == Settings::ConnectionViewMode::Flat);
+        m_connView->setRootIsDecorated(!flat);
+        m_connView->setItemsExpandable(!flat);
+        m_connView->setIndentation(flat ? 0 : 14);
+        m_connView->setExpandsOnDoubleClick(!flat);
+        if (!flat) m_connView->expandAll();
+        // Keep the view-mode dropdown in the toolbar in sync if a
+        // change came in via the Settings dialog rather than the
+        // dropdown itself.
+        if (m_connViewModeCombo
+            && m_connViewModeCombo->currentIndex() != static_cast<int>(mode)) {
+            const QSignalBlocker block(m_connViewModeCombo);
+            m_connViewModeCombo->setCurrentIndex(static_cast<int>(mode));
+        }
+        // Same for the View → Group Connections radio submenu. setChecked on
+        // an exclusive-group action only emits toggled(), not the group's
+        // triggered(), so this doesn't loop back into setConnectionViewMode.
+        if (m_connViewModeGroup) {
+            for (QAction *act : m_connViewModeGroup->actions()) {
+                if (act->data().toInt() == static_cast<int>(mode)) {
+                    if (!act->isChecked())
+                        act->setChecked(true);
+                    break;
+                }
+            }
+        }
     }
     if (m_connFlowDelegate) {
         const bool wasOn = m_connFlowDelegate->colorCodeEnabled();
@@ -592,29 +841,21 @@ void MainWindow::applySettingsToUi()
             m_connFlowDelegate->setColorCodeEnabled(nowOn);
             if (m_connView) m_connView->viewport()->update();
         }
+        // Push the configurable group-header chip palette.
+        m_connFlowDelegate->setChipPalette(ChipPalette{
+            QColor(m_settings->chipColorPrimary()),
+            QColor(m_settings->chipColorUser()),
+            QColor(m_settings->chipColorId()),
+            QColor(m_settings->chipColorDetail()),
+        });
+        if (m_connView) m_connView->viewport()->update();
     }
     applyConnIfaceFilterToProxy();
     updateWindowTitle();
 
-    // Push our desired cadence to the (possibly remote) backends. For local
-    // backends this is a no-op; for the DBus proxies it sends a hint AND
-    // doubles as a liveness signal that resets the agent's idle timer.
-    const int desired = m_settings->pollIntervalMs();
-    if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(desired);
-    if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(desired);
-    // (Re)arm the heartbeat at half the agent's hint TTL (10s) so the hint
-    // never lapses between assertions. We use 4s to stay comfortably under
-    // both the TTL and the agent's slow1 threshold (30s).
-    if (!m_agentHeartbeat) {
-        m_agentHeartbeat = new QTimer(this);
-        m_agentHeartbeat->setTimerType(Qt::CoarseTimer);
-        connect(m_agentHeartbeat, &QTimer::timeout, this, [this] {
-            const int d = m_settings->pollIntervalMs();
-            if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(d);
-            if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(d);
-        });
-    }
-    m_agentHeartbeat->start(4000);
+    // (Re)assert our desired cadence to the backends, unless the window is
+    // hidden to tray — see refreshAgentHeartbeat() for the rationale.
+    refreshAgentHeartbeat();
 
     // Sub-poll display animation: when smoothing is on, repaint at a
     // tighter cadence than the data poll so smoothed rate changes ease
@@ -628,7 +869,7 @@ void MainWindow::applySettingsToUi()
         });
     }
     if (m_settings->rateSmoothingMs() > 0) {
-        const int sub = std::max(100, desired / 4);
+        const int sub = std::max(100, m_settings->pollIntervalMs() / 4);
         if (!m_smoothingTick->isActive() || m_smoothingTick->interval() != sub)
             m_smoothingTick->start(sub);
     } else {
@@ -658,6 +899,8 @@ void MainWindow::updateConnIfaceFilterVisibility()
                          m_tabs->currentWidget() == m_connTab);
     if (m_connIfaceFilterToolbarAct)
         m_connIfaceFilterToolbarAct->setVisible(onConn);
+    if (m_connViewModeToolbarAct)
+        m_connViewModeToolbarAct->setVisible(onConn);
     if (m_connFilterSepAct)
         m_connFilterSepAct->setVisible(onConn);
     if (m_connFilterSpacerAct)
@@ -666,6 +909,8 @@ void MainWindow::updateConnIfaceFilterVisibility()
         m_connFilterToolbarAct->setVisible(onConn);
     if (m_connIfaceFilterMenuAct)
         m_connIfaceFilterMenuAct->setEnabled(onConn);
+    if (m_connViewModeMenuAct)
+        m_connViewModeMenuAct->setEnabled(onConn);
 }
 
 void MainWindow::onConnFilterTextChanged(const QString & /*text*/)
@@ -962,7 +1207,7 @@ void MainWindow::togglePaused(bool paused)
 
 void MainWindow::openSettingsDialog()
 {
-    SettingsDialog dlg(m_settings, this);
+    SettingsDialog dlg(m_settings, m_agentCaps, this);
     dlg.exec();
 }
 
@@ -1052,7 +1297,7 @@ void MainWindow::readUiState()
     if (const QByteArray nh = s.value(kUiNetHeaderState).toByteArray(); !nh.isEmpty())
         m_netView->horizontalHeader()->restoreState(nh);
     if (const QByteArray ch = s.value(kUiConnHeaderState).toByteArray(); !ch.isEmpty())
-        m_connView->horizontalHeader()->restoreState(ch);
+        m_connView->header()->restoreState(ch);
 }
 
 void MainWindow::writeUiState()
@@ -1065,12 +1310,12 @@ void MainWindow::writeUiState()
     s.setValue(kUiNetSortColumn, m_netView->horizontalHeader()->sortIndicatorSection());
     s.setValue(kUiNetSortOrder,
                static_cast<int>(m_netView->horizontalHeader()->sortIndicatorOrder()));
-    s.setValue(kUiConnSortColumn, m_connView->horizontalHeader()->sortIndicatorSection());
+    s.setValue(kUiConnSortColumn, m_connView->header()->sortIndicatorSection());
     s.setValue(kUiConnSortOrder,
-               static_cast<int>(m_connView->horizontalHeader()->sortIndicatorOrder()));
+               static_cast<int>(m_connView->header()->sortIndicatorOrder()));
 
     s.setValue(kUiNetHeaderState,  m_netView->horizontalHeader()->saveState());
-    s.setValue(kUiConnHeaderState, m_connView->horizontalHeader()->saveState());
+    s.setValue(kUiConnHeaderState, m_connView->header()->saveState());
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -1086,6 +1331,72 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
     writeUiState();
     QMainWindow::closeEvent(event);
+}
+
+// PERF-L2: the agent heartbeat (SetDesiredIntervalMs every 4s) doubles as the
+// liveness signal that resets the agent's idle-wind-down timer. While the
+// window is hidden to tray there is no tree to refresh, so pinning the agent
+// at full 1 Hz — which also re-runs the expensive conntrack dump + per-flow
+// attribution + netns scans every second — is pure waste.
+//
+// The agent has a SINGLE shared IdleManager driving BOTH the Interfaces and
+// Connections services at one cadence (any method call resets the global
+// activity timer), so we cannot keep interface stats fast while letting
+// connection polling idle. The clean win is therefore to STOP heartbeating
+// while the window is not visible and let the agent wind itself down per its
+// schedule (30 s → 2 s, 45 s → 5 s, 60 s → paused). The tray sparkline
+// degrades to that cadence and then freezes — acceptable for a
+// minimized-to-tray app, and showEvent() re-asserts immediately so it wakes
+// the instant the user restores the window. This also makes `--tray` startup
+// (window never shown) leave the agent idle until the user summons the
+// window. For the in-process backend setDesiredIntervalMs is a no-op and the
+// local monitors keep their own timers, so the tray stays live there
+// regardless; this only changes behaviour against the DBus agent.
+//
+// Gated on isVisible() (not a manual flag) so Qt's own visibility tracking
+// drives it: minimized windows stay "visible" and keep the heartbeat, only a
+// genuine hide()-to-tray suspends it.
+void MainWindow::refreshAgentHeartbeat()
+{
+    if (!isVisible()) {
+        if (m_agentHeartbeat) m_agentHeartbeat->stop();
+        return;
+    }
+
+    // Visible: assert desired cadence now, then (re)arm the heartbeat at well
+    // under the agent's hint TTL (10 s) so the hint never lapses between
+    // assertions.
+    const int desired = m_settings->pollIntervalMs();
+    if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(desired);
+    if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(desired);
+    if (!m_agentHeartbeat) {
+        m_agentHeartbeat = new QTimer(this);
+        m_agentHeartbeat->setTimerType(Qt::CoarseTimer);
+        connect(m_agentHeartbeat, &QTimer::timeout, this, [this] {
+            const int d = m_settings->pollIntervalMs();
+            if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(d);
+            if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(d);
+        });
+    }
+    m_agentHeartbeat->start(4000);
+}
+
+void MainWindow::hideEvent(QHideEvent *event)
+{
+    // Fires when the window is hidden to tray (hide()) — not on plain
+    // minimize, which keeps the window "visible" in Qt's sense. isVisible()
+    // is already false here, so refreshAgentHeartbeat() stops the heartbeat
+    // and the agent winds down.
+    QMainWindow::hideEvent(event);
+    refreshAgentHeartbeat();
+}
+
+void MainWindow::showEvent(QShowEvent *event)
+{
+    // isVisible() is already true here; re-assert cadence immediately so the
+    // agent wakes the instant the window is summoned.
+    QMainWindow::showEvent(event);
+    refreshAgentHeartbeat();
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -1129,10 +1440,10 @@ void MainWindow::installShortcuts()
         });
     }
 
-    // Ctrl+C in either table copies the selected rows. QTableView's default
+    // Ctrl+C in either table copies the selected rows. The view's default
     // Ctrl+C copies a single cell — we want the whole row(s), formatted via
     // the existing copyTextForFlow() / Exportable CSV emitter.
-    auto installCopy = [this](QTableView *view) {
+    auto installCopy = [this](QAbstractItemView *view) {
         auto *act = new QShortcut(QKeySequence(QKeySequence::Copy), view);
         act->setContext(Qt::WidgetShortcut);
         connect(act, &QShortcut::activated, this,
@@ -1156,7 +1467,7 @@ void MainWindow::installShortcuts()
     }
 }
 
-void MainWindow::copyTableSelectionToClipboard(QTableView *view)
+void MainWindow::copyTableSelectionToClipboard(QAbstractItemView *view)
 {
     if (!view) return;
     auto *sel = view->selectionModel();
@@ -1168,16 +1479,25 @@ void MainWindow::copyTableSelectionToClipboard(QTableView *view)
     lines.reserve(rows.size());
     for (const QModelIndex &viewIdx : rows) {
         QModelIndex src = viewIdx;
-        // Map proxy → source row when applicable so the model can use its
-        // own row indices.
-        if (auto *proxy = qobject_cast<QSortFilterProxyModel *>(view->model()))
+        // Map through the (possibly chained) proxies down to the source
+        // row so the model can use its own row indices. For the
+        // Connections view this is GroupProxy → FilterProxy →
+        // ConnectionModel; for the Interfaces view it's a single filter
+        // proxy.
+        if (view == m_connView) {
+            if (m_connGroupProxy && m_connGroupProxy->isGroupIndex(viewIdx))
+                continue;  // skip group headers; no flow to copy
+            if (m_connGroupProxy)
+                src = m_connGroupProxy->mapToSource(viewIdx);
+            if (src.isValid() && m_connProxy)
+                src = m_connProxy->mapToSource(src);
+        } else if (auto *proxy = qobject_cast<QSortFilterProxyModel *>(view->model())) {
             src = proxy->mapToSource(viewIdx);
+        }
         if (!src.isValid()) continue;
         if (view == m_connView && m_connModel) {
             lines << m_connModel->copyTextForFlow(src.row());
         } else if (view == m_netView && m_netModel) {
-            // No copyTextForFlow on NetworkModel; fall back to a tab-joined
-            // row dump via DisplayRole. Good enough for a 4-column table.
             QStringList cells;
             const int cols = m_netModel->columnCount();
             for (int c = 0; c < cols; ++c) {
@@ -1196,7 +1516,13 @@ void MainWindow::filterByConnectionRow(const QPoint &pos, bool exclude)
     if (!m_connView || !m_connFilterEdit || !m_connModel || !m_connProxy) return;
     const QModelIndex viewIdx = m_connView->indexAt(pos);
     if (!viewIdx.isValid()) return;
-    const QModelIndex srcIdx = m_connProxy->mapToSource(viewIdx);
+    // viewIdx may be a group row (no source flow); skip it.
+    if (m_connGroupProxy && m_connGroupProxy->isGroupIndex(viewIdx)) return;
+    const QModelIndex filterIdx = m_connGroupProxy
+                                      ? m_connGroupProxy->mapToSource(viewIdx)
+                                      : viewIdx;
+    if (!filterIdx.isValid()) return;
+    const QModelIndex srcIdx = m_connProxy->mapToSource(filterIdx);
     if (!srcIdx.isValid()) return;
 
     const QString peer = m_connModel->peerAddressText(srcIdx.row());
@@ -1351,23 +1677,25 @@ void MainWindow::setBackendInfo(bool usingAgent,
     m_usingAgent   = usingAgent;
     m_agentVersion = version;
     m_agentCaps    = caps;
-    if (!m_statusBackend) return;
-    if (usingAgent) {
-        const QString shown = version.isEmpty() ? tr("(legacy)") : version;
-        m_statusBackend->setText(tr("agent %1").arg(shown));
-        const QString tip = caps.isEmpty()
-            ? tr("Connected to qiftop-agent over DBus. No capability tokens reported.")
-            : tr("Connected to qiftop-agent over DBus.\nCapabilities: %1")
-                  .arg(caps.join(QStringLiteral(", ")));
-        m_statusBackend->setToolTip(tip);
-    } else {
-        m_statusBackend->setText(tr("in-process"));
-        m_statusBackend->setToolTip(tr("qiftop-agent unavailable; using the "
-                                       "in-process Netlink/conntrack backend. "
-                                       "Some flows may be hidden without CAP_NET_ADMIN."));
+    if (m_statusBackend) {
+        if (usingAgent) {
+            const QString shown = version.isEmpty() ? tr("(legacy)") : version;
+            m_statusBackend->setText(tr("agent %1").arg(shown));
+            const QString tip = caps.isEmpty()
+                ? tr("Connected to qiftop-agent over DBus. No capability tokens reported.")
+                : tr("Connected to qiftop-agent over DBus.\nCapabilities: %1")
+                      .arg(caps.join(QStringLiteral(", ")));
+            m_statusBackend->setToolTip(tip);
+        } else {
+            m_statusBackend->setText(tr("in-process"));
+            m_statusBackend->setToolTip(tr("qiftop-agent unavailable; using the "
+                                           "in-process Netlink/conntrack backend. "
+                                           "Some flows may be hidden without CAP_NET_ADMIN."));
+        }
+        // Reset any cadence-degradation tint left over from a previous state.
+        m_statusBackend->setStyleSheet(QString());
     }
-    // Reset any cadence-degradation tint left over from a previous state.
-    m_statusBackend->setStyleSheet(QString());
+    applySettingsToUi();
 }
 
 void MainWindow::notifyAgentCadence(int intervalMs)
@@ -1560,10 +1888,16 @@ void MainWindow::showConnectionContextMenu(const QPoint &pos)
     QMenu menu(this);
 
     const QModelIndex viewIdx = m_connView->indexAt(pos);
-    if (viewIdx.isValid()) {
-        // Map through the filter proxy to a source row before asking the model
-        // for its copy text — proxy row indices are unstable under sort/filter.
-        const QModelIndex srcIdx = m_connProxy->mapToSource(viewIdx);
+    if (viewIdx.isValid() && !(m_connGroupProxy && m_connGroupProxy->isGroupIndex(viewIdx))) {
+        // Map view → group proxy → filter proxy → source. Proxy row indices
+        // are unstable under sort/filter, so we map all the way down before
+        // asking the model.
+        const QModelIndex filterIdx = m_connGroupProxy
+                                          ? m_connGroupProxy->mapToSource(viewIdx)
+                                          : viewIdx;
+        const QModelIndex srcIdx = filterIdx.isValid()
+                                       ? m_connProxy->mapToSource(filterIdx)
+                                       : QModelIndex{};
         if (srcIdx.isValid()) {
             const int row = srcIdx.row();
 
@@ -1600,6 +1934,117 @@ void MainWindow::showConnectionContextMenu(const QPoint &pos)
                 connect(exclude, &QAction::triggered, this,
                         [this, capturePos] { filterByConnectionRow(capturePos, /*exclude=*/true);  });
             }
+
+            // ---- Attribution section ------------------------------------
+            // Pull the structured attribution fields directly off the
+            // model's per-row roles so we don't depend on the (possibly
+            // hidden) Process / Container columns being visible.
+            const QModelIndex anchor = m_connModel->index(row, 0);
+            const qint32 pid = m_connModel
+                ->data(anchor, ConnectionModel::ProcessPidRole).toInt();
+            const QString comm = m_connModel
+                ->data(anchor, ConnectionModel::ProcessCommRole).toString();
+            const QString cRuntime = m_connModel
+                ->data(anchor, ConnectionModel::ContainerRuntimeRole).toString();
+            const QString cId   = m_connModel
+                ->data(anchor, ConnectionModel::ContainerIdRole).toString();
+            const QString cName = m_connModel
+                ->data(anchor, ConnectionModel::ContainerNameRole).toString();
+
+            const bool hasProcess   = pid > 0 || !comm.isEmpty();
+            const bool hasContainer = !cRuntime.isEmpty()
+                                      || !cId.isEmpty() || !cName.isEmpty();
+
+            // Quote a value for the filter mini-language. The parser
+            // treats double-quoted strings as one token, so this is safe
+            // for names with spaces / colons / parens. Backslash-escape
+            // any embedded quotes.
+            const auto quoteForFilter = [](const QString &raw) {
+                QString s = raw;
+                s.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+                s.replace(QLatin1Char('"'),  QStringLiteral("\\\""));
+                return QStringLiteral("\"%1\"").arg(s);
+            };
+            const auto setFilter = [this](const QString &clause) {
+                if (!m_connFilterEdit) return;
+                m_connFilterEdit->setText(clause);
+                m_connFilterEdit->setFocus(Qt::OtherFocusReason);
+            };
+
+            if (hasProcess || hasContainer) {
+                menu.addSeparator();
+            }
+
+            if (hasProcess) {
+                const QString commLabel = comm.isEmpty()
+                    ? tr("[pid %1]").arg(pid) : comm;
+                // Prefer comm match (`comm:<x>`) when available — pids
+                // are recycled and short-lived. Fall back to exact pid
+                // when we don't have a comm (rare but possible).
+                auto *byProc = menu.addAction(
+                    tr("Filter by process: %1").arg(commLabel));
+                if (!comm.isEmpty()) {
+                    const QString q = quoteForFilter(comm);
+                    connect(byProc, &QAction::triggered, this,
+                            [setFilter, q] {
+                                setFilter(QStringLiteral("comm=%1").arg(q));
+                            });
+                } else {
+                    connect(byProc, &QAction::triggered, this,
+                            [setFilter, pid] {
+                                setFilter(QStringLiteral("pid=%1").arg(pid));
+                            });
+                }
+
+                auto *copyProc = menu.addAction(
+                    tr("Copy process info"));
+                connect(copyProc, &QAction::triggered, this,
+                        [copyToClip, comm, pid] {
+                            copyToClip(QStringLiteral("%1 [pid %2]")
+                                .arg(comm.isEmpty() ? QStringLiteral("?") : comm)
+                                .arg(pid));
+                        });
+            }
+
+            if (hasContainer) {
+                const QString containerLabel = !cName.isEmpty() ? cName
+                                              : !cId.isEmpty()   ? cId
+                                              : cRuntime;
+                // Container filter: prefer name (stable, human-meaningful);
+                // fall back to id; final fallback is runtime-only which
+                // matches every flow in that runtime.
+                auto *byCont = menu.addAction(
+                    tr("Filter by container: %1").arg(containerLabel));
+                QString matchToken = !cName.isEmpty() ? cName
+                                    : !cId.isEmpty()   ? cId
+                                    : cRuntime;
+                const QString q = quoteForFilter(matchToken);
+                connect(byCont, &QAction::triggered, this,
+                        [setFilter, q] {
+                            setFilter(QStringLiteral("container:%1").arg(q));
+                        });
+
+                if (!cRuntime.isEmpty()) {
+                    auto *byRt = menu.addAction(
+                        tr("Filter by runtime: %1").arg(cRuntime));
+                    const QString rq = quoteForFilter(cRuntime);
+                    connect(byRt, &QAction::triggered, this,
+                            [setFilter, rq] {
+                                setFilter(QStringLiteral("runtime=%1").arg(rq));
+                            });
+                }
+
+                auto *copyCont = menu.addAction(
+                    tr("Copy container info"));
+                connect(copyCont, &QAction::triggered, this,
+                        [copyToClip, cRuntime, cId, cName] {
+                            QStringList parts;
+                            if (!cRuntime.isEmpty()) parts << cRuntime;
+                            if (!cName.isEmpty())    parts << cName;
+                            if (!cId.isEmpty())      parts << cId;
+                            copyToClip(parts.join(QLatin1Char(' ')));
+                        });
+            }
         }
     }
 
@@ -1623,4 +2068,105 @@ void MainWindow::updateStatusBar(const QList<InterfaceStats> &stats)
     m_statusThroughput->setText(QStringLiteral("↓ %1   ↑ %2")
                                     .arg(util::formatBytes(totalRx),
                                          util::formatBytes(totalTx)));
+}
+
+namespace {
+
+// Build a header context menu populated with one checkable action per
+// logical column, plus a "Reset to defaults" item that re-shows every
+// column. Used by both the interfaces- and connections-table headers
+// (the per-view "default visible" calculation may differ — pass in
+// alwaysHidden for columns whose visibility is governed by other
+// settings, e.g. the RxMax/TxMax gauge columns).
+using HeaderToggleInterceptor = std::function<bool(int col, bool checked)>;
+
+void populateHeaderMenu(QMenu *menu, QHeaderView *header,
+                        const QSet<int> &alwaysHidden = {},
+                        HeaderToggleInterceptor toggleInterceptor = {})
+{
+    QAbstractItemModel *m = header->model();
+    if (!m) return;
+    const int cols = m->columnCount();
+
+    // Count currently-visible sections so we can disable the toggle of
+    // the last one — hiding every column would orphan the view with no
+    // way to summon the menu back.
+    int visibleCount = 0;
+    for (int i = 0; i < cols; ++i)
+        if (!header->isSectionHidden(i)) ++visibleCount;
+
+    for (int i = 0; i < cols; ++i) {
+        const QString label = m->headerData(i, Qt::Horizontal, Qt::DisplayRole).toString();
+        QAction *act = menu->addAction(label.isEmpty()
+            ? QStringLiteral("Column %1").arg(i + 1) : label);
+        act->setCheckable(true);
+        act->setData(i);
+        act->setChecked(!header->isSectionHidden(i));
+        if (act->isChecked() && visibleCount <= 1)
+            act->setEnabled(false);  // refuse to hide the last visible column
+        QObject::connect(act, &QAction::toggled, header,
+            [header, i, toggleInterceptor](bool checked) {
+                if (toggleInterceptor && toggleInterceptor(i, checked))
+                    return;
+                header->setSectionHidden(i, !checked);
+            });
+    }
+
+    menu->addSeparator();
+    QAction *resetAct = menu->addAction(QObject::tr("Reset columns to defaults"));
+    QObject::connect(resetAct, &QAction::triggered, header,
+        [header, cols, alwaysHidden, toggleInterceptor] {
+            for (int i = 0; i < cols; ++i) {
+                const bool checked = !alwaysHidden.contains(i);
+                if (toggleInterceptor && toggleInterceptor(i, checked))
+                    continue;
+                header->setSectionHidden(i, !checked);
+            }
+            // Also restore the original logical order. Walk visual->
+            // logical and move each into its logical slot.
+            for (int logical = 0; logical < cols; ++logical) {
+                const int visual = header->visualIndex(logical);
+                if (visual != logical)
+                    header->moveSection(visual, logical);
+            }
+        });
+}
+
+} // namespace
+
+void MainWindow::showNetHeaderMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    populateHeaderMenu(&menu, m_netView->horizontalHeader());
+    menu.exec(m_netView->horizontalHeader()->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::showConnHeaderMenu(const QPoint &pos)
+{
+    const int processCol = static_cast<int>(ConnectionModel::Column::Process);
+    const int containerCol = static_cast<int>(ConnectionModel::Column::Container);
+
+    // RxMax/TxMax and attribution visibility are governed by settings in
+    // applySettingsToUi(); pin them as "default hidden" so Reset does the
+    // same thing.
+    const QSet<int> alwaysHidden{
+        static_cast<int>(ConnectionModel::Column::RxMax),
+        static_cast<int>(ConnectionModel::Column::TxMax),
+        processCol,
+        containerCol,
+    };
+    QMenu menu(this);
+    populateHeaderMenu(&menu, m_connView->header(), alwaysHidden,
+        [this, processCol, containerCol](int col, bool checked) {
+            if (col == processCol) {
+                m_settings->setShowProcessColumn(checked);
+                return true;
+            }
+            if (col == containerCol) {
+                m_settings->setShowContainerColumn(checked);
+                return true;
+            }
+            return false;
+        });
+    menu.exec(m_connView->header()->viewport()->mapToGlobal(pos));
 }

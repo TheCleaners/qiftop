@@ -2,6 +2,18 @@
 
 #include "RowGaugeDelegate.h"
 
+#include <QColor>
+
+// Colours for the group-header chips, configurable via Settings and
+// deliberately distinct from the peer src/dst colours used for flow
+// rows. Pushed in by MainWindow::applySettingsToUi.
+struct ChipPalette {
+    QColor primary;   // process / container / iface name
+    QColor user;      // uid → name
+    QColor id;        // container id
+    QColor detail;    // pid / cmdline / flow count
+};
+
 // Renders the Flow column for connections:
 //
 //     [PROTO]  source:port → destination:port
@@ -25,6 +37,11 @@ public:
     void setColorCodeEnabled(bool v) { m_colorCode = v; }
     [[nodiscard]] bool colorCodeEnabled() const { return m_colorCode; }
 
+    // Group-header chip colours. Empty/invalid entries fall back to a
+    // muted theme colour in the painter.
+    void setChipPalette(const ChipPalette &p) { m_chipPalette = p; }
+    [[nodiscard]] const ChipPalette &chipPalette() const { return m_chipPalette; }
+
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override;
     [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem &option,
@@ -32,4 +49,5 @@ public:
 
 private:
     bool m_colorCode = true;
+    ChipPalette m_chipPalette;
 };

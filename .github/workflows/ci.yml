@@ -5,6 +5,7 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  workflow_dispatch:
 
 # Default to the minimum: read-only access to repository contents. CI doesn't
 # write to issues, PRs, releases, packages, or anything else — the Release
@@ -19,16 +20,15 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build & test (${{ matrix.os }}, ${{ matrix.build_type }})
-    runs-on: ${{ matrix.os }}
+    name: Build & test (ubuntu-24.04, ${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-22.04]
         build_type: [Debug, Release]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build dependencies
         run: |
@@ -72,12 +72,113 @@ jobs:
           mkdir -p "$HOME"
           dbus-run-session -- ctest --output-on-failure --no-tests=error
 
+  containerized-build-and-test:
+    # ubuntu-26.04 and fedora:44 don't ship as native GitHub Actions runners
+    # (as of 2026-06). Run them inside containers on an ubuntu-24.04 host.
+    # SWITCH TO NATIVE `runs-on: ubuntu-26.04` AS SOON AS THE RUNNER IMAGE
+    # IS PUBLISHED — see https://github.com/actions/runner-images for status.
+    name: Build & test (${{ matrix.image }}, ${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:26.04", "fedora:44"]
+        build_type: [Debug, Release]
+        include:
+          - image: "ubuntu:26.04"
+            family: debian
+          - image: "fedora:44"
+            family: fedora
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build dependencies (debian family)
+        if: matrix.family == 'debian'
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            libgl1-mesa-dev \
+            libnl-3-dev libnl-route-3-dev \
+            libnetfilter-conntrack-dev \
+            dbus-x11 ca-certificates
+
+      - name: Install build dependencies (fedora family)
+        if: matrix.family == 'fedora'
+        run: |
+          # Disable weak deps (the dnf analog of apt's --no-install-recommends)
+          # so we don't drag in optional Qt multimedia/audio bloat
+          # (e.g. pipewire-jack-audio-connection-kit) that this build never
+          # uses. Fewer packages also means fewer requests, so fewer chances
+          # to hit a dead Fedora mirror.
+          #
+          # The metalink occasionally hands out unreachable mirrors (curl 7
+          # "could not connect" / HTTP 500), and dnf will otherwise sit there
+          # retrying until the job's overall timeout cancels it. Cap per-server
+          # connect time + minimum transfer rate so a bad mirror is abandoned
+          # quickly, and retry the whole transaction a few times — each retry
+          # re-resolves the metalink and usually lands on a healthy mirror.
+          dnf_install() {
+            dnf -y \
+              --setopt=install_weak_deps=False \
+              --setopt=fastestmirror=True \
+              --setopt=retries=10 \
+              --setopt=timeout=30 \
+              --setopt=minrate=1k \
+              install "$@"
+          }
+          pkgs="cmake ninja-build gcc-c++ pkgconf-pkg-config \
+            qt6-qtbase-devel qt6-qtbase-private-devel \
+            mesa-libGL-devel \
+            libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
+            dbus-daemon dbus-tools \
+            libasan libubsan \
+            shadow-utils"
+          ok=0
+          for attempt in 1 2 3; do
+            if dnf_install $pkgs; then ok=1; break; fi
+            echo "::warning::dnf install attempt ${attempt} failed (mirror?); " \
+                 "cleaning metadata and retrying" >&2
+            dnf clean all || true
+            sleep $((attempt * 15))
+          done
+          [ "$ok" = 1 ] || { echo "::error::dnf install failed after 3 attempts"; exit 1; }
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.build_type }}" = "Debug" ]; then
+            SAN="-DQIFTOP_TESTS_SANITIZE=address+undefined"
+          else
+            SAN="-DQIFTOP_TESTS_SANITIZE=OFF"
+          fi
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DQIFTOP_BUILD_TESTS=ON \
+            -DQIFTOP_AUTO_PACKAGE=OFF \
+            $SAN
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export HOME="${RUNNER_TEMP:-/tmp}/home"
+          mkdir -p "$HOME"
+          dbus-run-session -- ctest --output-on-failure --no-tests=error
+
   packaging-qa:
     name: Packaging QA (.deb lint + smoke install)
     runs-on: ubuntu-24.04
     needs: build-and-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build + QA dependencies
         run: |
@@ -146,3 +247,4 @@ jobs:
             # nft conntrack shim should be present:
             test -f /usr/share/qiftop/qiftop-conntrack.nft
           '
+

@@ -6,7 +6,7 @@
 // DBus contract:
 //
 //   • org.qiftop.NetworkAgent1 registers within a few seconds
-//   • Properties.Get(Version)      → "0.3"
+//   • Properties.Get(Version)      → "0.5"
 //   • Properties.Get(Capabilities) → contains the stable contract tokens
 //   • GetInterfaces() returns quickly without error
 //   • SetDesiredIntervalMs(200) raises StatsChanged emission rate well
@@ -28,6 +28,8 @@
 #include <QProcess>
 #include <QStringList>
 #include <QTest>
+
+#include <unistd.h>  // getpid for the GetProcessDetails round-trip test
 
 #ifndef QIFTOP_AGENT_BINARY
 #  error "QIFTOP_AGENT_BINARY must be defined by CMake (path to qiftop-agent)"
@@ -128,7 +130,7 @@ private slots:
             QString::fromLatin1(kIfacesIface),
             QStringLiteral("Version"));
         QVERIFY2(vReply.isValid(), qPrintable(vReply.error().message()));
-        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.3"));
+        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.5"));
 
         QDBusReply<QDBusVariant> cReply = props.call(
             QStringLiteral("Get"),
@@ -144,7 +146,7 @@ private slots:
                                 "snapshot-cap", "iana-proto",
                                 "direction-on-wire", "snapshot-timestamp",
                                 "ifindex", "oper-state", "link-errors",
-                                "tcp-state"}) {
+                                "tcp-state", "on-demand-process-details"}) {
             QVERIFY2(caps.contains(QString::fromLatin1(tok)),
                      qPrintable(QStringLiteral("missing capability '%1'; got: [%2]")
                                     .arg(QString::fromLatin1(tok),
@@ -215,6 +217,80 @@ private slots:
                        QString::fromLatin1(kIfacesIface),
                        QStringLiteral("StatsChanged"),
                        &counter, SLOT(bump()));
+    }
+
+    void getProcessDetailsReturnsOurOwnInfo()
+    {
+        // Drive the v0.5 on-demand RPC. The agent runs as the test user
+        // under dbus-run-session, so it can introspect this test
+        // process itself: pid=getpid() must round-trip cleanly with a
+        // non-empty cmdline (which definitely contains "test_agent…").
+        auto bus = QDBusConnection::sessionBus();
+        QDBusInterface conns(QString::fromLatin1(kBusName),
+                             QStringLiteral("/org/qiftop/NetworkAgent1/Connections"),
+                             QStringLiteral("org.qiftop.NetworkAgent1.Connections"),
+                             bus);
+        QVERIFY(conns.isValid());
+
+        // Unmarshal the (uussssτ) return struct manually — keeps the test
+        // free of any client-side header coupling. Calling QDBusInterface
+        // with a typed return would force linking the ProcessDetailsDto
+        // metatype into this TU, which we deliberately avoid (the test
+        // is meant to verify the WIRE, not the C++ DTO mirror).
+        QDBusMessage reply = conns.call(QStringLiteral("GetProcessDetails"),
+                                        quint32(::getpid()));
+        QVERIFY2(reply.type() != QDBusMessage::ErrorMessage,
+                 qPrintable(reply.errorMessage()));
+
+        const QVariantList args = reply.arguments();
+        QCOMPARE(args.size(), 1);
+        const auto v = args.first();
+        // QDBusArgument round-trip into our 7 fields.
+        const QDBusArgument arg = v.value<QDBusArgument>();
+        quint32 pid = 0, uid = 0;
+        QString comm, exe, cmdline, cwd;
+        quint64 startTime = 0;
+        arg.beginStructure();
+        arg >> pid >> uid >> comm >> exe >> cmdline >> cwd >> startTime;
+        arg.endStructure();
+
+        QCOMPARE(pid, quint32(::getpid()));
+        // comm is kernel-truncated to 15 bytes; this binary's basename
+        // ("test_agent_integration") is exactly 22 chars and will be
+        // truncated to "test_agent_inte".
+        QVERIFY2(!comm.isEmpty(), qPrintable(comm));
+        // cmdline should at least contain our binary path or basename.
+        QVERIFY2(cmdline.contains(QStringLiteral("test_agent_integration")),
+                 qPrintable(cmdline));
+        QVERIFY2(!exe.isEmpty(), qPrintable(exe));
+        QVERIFY2(startTime > 0,
+                 qPrintable(QStringLiteral("startTimeJiffies=%1").arg(startTime)));
+    }
+
+    void getProcessDetailsOnVanishedPidReturnsZeroPid()
+    {
+        // Asking for a PID that is certain not to exist (UINT32 - 1
+        // gets very close to PID_MAX). Spec: pid=0 in the response,
+        // method must NOT raise a DBus error.
+        auto bus = QDBusConnection::sessionBus();
+        QDBusInterface conns(QString::fromLatin1(kBusName),
+                             QStringLiteral("/org/qiftop/NetworkAgent1/Connections"),
+                             QStringLiteral("org.qiftop.NetworkAgent1.Connections"),
+                             bus);
+        QDBusMessage reply = conns.call(QStringLiteral("GetProcessDetails"),
+                                        quint32(2147483646));
+        QVERIFY2(reply.type() != QDBusMessage::ErrorMessage,
+                 qPrintable(reply.errorMessage()));
+        const QDBusArgument arg = reply.arguments().first().value<QDBusArgument>();
+        quint32 pid = 99, uid = 99;
+        QString comm, exe, cmdline, cwd;
+        quint64 startTime = 99;
+        arg.beginStructure();
+        arg >> pid >> uid >> comm >> exe >> cmdline >> cwd >> startTime;
+        arg.endStructure();
+        QCOMPARE(pid, quint32(0));
+        QVERIFY(comm.isEmpty());
+        QVERIFY(cmdline.isEmpty());
     }
 };
 

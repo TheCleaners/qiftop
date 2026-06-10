@@ -25,7 +25,7 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # tags + full history so release notes diff works
 
@@ -36,6 +36,13 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # Debian package version: replace the FIRST '-' (the prerelease
+          # separator) with '~' so the .deb sorts BEFORE the final release
+          # (0.2~rc1 < 0.2) and apt upgrades rc -> final cleanly. A literal
+          # '-rc1' would be parsed as a Debian revision and sort NEWER than
+          # 0.2, blocking the upgrade. Final tags (no '-') are unchanged.
+          deb_version="${version/-/\~}"
+          echo "deb_version=${deb_version}" >> "$GITHUB_OUTPUT"
           # Pre-release tags (anything with a '-' suffix like v0.1-alpha1,
           # v0.2-rc1, v0.3-beta) get RelWithDebInfo + unstripped binaries
           # so user-reported crash backtraces are debuggable. Final tags
@@ -50,6 +57,7 @@ jobs:
           echo "build_type=${build_type}" >> "$GITHUB_OUTPUT"
           echo "strip_files=${strip_files}" >> "$GITHUB_OUTPUT"
           echo "Release version: ${version}"
+          echo "Debian version:  ${deb_version}"
           echo "Build type:      ${build_type}"
           echo "Strip binaries:  ${strip_files}"
 
@@ -65,13 +73,15 @@ jobs:
             file fakeroot lintian desktop-file-utils
 
       - name: Configure
-        # The project() VERSION in CMakeLists.txt is the single source
-        # of truth for CPACK_PACKAGE_VERSION; we verify below that it
-        # matches the pushed tag rather than overriding it.
+        # project() VERSION in CMakeLists.txt is the single source of truth
+        # for the upstream version (verified against the tag base below). The
+        # full Debian package version (incl. any ~rcN suffix) is passed
+        # explicitly so the .deb filename + version carry the prerelease.
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ steps.ver.outputs.build_type }} \
             -DCPACK_STRIP_FILES=${{ steps.ver.outputs.strip_files }} \
+            -DCPACK_PACKAGE_VERSION=${{ steps.ver.outputs.deb_version }} \
             -DQIFTOP_BUILD_TESTS=ON \
             -DQIFTOP_AUTO_PACKAGE=OFF
 
@@ -143,34 +153,153 @@ jobs:
       - name: Compute checksums
         working-directory: build
         run: |
-          sha256sum *.deb > SHA256SUMS
-          cat SHA256SUMS
+          sha256sum *.deb > SHA256SUMS.deb
+          cat SHA256SUMS.deb
 
       - name: Upload .deb artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qiftop-debs-${{ steps.ver.outputs.version }}
           path: |
             build/*.deb
-            build/SHA256SUMS
+            build/SHA256SUMS.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  build-rpm:
+    name: Build .rpm (fedora:44)
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Derive version + build profile from tag
+        id: ver
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # RPM (rpm 4.10+), like dpkg, sorts '~' BEFORE the final release, so
+          # a prerelease tag v0.2-rc1 -> 0.2~rc1 < 0.2 and `dnf upgrade` rc ->
+          # final works. Same mapping as the .deb. Final tags are unchanged.
+          rpm_version="${version/-/\~}"
+          echo "rpm_version=${rpm_version}" >> "$GITHUB_OUTPUT"
+          if [[ "${tag}" == *-* ]]; then
+            build_type="RelWithDebInfo"
+            strip_files="OFF"
+          else
+            build_type="Release"
+            strip_files="ON"
+          fi
+          echo "build_type=${build_type}" >> "$GITHUB_OUTPUT"
+          echo "strip_files=${strip_files}" >> "$GITHUB_OUTPUT"
+          echo "RPM version:  ${rpm_version}"
+          echo "Build type:   ${build_type}"
+          echo "Strip files:  ${strip_files}"
+
+      - name: Verify project version matches tag
+        run: |
+          proj_ver=$(grep -E '^project\(qiftop VERSION' CMakeLists.txt \
+                     | sed -E 's/.*VERSION ([0-9][0-9.]*).*/\1/')
+          want_base="${{ steps.ver.outputs.version }}"
+          want_base="${want_base%%-*}"
+          if [ "$proj_ver" != "$want_base" ]; then
+            echo "::error::CMakeLists.txt project() VERSION=$proj_ver does not match tag base $want_base"
+            exit 1
+          fi
+          echo "OK: project version $proj_ver matches tag"
+
+      - name: Build .rpm in fedora:44 container
+        # The runner is Ubuntu; RPMs must be built with rpmbuild + the Fedora
+        # -devel libs, so the whole configure/build/cpack runs inside a
+        # fedora:44 container (this mirrors dist/rpm/build-and-verify.sh).
+        # Library Requires are discovered automatically by rpmbuild's
+        # find-requires; we only declare the non-library deps in CMakeLists.
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src fedora:44 bash -euxc '
+            dnf -y --setopt=install_weak_deps=False install \
+              cmake ninja-build gcc-c++ pkgconf-pkg-config rpm-build \
+              qt6-qtbase-devel qt6-qtbase-private-devel mesa-libGL-devel \
+              libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
+              dbus-daemon systemd shadow-utils
+            cmake -S . -B build-rpm -G Ninja \
+              -DCMAKE_BUILD_TYPE=${{ steps.ver.outputs.build_type }} \
+              -DCPACK_STRIP_FILES=${{ steps.ver.outputs.strip_files }} \
+              -DCPACK_PACKAGE_VERSION=${{ steps.ver.outputs.rpm_version }} \
+              -DQIFTOP_BUILD_TESTS=OFF \
+              -DQIFTOP_AUTO_PACKAGE=OFF
+            cmake --build build-rpm --target qiftop qiftop-agent --parallel
+            cd build-rpm && cpack -G RPM -V
+            ls -la *.rpm
+          '
+
+      - name: Smoke install in clean fedora:44 container
+        run: |
+          docker run --rm -v "$PWD/build-rpm:/work" -w /work fedora:44 bash -euxc '
+            dnf -y --setopt=install_weak_deps=False install ./qiftop-agent-*.rpm ./qiftop-*.rpm
+            QT_QPA_PLATFORM=offscreen qiftop --version
+            qiftop-agent --version
+            getent group netdev
+            test -f /usr/lib/systemd/system/qiftop-agent.service
+            test -f /usr/share/qiftop/qiftop-conntrack.nft
+            rpm -qc qiftop-agent | grep -q /etc/qiftop/agent.conf
+          '
+
+      - name: Fix artifact ownership
+        # The container wrote build-rpm as root; make it readable to the
+        # runner user so upload-artifact / checksums can access it.
+        run: sudo chown -R "$(id -u):$(id -g)" build-rpm
+
+      - name: Compute checksums
+        working-directory: build-rpm
+        run: |
+          sha256sum *.rpm > SHA256SUMS.rpm
+          cat SHA256SUMS.rpm
+
+      - name: Upload .rpm artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: qiftop-rpms-${{ steps.ver.outputs.version }}
+          path: |
+            build-rpm/*.rpm
+            build-rpm/SHA256SUMS.rpm
           if-no-files-found: error
           retention-days: 14
 
   release:
     name: Publish GitHub Release
-    needs: build-deb
+    needs: [build-deb, build-rpm]
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
+      - name: Download .deb artifacts
+        uses: actions/download-artifact@v8
         with:
           name: qiftop-debs-${{ needs.build-deb.outputs.version }}
           path: dist
+
+      - name: Download .rpm artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: qiftop-rpms-${{ needs.build-rpm.outputs.version }}
+          path: dist
+
+      - name: Combine checksums
+        working-directory: dist
+        run: |
+          # Per-job SHA256SUMS.{deb,rpm} reference bare filenames; concatenate
+          # into a single SHA256SUMS published alongside the packages.
+          cat SHA256SUMS.deb SHA256SUMS.rpm > SHA256SUMS
+          rm -f SHA256SUMS.deb SHA256SUMS.rpm
+          cat SHA256SUMS
 
       - name: List assets
         run: ls -la dist
@@ -183,11 +312,29 @@ jobs:
           draft: false
           # Mark as prerelease automatically for tags like v0.2-rc1, v0.2-beta.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # Auto-generated notes diff against the previous tag.
-          # Customizable via .github/release.yml if you want curated
-          # categories / excluded labels.
+          # Custom preamble (animated demo) prepended above the auto-generated
+          # notes. The demo GIF is NOT committed to the repo (keeps it lean)
+          # and is NOT re-generated per release — every release reuses the one
+          # uploaded to the v0.2-rc1 release, unless the UI changes
+          # fundamentally enough to warrant a fresh capture (then upload a new
+          # GIF to a release and bump the pinned tag below). The README pins
+          # the same URL.
+          body: |
+            ![qiftop demo](https://github.com/${{ github.repository }}/releases/download/v0.2-rc1/demo.gif)
+
+            *Animated walkthrough driven by synthetic data (reserved
+            documentation addresses + `example.*` hostnames). Build / usage
+            docs are in the [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md).*
+
+            **Packages:** `.deb` (Debian/Ubuntu) and `.rpm` (Fedora) for `amd64`/`x86_64`.
+
+            ---
+          # Auto-generated notes diff against the previous tag, appended below
+          # the body above. Customizable via .github/release.yml if you want
+          # curated categories / excluded labels.
           generate_release_notes: true
           files: |
             dist/*.deb
+            dist/*.rpm
             dist/SHA256SUMS
           fail_on_unmatched_files: true

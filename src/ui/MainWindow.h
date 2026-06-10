@@ -17,6 +17,8 @@ class QFrame;
 class QTimer;
 class QLabel;
 class QTableView;
+class QTreeView;
+class QAbstractItemView;
 class QTabWidget;
 class QToolBar;
 class QMenu;
@@ -79,6 +81,8 @@ private slots:
     void openSettingsDialog();
     void showInterfaceContextMenu(const QPoint &pos);
     void showConnectionContextMenu(const QPoint &pos);
+    void showNetHeaderMenu(const QPoint &pos);
+    void showConnHeaderMenu(const QPoint &pos);
     void quitFromTray();
     void onConnectionsPermissionDenied(const QString &detail);
     void onConnectionsAccountingUnavailable(const QString &detail);
@@ -97,6 +101,9 @@ private:
     void setupMenuAndToolbar();
     void updateStatusBar(const QList<InterfaceStats> &stats);
     void applySettingsToUi();
+    // (Re)assert or suspend the agent cadence heartbeat based on whether the
+    // window is hidden to tray (PERF-L2). Safe to call repeatedly.
+    void refreshAgentHeartbeat();
     void runExport(class Exportable *src, ExportFormat fmt,
                    ExportSink sink, const QString &baseName);
 
@@ -127,13 +134,15 @@ private:
     // Copies the currently-selected rows of `view` to the clipboard,
     // formatted via the matching Exportable model's CSV emitter for
     // selected rows, or via copyTextForFlow() for connections.
-    void copyTableSelectionToClipboard(QTableView *view);
+    void copyTableSelectionToClipboard(QAbstractItemView *view);
     // Sets the Connections filter expression to one isolating (or
     // excluding) the peer at the row under `pos` in m_connView.
     void filterByConnectionRow(const QPoint &pos, bool exclude);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
     Settings          *m_settings    = nullptr;
@@ -161,7 +170,12 @@ protected:
     // Connections tab
     ConnectionModel       *m_connModel     = nullptr;
     ConnectionFilterProxy *m_connProxy     = nullptr;
-    QTableView            *m_connView      = nullptr;
+    class ConnectionGroupProxy *m_connGroupProxy = nullptr;
+    // On-demand process details (exe/cmdline/cwd) keyed by pid, populated
+    // lazily from the agent's GetProcessDetails RPC; the group proxy
+    // reads it for ByProcess group tooltips.
+    QHash<qint32, qiftop::backend::ProcessDetails> m_procDetails;
+    QTreeView             *m_connView      = nullptr;
     ConnectionFlowDelegate *m_connFlowDelegate = nullptr;
     QFrame                *m_connBanner    = nullptr; // shown on EPERM
     QLabel                *m_connBannerLbl = nullptr;
@@ -173,6 +187,14 @@ protected:
     class QToolButton     *m_connIfaceFilterBtn        = nullptr; // toolbar trigger
     QAction               *m_connIfaceFilterToolbarAct = nullptr; // QAction wrapping the button
     QAction               *m_connIfaceFilterMenuAct    = nullptr; // QAction wrapping the submenu
+    class QComboBox       *m_connViewModeCombo         = nullptr;
+    QAction               *m_connViewModeToolbarAct    = nullptr;
+    // Mirror of the toolbar view-mode dropdown under View → "Group
+    // Connections" (radio submenu). Enabled only on the Connections tab,
+    // kept in sync with Settings::connectionViewMode in applySettingsToUi().
+    class QMenu           *m_connViewModeMenu          = nullptr;
+    QAction               *m_connViewModeMenuAct       = nullptr; // QAction wrapping the submenu
+    class QActionGroup    *m_connViewModeGroup         = nullptr;
     class QLineEdit       *m_connFilterEdit            = nullptr;
     QAction               *m_connFilterToolbarAct      = nullptr;
     QAction               *m_connFilterSepAct          = nullptr;

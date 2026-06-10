@@ -29,22 +29,41 @@ strictly client-side.
 ```
 src/
 ├── agent/                    # privileged DBus daemon (qiftop-agent)
-│   ├── main.cpp              # config load, bus name, wires services + IdleManager
-│   ├── InterfacesService.{h,cpp}
-│   ├── ConnectionsService.{h,cpp}
+│   ├── main.cpp              # thin shim: argv, bus choice, constructs Application
+│   ├── Application.{h,cpp}   # RAII bus surface: registers objects, name, IdleManager
+│   ├── Config.{h,cpp}        # loadIdleConfig() — parses /etc/qiftop/agent.conf
+│   ├── InterfacesService.{h,cpp}   # /.../Interfaces — Version + Capabilities props
+│   ├── ConnectionsService.{h,cpp}  # /.../Connections — GetProcessDetails RPC, snapshot cap
+│   ├── Attribution.{h,cpp}  # pure helper: enrich Connection list via ProcessResolver
 │   └── IdleManager.{h,cpp}   # adaptive polling cadence + per-client hints
 ├── backend/                  # backend interfaces + platform impls
 │   ├── NetworkMonitor.{h,cpp}      # abstract: per-interface stats
 │   ├── ConnectionMonitor.{h,cpp}   # abstract: per-flow stats
-│   ├── linux/                      # libnl + nf_conntrack impls (server-side)
-│   │   ├── NetlinkMonitor.{h,cpp}, NetlinkWorker.{h,cpp}
-│   │   └── ConntrackMonitor.{h,cpp}
+│   ├── Connection.h                # Endpoint/Connection/L4Proto/Direction value types
+│   ├── ProcessResolver.h           # abstract: pid/process/container/chain resolution
+│   ├── ProcessDetails.h            # on-demand exe/cmdline/cwd/startTime DTO
+│   ├── CompositeResolver.h         # fan-out across a chain of resolvers
+│   ├── ProcessResolverFactory.{h,cpp}  # env-gated default resolver chain
+│   ├── PlatformInfo.{h,cpp}        # qiftop::platform host facts (uid→name, ephemeral range)
+│   ├── linux/                      # libnl + nf_conntrack + attribution (server-side)
+│   │   ├── NetlinkMonitor.{h,cpp}, NetlinkWorker.{h,cpp}   # per-interface stats
+│   │   ├── ConntrackMonitor.{h,cpp}                        # per-flow capture
+│   │   ├── SockDiagResolver.{h,cpp}, SockDiagDump.{h}, SockDiagParse.h  # pid via sock_diag
+│   │   ├── CgroupClassifier.{h,cpp}, CgroupParse.h         # pid → container runtime/id/chain
+│   │   ├── NetnsScanner.{h,cpp}                            # per-netns socket dump (setns)
+│   │   ├── ProcDetails.{h,cpp}                             # on-demand /proc/<pid> reads
+│   │   └── ProcSnapshot.h                                  # /proc/<pid>/stat starttime parser
 │   └── dbus/                       # client-side DBus proxies (used by GUI)
 │       ├── DBusNetworkMonitor.{h,cpp}
 │       └── DBusConnectionMonitor.{h,cpp}
+├── config/Settings.{h,cpp}   # QSettings-backed app prefs (Qt6::Core-only), emits changed()
 ├── dbus/Types.{h,cpp}        # DTOs + Qt marshalling for the wire format
-├── ui/                       # MainWindow, models, delegates, tray
-├── util/                     # Logging, HandoffServer/Client (legacy elevation)
+├── dns/                      # client-side async DNS (never in the agent)
+│   ├── DnsResolver.{h,cpp}         # abstract async resolver
+│   └── QtDnsResolver.{h,cpp}       # QHostInfo-backed, LRU-cached
+├── ui/                       # MainWindow, models, delegates, tray (Qt Widgets)
+├── util/                     # Logging, Units, Exporter, ConnectionFilter, Autostart,
+│                             #   PrivilegeEscalator, HandoffServer/Client (legacy elevation)
 └── main.cpp                  # GUI entry point
 
 dist/
@@ -72,6 +91,14 @@ dist/
    `util/ConnectionHeuristics.h` — are the future `libqiftop` material
    (see §10). Anything pulling in `QWidget`, `QAbstract*Model`,
    `QSortFilterProxyModel`, or similar belongs in `ui/`.
+6. **No platform headers outside `backend/<os>/` or `backend/PlatformInfo.cpp`.**
+   `<linux/*>`, `<sys/un.h>`, `<netinet/*>`, `<ifaddrs.h>`, `<windows.h>`,
+   `<sys/sysctl.h>` etc. live in the platform subdirectory's translation
+   units, or behind `qiftop::platform` (with documented fallbacks on
+   unsupported OSes). Code in `agent/`, `ui/`, `dns/`, `config/`,
+   `dbus/` and the abstract `backend/*.h` interfaces must compile on
+   any Qt 6 target. See `docs/PORTABILITY.md` for the full survey of
+   what each target OS would need.
 
 ### Future direction (long-term)
 
@@ -124,7 +151,7 @@ Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 | Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
 |----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
 | `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged(t, a(...))`, `CadenceChanged(u)`         | `Version: s`, `Capabilities: as` |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `SetDesiredIntervalMs(u)`             | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uusssst)`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
 
 Both data signals carry a leading `quint64 monotonicMs` (a
 `QElapsedTimer`-based, agent-process-local monotonic millisecond
@@ -136,14 +163,19 @@ restarts.
 
 DTOs live in `src/dbus/Types.h`.
 
-**Connection wire signature** (15 fields per flow):
-`a(yysqysqttttsyuy)` =
+**Connection wire signature** (22 outer fields + nested chain):
+`a(yysqysqttttsyuyuussssa(sss))` =
 `(proto, localFamily, localAddress, localPort, remoteFamily, remoteAddress,
 remotePort, rxBytes, txBytes, rxPackets, txPackets, iface, direction,
-ifIndex, tcpState)`.
+ifIndex, tcpState, pid, uid, comm, containerRuntime, containerId,
+containerName, containerChain[a(sss)])`.
+
+Each `containerChain` entry is `(runtime, id, name)` — outer-to-inner
+nesting, leaf entry equals `(containerRuntime, containerId, containerName)`
+when both are populated.
 
 **InterfaceStats wire signature** (16 fields per row):
-`(ssusasttttbbuytttt)` =
+`(ssuasttttbbuytttt)` =
 `(name, type, mtu, addresses, rxBytes, txBytes, rxPackets, txPackets,
 isUp, isLoopback, ifIndex, operState, rxErrors, txErrors, rxDropped,
 txDropped)`.
@@ -177,10 +209,32 @@ Per-field notes:
   kernel counters via libnl `RTNL_LINK_RX/TX_ERRORS / RX/TX_DROPPED`.
   Useful for surfacing flaky NICs and tight-budget tunnels. Capability:
   `link-errors`.
+* `pid` / `uid` / `comm` — Best-effort process attribution for a flow.
+  `pid == 0` means unattributed (no resolver wired, or the flow's
+  socket couldn't be located via SOCK_DIAG within the cache window).
+  `comm` is the kernel-truncated 15-byte basename. Expensive fields
+  (`exe`, `cmdline`, `cwd`) are deliberately NOT shipped on the wire —
+  fetched on demand via `GetProcessDetails(pid)` per the "default-cheap
+  pipeline" design principle. Capability: `process-attribution-wire`.
+* `containerRuntime` / `containerId` / `containerName` — Best-effort
+  container-scope attribution. `containerRuntime` is lowercase
+  (`"docker"`, `"containerd"`, `"podman"`, `"kubernetes"`, `"systemd"`,
+  `"lxc"`, `"lxd"`, `"nspawn"`). `containerId` is the 12-char hex
+  prefix for content-addressable runtimes and the full human name for
+  name-ID runtimes (lxd/lxc/nspawn) — see `docs/ATTRIBUTION.md §5c`.
+  All three empty when the flow has no container scope. Capability:
+  `container-attribution-wire`.
+* `containerChain` — Nested ancestry, outer-to-inner. Empty when no
+  nesting was detected. When non-empty the leaf entry equals
+  `(containerRuntime, containerId, containerName)`. Examples: a flow
+  inside a k8s-managed containerd pod yields
+  `[{"kubernetes", "<pod-uid>", ""}, {"containerd", "<cid>", ""}]`
+  (depth 2); a flow inside docker-in-docker can reach depth 3.
+  Capability: `container-chain-wire`.
 
 ### Contract version & capabilities
 
-`Version` is a free-form string (currently `"0.3"`) bumped only for
+`Version` is a free-form string (currently `"0.5"`) bumped only for
 *additive* changes to the agent surface that clients may care about.
 **Breaking** changes (DTO signature, method removal/rename) still require
 a fresh `org.qiftop.NetworkAgent2` interface per §8.
@@ -188,12 +242,18 @@ a fresh `org.qiftop.NetworkAgent2` interface per §8.
 > Historical note: the 0.1 → 0.2 bump (pre-release v0.1-alpha2 →
 > alpha3) reshaped the wire (added `direction` byte, switched `proto`
 > to IANA, PascalCased `AccountingChanged`). The 0.2 → 0.3 bump
-> (alpha3 → tag tbd) extended both DTOs and added a `monotonicMs`
-> leading arg to both data signals. Since only pre-release alphas
-> existed in either window we reshaped in place rather than branching
-> `NetworkAgent2`. Older alpha clients failing to unmarshal fall back
-> cleanly to the in-process backend via the existing probe. Post-v0.1
-> stable release, breaking changes MUST go through `NetworkAgent2`.
+> (alpha3 → v0.1) extended both DTOs and added a `monotonicMs` leading
+> arg to both data signals. The 0.3 → 0.4 bump (v0.2 attribution work)
+> appended 7 fields to `ConnectionDto` (`pid, uid, comm,
+> containerRuntime, containerId, containerName, containerChain`) for
+> bulk process + container attribution. The 0.4 → 0.5 bump added the
+> on-demand `Connections.GetProcessDetails(pid)` RPC for fetching
+> `exe`/`cmdline`/`cwd`/`startTime` lazily — additive (no DTO
+> change). Since only pre-release alphas existed in those windows we
+> reshaped in place rather than branching `NetworkAgent2`. Older
+> alpha clients failing to unmarshal fall back cleanly to the
+> in-process backend via the existing probe. Post-v0.1 stable
+> release, breaking changes MUST go through `NetworkAgent2`.
 
 `Capabilities` is a `QStringList` of dash-separated lowercase tokens.
 Clients gate optional behaviour on token presence — never on a Version
@@ -214,6 +274,14 @@ older agents. Tokens currently emitted:
 | `oper-state`          | `InterfaceStatsDto.operState` populated with `IF_OPER_*` per RFC 2863. |
 | `link-errors`         | `InterfaceStatsDto` carries `rxErrors` / `txErrors` / `rxDropped` / `txDropped`. |
 | `tcp-state`           | `ConnectionDto.tcpState` populated for TCP flows.           |
+| `process-attribution` | Resolver chain provides per-flow PID / comm / uid (Linux `SockDiagResolver`). UI-visible once `ConnectionDtoV2` lands. |
+| `container-attribution` | Resolver chain provides per-PID container runtime + id + name (Linux `CgroupClassifier`). |
+| `container-chain`     | Resolver chain exposes the full OUTER→INNER container nesting via `ProcessResolver::resolveContainerChainForPid` (Linux `CgroupClassifier`). Single-attribution consumers can ignore this and keep calling `resolveContainerForPid`. |
+| `netns-scan`          | Resolver chain dumps sock_diag in every non-host network namespace (Linux `NetnsScanner`, requires `CAP_SYS_ADMIN`). |
+| `process-attribution-wire` | `ConnectionDto` carries `pid`, `uid`, `comm` populated server-side. Implies the agent has a `process-attribution`-capable resolver wired. Mirror token so non-resolver-aware clients gate UI on this rather than poking attribution fields blindly. |
+| `container-attribution-wire` | `ConnectionDto` carries `containerRuntime`, `containerId`, `containerName` populated server-side. Implies `container-attribution` resolver capability. |
+| `container-chain-wire` | `ConnectionDto.containerChain` is populated when applicable. Strict superset of `container-attribution-wire`: a flow with no nesting still yields a single-entry chain. Advertised when the resolver provides BOTH `container-attribution` AND `container-chain` (see Application.cpp). Today CgroupClassifier always ships both, but the two flags must stay separable. |
+| `on-demand-process-details` | `Connections.GetProcessDetails(pid u) → (pid u, uid u, comm s, exe s, cmdline s, cwd s, startTimeJiffies t)` RPC is available. Returns an all-zero struct (pid=0) on unknown / disappeared PID, never a DBus error. Cache key for clients is `(pid, startTimeJiffies)` — startTime distinguishes PID reuse within one boot. Advertised unconditionally on Linux; non-Linux backends return empty. |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.
@@ -308,6 +376,17 @@ open:
   conntrack table — every flow on the host, including other users'
   source ports and peer IPs. `/proc/net/nf_conntrack` is root-only on
   most distros; the agent must not demote that.
+* **`GetProcessDetails` exposure tradeoff.** The on-demand RPC returns
+  `comm`/`exe`/`cmdline`/`cwd` for any reachable PID. `/proc/<pid>/exe`
+  and `/proc/<pid>/cwd` symlinks are normally mode-0700 (readable
+  only by the process owner and root), and `/proc/<pid>/cmdline` is
+  world-readable but can leak credentials passed on the command line.
+  The root agent reads these and ships them to any netdev-group caller.
+  We accept this as trust-equivalent on top of the existing bulk
+  pid/uid/comm exposure in `GetConnections` — netdev membership is
+  already a "network admin" capability. Distros that want a stricter
+  gate should narrow `GetProcessDetails` in the bus policy file rather
+  than disabling the whole interface.
 
 `dist/debian/postinst` ensures the `netdev` group exists and, when
 installed via `sudo apt install` / `pkexec`, automatically adds the
@@ -339,6 +418,17 @@ the default policy and a matching `<allow>` to the privileged stanza.
 * Setting any window or `idle.timeout_secs` to `0` disables that step
   (the comparison is guarded; see `IdleManager::evaluate`). This matches
   what `dist/conf/agent.conf` has always documented.
+* **Client heartbeat is gated on UI visibility (PERF-L2).** The GUI's
+  heartbeat lives in `MainWindow::refreshAgentHeartbeat()` and is
+  asserted only while `isVisible()`. When the window is hidden to tray
+  (or never shown under `--tray`), the heartbeat STOPS, so the agent's
+  idle wind-down runs and it eventually pauses — even though the tray
+  sparkline only needs cheap interface stats, the single shared
+  `IdleManager` drives both services at one cadence, so there is no way
+  to keep interfaces fast while letting connections idle. `showEvent()`
+  re-asserts immediately, waking the agent the instant the window is
+  summoned. Plain minimize keeps the window "visible" and does NOT
+  suspend the heartbeat.
 
 ---
 
@@ -381,8 +471,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_direction`           | `inferDirection` (ephemeral-port + local-end fallback)            |
 | `test_forwarded`           | `isForwardedFlow` heuristic                                       |
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
-| `test_filter`              | Filter mini-language parser + evaluator (every field/op)          |
-| `test_settings_migration`  | `Settings` legacy-key migration logic                             |
+| `test_settings_migration`  | `Settings` legacy-key migration logic; chip-colour + v0.2 attribution view settings (view mode, process/container column toggles, chain-in-tooltip) round-trip + out-of-range view-mode clamp |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
 | `test_exporter`            | JSON quint64-as-string, qint64 numeric, CSV formula-injection     |
 | `test_idle`                | `IdleManager` cadence, hints, TTL, 64-cap, degrade, NameOwnerChanged |
@@ -393,7 +482,23 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_agent_integration`   | Spawns real `qiftop-agent --session`, drives Version/Capabilities/GetInterfaces/SetDesiredIntervalMs end-to-end |
 | `test_units`               | `util::formatBytes` / `formatByteRate` IEC unit boundaries + precision |
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
-| `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp |
+| `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults. |
+| `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
+| `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
+| `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
+| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). Uses a tiny stub source model — no real ConnectionModel needed. |
+| `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. |
+| `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
+| `test_resolver_factory`    | `qiftop::backend::createDefaultProcessResolver` — env-gated composite construction; `InterfacesService::capabilities()` aggregation: `process-attribution-wire` / `container-attribution-wire` / `container-chain-wire` mirror tokens emitted iff the underlying resolver advertises the producer-side token; `container-chain-wire` requires BOTH `container-attribution` AND `container-chain`. |
+| `test_sockdiag_parse`      | `qiftop::backend::sockDiagParse` — netlink dump message parsing edge cases (IPv4/IPv6, multi-message dumps, truncated tail). Pure parser, no socket. |
+| `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
+| `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
+| `test_proc_snapshot`       | `qiftop::backend::procsnap::pidStartTime` — `/proc/<pid>/stat` field-22 parser robustness (commands with spaces / parens / nested quotes), live self-PID round-trip, missing PID returns nullopt. |
+| `attribution_docker` (Tier-2) | Live end-to-end: `runners/run-docker.sh` brings up an alpine container, drives container→host TCP flow, `qiftop-attribution-probe` asks the production resolver chain to attribute the flow back to `runtime=docker` + the right CID prefix. Gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` (default OFF). |
+| `attribution_podman` (Tier-2) | Sibling of `attribution_docker` using rootful podman + netavark; exercises the `libpod-<id>.scope` cgroup hierarchy that the docker path never produces. SKIPs cleanly on hosts where rootful podman can't start a container (e.g. logind rlimit-delegation quirks). |
+| `attribution_k3d` (Tier-2) | k3s-in-docker (k3d). Exercises the **nested** container chain (`docker → kubernetes → containerd`, depth 3) — the leaf-wins segment-walk has to land on the innermost containerd CID, not on the outer k3s node container. Local-only (Vagrant); not in CI (cold k3d image pull is ~3–4 min, the chain shape is already pinned by Tier-1 fixtures). |
+| `attribution_k8s` (Tier-2) | "Naked" k8s via **k0s --single** (single-binary, no docker wrapper). Distinguishing assertion vs. k3d: chain depth is exactly 2 (`kubernetes → containerd`) and the JSON MUST NOT contain `"runtime":"docker"`. Catches phantom-wrapper bugs in `classifyPathChain`. Local-only (Vagrant). |
+| `attribution_systemd_dbus` (Tier-2) | The ONLY runner that exercises the deployed **systemd unit + DBus policy** instead of the in-process probe. Installs the freshly-built `qiftop-agent` component (`cmake --install --component qiftop-agent --prefix /usr`), starts it under systemd, runs a docker container holding ONE long-lived external flow (`sleep 3600 \| nc <host> 22`), then asserts over DBus (`sudo busctl … GetConnections`, JSON parsed in `run-systemd-dbus.sh`) that the flow attributes to `runtime=docker` + CID prefix. Guards the sandbox surface (`RestrictNamespaces`, `CapabilityBoundingSet`) that the probe runners bypass — e.g. the `RestrictNamespaces=yes` regression in §8a rule 5. DESTRUCTIVE / VM-CI-only (needs passwordless sudo + `QIFTOP_BUILD_DIR`). Run via `scripts/local-integration.sh --runtime systemd-dbus`. See §6.5b for the container-flow-generation wisdom it encodes. On the Fedora VM (`--distro fedora`) it also installs the real `.rpm` and audits SELinux AVCs — see §6.5c. |
 
 ### 6.3 Gaps worth filling
 
@@ -402,6 +507,77 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
    live conntrack handle.
 2. **End-to-end with a real conntrack table** — requires root; needs a
    CI runner with `CAP_NET_ADMIN` or a privileged container.
+3. **Tier-2 attribution: more runtimes.** Docker + rootful podman + k3d +
+   naked k8s (k0s) runners shipped (`tests/integration/attribution/runners/`).
+   Only docker + podman run in CI on push-to-main / dispatch / release —
+   k3d/k8s are local-only via the Vagrant harness (cold bring-up is
+   several minutes; the chain shapes are pinned by Tier-1 unit fixtures).
+   cri-o runner still pending — the probe binary contract is reusable,
+   only the bring-up script differs.
+
+### 6.3a Validating against real-world container runtimes
+
+The attribution layer's correctness depends on regex patterns matching
+the EXACT paths emitted by each container runtime — and those formats
+change between runtime versions, between cgroup drivers (cgroupfs vs.
+systemd), and between cgroup v1 vs. v2. Untested regex drift means
+silent attribution loss for users running that runtime.
+
+**Tiered validation policy:**
+
+1. **Tier 1 — real /proc fixtures** (`tests/fixtures/cgroup_real/` +
+   `test_cgroup_real_fixtures`). Every supported runtime + driver
+   combination MUST have at least one fixture sourced from authoritative
+   upstream documentation or issue trackers, NOT from this developer's
+   imagination. When adding or modifying a regex in `CgroupParse.h`:
+     a. Find a real path example in the runtime's upstream docs (e.g.
+        docs.docker.com, kubernetes.io, github.com/containers/podman,
+        github.com/cri-o/cri-o, github.com/canonical/lxd).
+     b. Drop it into `tests/fixtures/cgroup_real/<runtime>.txt`
+        verbatim (as the file would appear in /proc).
+     c. Add one row to the `classify_data()` data table.
+     d. Run the test — RED first (proves the fixture really exercises
+        the new regex), then green.
+
+2. **Tier 2 — live container harness** (`tests/integration/attribution/`,
+   gated by `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON`). The
+   `qiftop-attribution-probe` binary wraps the production resolver
+   factory and exposes a CLI for "given this 4-tuple, expect this
+   runtime + this CID prefix". Per-runtime runner scripts under
+   `runners/` bring up a real container, generate a flow, then drive
+   the probe. Currently shipped: `run-docker.sh`, `run-podman.sh`
+   (CI), `run-k3d.sh`, `run-k8s.sh` (local-only via Vagrant). Not on
+   default ctest. Dev-box driver: `scripts/integration-test.sh
+   --runtime docker`.
+
+   **Tier-2 is opportunistic, not mandatory.** Tier-1 fixtures
+   protect against regex drift (the high-frequency failure mode);
+   Tier-2 mostly re-verifies the NetnsScanner setns(2) plumbing
+   that's already generic across every Linux-netns runtime. Add a
+   new Tier-2 runner only when the runtime has a GENUINELY-NOVEL
+   cgroup/netns shape that the existing runners don't exercise
+   (k3d's nested chain qualified; cri-o didn't; nspawn didn't once
+   we confirmed the resolver was already name-id safe). See
+   docs/ATTRIBUTION.md §5e for the longer rationale. The cost
+   ceiling: each new Tier-2 runner adds at least one bridge to the
+   test VM and cross-runner state pollution risk grows
+   superlinearly (see §6.5a for the k0s/podman case study).
+
+3. **Tier 3 — CI matrix.** Once Tier 2 exists, run it in GitHub Actions
+   on every push, matrixed across `docker:latest` / `podman` so
+   upstream cgroup-path changes break a PR check, not a user.
+   Heavyweight runners (k3d, k8s) stay local-only (cold bring-up
+   3-4 min each); their chain shapes are pinned by Tier-1 fixtures.
+
+When in doubt about a real-world cgroup path: consult the runtime's
+upstream documentation directly. Recent successful sources used to
+build the Tier 1 fixtures:
+- docs.docker.com (cgroup drivers, runmetrics)
+- kubernetes.io/docs/tasks/administer-cluster/kubelet-cgroup-driver/
+- github.com/cri-o/cri-o/blob/main/docs/cgroup.md
+- github.com/containers/podman/blob/main/docs/tutorials/rootless_cgroup_v2.md
+- github.com/containerd/containerd/blob/main/docs/ops.md
+- kernel.org cgroup-v2.html
 
 ### 6.4 Refactors that would unblock more testing
 
@@ -426,9 +602,183 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 
 `.github/workflows/ci.yml` runs the full test suite under
 `dbus-run-session` with `QT_QPA_PLATFORM=offscreen` on a matrix of
-ubuntu-22.04 + ubuntu-24.04 × Debug + Release. `HOME` is redirected to
+native ubuntu-24.04 × Debug + Release, plus a containerised matrix
+(ubuntu:26.04 + fedora:44) × Debug + Release. The 26.04 slot is
+containerised pending availability of a native ubuntu-26.04 GitHub
+Actions runner image. `HOME` is redirected to
 `$RUNNER_TEMP/home` so QSettings/Autostart tests don't trample the
-runner user. See HACKING.md §5.5 for the test-writing conventions.
+runner user. See docs/HACKING.md §5.5 for the test-writing conventions.
+
+`.github/workflows/integration.yml` runs the Tier-2 attribution
+runners (docker + podman only) on push-to-main / dispatch / release.
+k3d and k8s runners exist but only run locally via the Vagrant
+harness — cold bring-up is 3–4 min each and the chain shapes are
+already pinned by Tier-1 unit tests
+(`test_cgroup_parse::k8sCgroupfsDriverK3dShape`,
+`k8sNakedCgroupfsDriver`, `k8sNakedSystemdDriver`).
+
+### 6.5a Vagrant runner ordering (local Tier-2)
+
+The Vagrant VM at `tests/integration/vagrant/` (the `ubuntu` machine —
+see §6.5c for the `fedora` one) is the supported home for the heavyweight
+runners (k3d, naked k8s). One sharp edge to remember when iterating:
+
+* **k0s bundles kube-router**, which inserts persistent rules into
+  the host's `INPUT` (`KUBE-FIREWALL`, `KUBE-ROUTER-INPUT`) and
+  `FORWARD` chains and leaves zombie veth devices on `cni-podman0` /
+  `docker0`. These survive `systemctl stop k0scontroller`.
+* Symptom: `attribution_podman` fails with `ss did not observe an
+  inbound flow on :18081` even though `podman run ... alpine` works
+  for trivial cases — packets from the container never reach the
+  host bridge because kube-router has hijacked forwarding.
+* ctest orders the runners by test number: 23 docker → 24 podman →
+  25 k3d → 26 k8s, so a single cold-boot run is fine. If you re-run
+  podman after k8s/k3d started on the same boot, **`vagrant reload
+  --no-provision` first** (or destroy + recreate). Cheaper than
+  fighting the rules. Don't be tempted to flush iptables manually —
+  netavark's chain references go stale and you'll spend an hour
+  debugging zombie veths.
+
+### 6.5b The systemd + DBus runner, and container-flow generation wisdom
+
+`tests/integration/attribution/runners/run-systemd-dbus.sh`
+(ctest: `attribution_systemd_dbus`, label `attribution-integration`) is
+the **only** test that exercises the agent the way users actually run it:
+installed as a systemd unit, sandboxed, queried over the system DBus.
+Every other attribution runner drives `qiftop-attribution-probe`, which
+builds the resolver chain *in-process* as root with no sandbox — so it
+structurally cannot catch regressions in the unit's hardening
+directives, capability set, or the DBus policy. The motivating bug:
+`RestrictNamespaces=yes` silently seccomp-blocked `setns(CLONE_NEWNET)`
+so the systemd agent attributed every container flow as host, while the
+probe passed (§8a rule 5). The runner installs the freshly-built
+`qiftop-agent` component with `cmake --install --component qiftop-agent
+--prefix /usr` (the `/usr` prefix is mandatory — the unit's
+`ExecStart=/usr/bin/qiftop-agent` is absolute and won't pick up a
+`/usr/local` install), restarts the unit, runs a container, and asserts
+attribution over `busctl ... GetConnections`. DESTRUCTIVE + needs
+passwordless sudo ⇒ VM/CI-only; not on default ctest. Validate in the
+Vagrant VM (`scripts/local-integration.sh --runtime systemd-dbus`), the
+authoritative venue — not on a dev box.
+
+**Generating a container flow the agent will ATTRIBUTE is the hard part,
+and most "obvious" recipes silently fail.** Attribution needs a flow
+that is BOTH (a) tracked in the host conntrack table AND (b) backed by a
+*live socket* at query time (the NetnsScanner attributes via the owning
+process's socket; a conntrack husk with no live socket is unattributable
+by design). The traps, all hit during this work:
+
+* **container → docker0 / any host-local IP** — delivered locally
+  (INPUT), so docker's `MASQUERADE` (which only fires `! -o docker0`)
+  never tracks it. Not in conntrack ⇒ the agent never sees it.
+* **container → container on the same bridge** — L2-switched, never
+  hits the netfilter forward path ⇒ not conntracked.
+* **busybox `wget https://…`** (alpine default) — no TLS support, so the
+  download never happens; the container silently falls through to its
+  fallback (`sleep`) with *no socket at all*. Use a plain-TCP generator
+  or install `ca-certificates`.
+* **`nc host port` in a reconnect loop** — each iteration is a new PID,
+  so by the time the data thread resolves the flow the socket-owning PID
+  has changed; the PID-reuse `starttime` guard (§8a rule 2) correctly
+  rejects it ⇒ `pid=0`, unattributed.
+* **detached `nc host port` with closed stdin** — busybox nc EOFs
+  immediately and exits; the container dies or the socket is gone.
+
+The recipe that works: **`sleep 3600 | nc <external-host> 22`** — the
+`sleep` keeps nc's stdin open so the single, stable-PID nc process holds
+ONE connection, and an SSH server holds the pre-auth connection for its
+LoginGraceTime (~120 s), far longer than the test. External ⇒
+masqueraded ⇒ conntracked; single long-lived process ⇒ stable socket ⇒
+attributable. Resolve the target to an IP on the host and dial the IP
+(not the name) to dodge busybox DNS flakiness and to pin the remote so
+stale husks to other round-robin IPs can't be mistaken for the flow.
+
+Two more sharp edges the runner encodes:
+
+* **`GetConnections` returns the cached `m_last`**, refreshed only on a
+  poll tick (`src/agent/ConnectionsService.cpp`). You MUST send a
+  `SetDesiredIntervalMs` cadence hint AND wait a tick before reading, or
+  you get a stale snapshot that predates your flow. The runner warms
+  *then* sleeps *then* reads.
+* **`busctl --json=short | python3 - <<'PY'` is a stdin trap**: the
+  heredoc IS python's stdin (`python3 -` reads the program from stdin),
+  so a piped JSON never reaches `sys.stdin`. Write the JSON to a temp
+  file and pass the path as `argv`.
+
+Diagnostics gotcha: the **`conntrack -L` CLI can disagree with the
+agent's `libnetfilter_conntrack` dump** on a busy host (we saw the CLI
+return nothing for docker flows the agent happily reported). Trust the
+agent's `GetConnections`, not the CLI, when deciding whether a flow is
+visible. Also note that **hammering the agent with many rapid
+restarts degrades conntrack/netns state** enough to make attribution
+flap — another reason this runner belongs in a disposable VM, one clean
+boot per run.
+
+Two portability traps the runner hit when first validated in the VM (and
+now encodes/works around):
+
+* **Container IPv4 lives under `.NetworkSettings.Networks.<net>.IPAddress`
+  on newer docker / podman-docker**, NOT the legacy top-level
+  `.NetworkSettings.IPAddress` (which is empty/absent there). The runner
+  walks the `Networks` map first, then falls back to the top-level field.
+  The devbox's older docker populated the top-level field, so this only
+  surfaced in the VM.
+* **`qiftop-agent` has a `POST_BUILD` cpack hook that regenerates BOTH
+  `.deb`s**, which needs the `qiftop` GUI binary on disk. Under Ninja's
+  parallel scheduling the hook can fire the moment the agent links —
+  before the GUI target finishes — so a fresh `cmake --build --target
+  qiftop-agent` fails with `file INSTALL cannot find …/qiftop`. Both
+  driver scripts therefore build the **`qiftop` GUI target to completion
+  FIRST**, then the agent + probe. (On an incremental tree where the GUI
+  already exists, as on the devbox, the ordering is moot — which is why
+  this only bit on the VM's clean build.)
+
+### 6.5c The Fedora SELinux VM
+
+The Vagrant harness is **multi-machine**: `ubuntu` (primary, full runner
+set) and `fedora` (opt-in, `autostart: false`). The Fedora VM exists for
+the two things the Ubuntu VM structurally cannot cover:
+
+1. **SELinux.** Ubuntu uses AppArmor with permissive-ish profiles;
+   Fedora ships SELinux **enforcing**. The agent does exactly the things
+   SELinux likes to deny on a sandboxed root service — `setns(CLONE_NEWNET)`,
+   `NETLINK_SOCK_DIAG` sockets, cross-netns `/proc/<pid>/{ns,cgroup}`
+   reads. The probe runners (in-process, no sandbox) cannot catch an
+   SELinux denial; only the deployed systemd unit can.
+2. **The real `.rpm` install path.** The Fedora path installs the agent
+   from the freshly-built `.rpm` (`dnf remove` + `install`, exercising
+   both scriptlets and `restorecon` file labels) instead of
+   `cmake --install`.
+
+Run it with `scripts/local-integration.sh --distro fedora` (defaults to
+the `systemd-dbus` runner; the Fedora VM has no k3d/k8s provisioned).
+The driver additionally `cpack -G RPM`s in the guest and exports
+`QIFTOP_AGENT_RPM_DIR` + `QIFTOP_SELINUX_AUDIT=1`, forwarded through
+`sudo --preserve-env` so the runner picks them up.
+
+`run-systemd-dbus.sh` honours those two env vars (off by default, so the
+Ubuntu path is byte-for-byte unchanged):
+
+* `QIFTOP_AGENT_RPM_DIR=<dir>` → install the agent from `<dir>/qiftop-agent-*.rpm`.
+* `QIFTOP_SELINUX_AUDIT=1` → after the attribution assertion, `ausearch
+  -m avc` for **qiftop** denials since the agent started. Under the
+  default `unconfined_service_t` domain (we ship no SELinux policy
+  module yet) there should be **zero** — so a hit means the agent
+  tripped SELinux. A clean run is the reassuring answer ("qiftop runs
+  fine under Fedora targeted policy"); a denial is the signal that a
+  policy module is needed before the agent can run *confined*. Denials
+  are fatal to the test (`exit 1`) and are also dumped on the
+  FOUND-UNATTRIBUTED failure path (where a setns denial would be the
+  smoking gun, mirroring the seccomp `RestrictNamespaces` regression in
+  §8a rule 5).
+
+SELinux enforcing is inherently a **VM-only** thing — GitHub Actions
+containers share the host kernel and can't `setenforce`, so there is no
+CI job for this; validate in the Fedora VM. The box defaults to
+`generic/fedora41` (good rsync/libvirt compat) and is overridable via
+`QIFTOP_FEDORA_BOX`. Multi-machine note: the machines are now named
+`ubuntu` / `fedora`; an old unnamed `default` VM from before this split
+can be dropped with `vagrant destroy default`.
 
 ---
 
@@ -446,6 +796,56 @@ runner user. See HACKING.md §5.5 for the test-writing conventions.
   `calledFromDBus() / message().service()` to get the caller's unique name.
 * Backend `setPollIntervalMs(int ms)` semantics: `ms <= 0` means "pause the
   timer, emit nothing"; positive values set the interval and (re)start.
+* **Per-column visibility / order / width is persisted via
+  `QHeaderView::saveState()` / `restoreState()`** under the
+  `ui/interfaces/headerState` and `ui/connections/headerState` keys.
+  The opaque blob already covers visibility + visual order + widths +
+  sort indicator — don't add parallel per-column-name settings keys.
+  The user-facing toggle UI lives in the header right-click menu
+  (`MainWindow::showNetHeaderMenu` / `showConnHeaderMenu`) and the menu
+  refuses to hide the last visible column. `applySettingsToUi()` still
+  force-toggles `RxMax` / `TxMax` based on the throughput-gauge
+  setting — those two columns are gauge-dependent, not user-controlled.
+* **Connections view is a QTreeView with a two-proxy chain**:
+  `ConnectionModel` → `ConnectionFilterProxy` → `ConnectionGroupProxy`
+  → `QTreeView`. Flat mode is the default and is a strict pass-through
+  in `ConnectionGroupProxy` (top-level rows map 1:1 to source rows; no
+  parents, no children, `internalId == quintptr(-1)`); the view also
+  flips `setRootIsDecorated(false)` + `setIndentation(0)` + disables
+  expand-on-double-click so RowGaugeDelegate / ConnectionFlowDelegate
+  paint at the same coordinates as the v0.1 QTableView. The grouped
+  modes (`ByInterface` / `ByContainer` / `ByProcess`) synthesize a
+  one-level tree where group rows aggregate per-column SUMs via
+  `aggregateData()` and child rows forward to source via
+  `mapToSource()`. **When mapping back to the source model, always
+  walk both proxies** (`m_connGroupProxy->mapToSource(view)` then
+  `m_connProxy->mapToSource(filter)`) and skip group rows via
+  `m_connGroupProxy->isGroupIndex(view)`. Adding a new grouping mode
+  = extend the `Settings::ConnectionViewMode` enum + `groupKeyFor()`
+  + `groupLabelFor()`; the rest is automatic.
+* **Process / Container columns are capability-gated, not always-on.**
+  `Column::Process` and `Column::Container` are hidden by default; the
+  Settings dialog's "Process & Container Attribution" sub-section
+  (Display tab) advertises three toggles — `Settings::showProcessColumn`
+  / `showContainerColumn` / `showContainerChainInTooltip` — each
+  enabled only when the agent advertises the matching wire token
+  (`process-attribution-wire` / `container-attribution-wire` /
+  `container-chain-wire`). The values persist regardless so they take
+  effect when the user later runs against an attribution-capable
+  agent. `applySettingsToUi()` is the single point where the
+  user-pref AND the wire-token are AND-ed together to (un)hide each
+  column — never `setColumnHidden()` either column outside that
+  helper. The header right-click menu's Process / Container entries
+  are routed through `Settings::setShowProcessColumn` /
+  `setShowContainerColumn` (the menu interceptor at
+  `MainWindow::showConnHeaderMenu`), so toggling them updates the
+  persisted setting AND triggers `applySettingsToUi()` — the AND-gate
+  still applies. Without the wire token a header-menu toggle persists
+  the user's preference but the column remains hidden until a
+  capable agent is detected; the checkbox in the menu reflects the
+  ACTUAL visibility (it stays unchecked), not the persisted setting.
+  Pinned end-to-end by
+  `test_mainwindow_smoke::processColumnHiddenWithoutWireCapability`.
 * **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
   uses an **allowlist** (`sessionEnv()`) when forwarding environment
   variables into the privileged child, not a denylist. The root child runs
@@ -493,8 +893,9 @@ runner user. See HACKING.md §5.5 for the test-writing conventions.
 
 ## 8. Release / versioning
 
-* `project(... VERSION 0.1)` in `CMakeLists.txt` is the single source of
-  truth. Both .debs and the `CPACK_PACKAGE_VERSION` derive from it.
+* `project(... VERSION 0.2)` in `CMakeLists.txt` is the single source of
+  truth. Both .debs, `CPACK_PACKAGE_VERSION`, and the binaries' runtime
+  `--version` (via the `QIFTOP_VERSION` compile definition) derive from it.
 * The DBus interface name (`org.qiftop.NetworkAgent1`) carries the
   contract version. **If you make a breaking change to a DTO or to a
   method signature, bump to `NetworkAgent2` and keep the old one alive
@@ -502,6 +903,149 @@ runner user. See HACKING.md §5.5 for the test-writing conventions.
 * User-facing config (`/etc/qiftop/agent.conf`) is a conffile — additions
   are fine, removals/renames are not. Always keep loader code tolerant
   of unknown keys.
+* **Debug symbols: pre-release vs final.** The release workflow keys off
+  the tag shape (a `-` suffix like `v0.2-rc1` ⇒ pre-release). Pre-release
+  builds are `RelWithDebInfo` + `CPACK_STRIP_FILES=OFF` so user crash
+  backtraces are debuggable; final builds are `Release` + stripped.
+  Symbols are kept **inline** in the main package (no separate
+  `-dbgsym`/`-debuginfo` packages) for BOTH formats: the `.deb` is simply
+  left unstripped, and the `.rpm` matches via a `CPACK_STRIP_FILES`-gated
+  block in `CMakeLists.txt` that sets `debug_package %{nil}` +
+  `__strip /bin/true` to neutralise rpmbuild's brp-strip / debuginfo
+  split. Both jobs must pass `-DCPACK_STRIP_FILES=${strip_files}`.
+* **No source packages.** CPack emits binary `.deb`/`.rpm` only — there
+  is no Debian source package (`.dsc`/`Sources` index) or SRPM, so
+  `apt source qiftop` / `dnf download --source qiftop` do not work. The
+  source is the git repo (clean `cmake` build). Adding `deb-src`/SRPM
+  would need real Debian packaging (`debian/`) or an SRPM repo and is
+  low-ROI for a from-source-buildable project.
+
+### Package distribution (apt / dnf repos)
+
+* Signed **apt** + **dnf** repos are hosted on **GitHub Pages** at
+  `https://thecleaners.github.io/qiftop/`. GitHub Packages (ghcr)
+  cannot serve apt/dnf, and the `TheCleaners` org has Pages creation
+  behind an org setting — it must stay enabled for deploys to work.
+* `.github/workflows/pages.yml` (triggers: `workflow_dispatch` +
+  `release: published`) downloads every release's `.deb`/`.rpm` assets
+  and runs `dist/repo/build-pages.sh` (`apt-ftparchive` + `createrepo_c`),
+  then deploys via `actions/deploy-pages`. The package files live as
+  **release assets, never in git** — do not commit `.deb`/`.rpm` blobs
+  (keeps clones lean, same reason we purged the demo gif).
+* **GITHUB_TOKEN event gotcha:** a release created by the Release
+  workflow's token does NOT fire `release: published` (recursion
+  guard), so the first publish after a tag-driven release needs a
+  manual `gh workflow run pages.yml`. Manual UI/PAT releases trigger it
+  automatically.
+* **Signing:** repos are GPG-signed by the project key
+  `7AC658ABFADD1AAF6E0EDA6F6DD33D47032BD42D` ("qiftop package
+  signing"). The private half lives in the `GPG_PRIVATE_KEY` Actions
+  secret (passphraseless); the public half is committed at
+  `dist/repo/qiftop-archive-keyring.asc` and published at the Pages
+  root. The dnf repo uses the metadata-signature model
+  (`repo_gpgcheck=1`, `gpgcheck=0`) — the signed `repomd.xml`
+  authenticates package checksums, the exact analog of apt's signed
+  `Release`. Per-package `rpm --addsign` is a deliberate post-stable
+  TODO. If `GPG_PRIVATE_KEY` is absent the workflow publishes unsigned
+  (forks).
+
+---
+
+## 8a. Lifetime & races in process / container attribution
+
+Process and container attribution (`ProcessResolver` and its
+implementations under `src/backend/linux/`) chase information that the
+kernel can invalidate at any moment: processes exit, fds close, cgroups
+get removed, network namespaces get destroyed. Every resolver MUST treat
+those as the normal case and degrade silently rather than crash, spam
+the log, or — worst — return *wrong* attribution.
+
+Concrete rules every resolver must follow:
+
+1. **All `/proc/<pid>/*` reads tolerate ENOENT / EACCES.** Any open or
+   readlink that races a vanishing process returns `nullopt`, not an
+   error. No `qWarning` on these — they happen every second on a busy
+   host and would drown the log. (See SockDiagResolver's
+   `refreshProcWalk`: `opendir`/`readlink` failures just `continue`.)
+
+2. **PID reuse is guarded by starttime.** PIDs wrap on busy hosts (and
+   on hosts with `kernel.pid_max=32768` they wrap fast). Any cache or
+   late-bound lookup that maps `pid → info` MUST snapshot
+   `/proc/<pid>/stat` field 22 (starttime in jiffies-since-boot) at
+   enrollment time and re-check on use. A mismatch means the kernel has
+   handed that pid to a different process; the cached attribution is
+   stale and MUST be discarded, not served. See
+   `backend/linux/ProcSnapshot.h::pidStartTime` and its use in
+   `SockDiagResolver::resolveFlow` + `CgroupClassifier::resolveContainerForPid`.
+
+3. **Cached "info is unknown" is fine.** When the underlying file
+   disappears, caching `nullopt` keyed by (pid, starttime) for the TTL
+   is correct: short-lived processes don't deserve repeated /proc
+   churn, and the entry will age out naturally.
+
+4. **Container names are display strings, not handles.** A
+   `ContainerInfo{runtime, id, name}` returned to the GUI may refer to
+   a cgroup that has since been deleted (container stopped). That's
+   fine — we display the snapshot we took. Never re-resolve "live" from
+   a cached id without going back through the resolver chain (which
+   re-snapshots starttime + cgroup path).
+
+5. **Namespace operations (step 4 — NetnsScanner) must be RAII-fenced.**
+   The pattern, when implemented:
+     - Open `/proc/<pid>/ns/net` with `O_RDONLY | O_CLOEXEC`. ENOENT →
+       skip this pid silently.
+     - `fstat()` the fd; the `st_ino` uniquely identifies the netns.
+       Dedupe scans by inode so multiple pids in the same container
+       cost one dump.
+     - Capture the worker thread's *original* netns fd FIRST. Wrap the
+       `setns()` + dump + `setns(back)` sequence in a scope guard whose
+       destructor restores the original netns. **If the restore
+       `setns()` ever fails, `qFatal`** — we're stuck running future
+       sock_diag dumps in the wrong netns and would attribute every
+       host flow to the wrong container.
+     - The dump itself running in a since-destroyed netns returns
+       ENETUNREACH or empty results; treat as "no flows", not an error.
+     - All of this happens on the agent's worker thread so the main
+       thread is never affected.
+     - **systemd sandbox gotcha:** `setns(CLONE_NEWNET)` is silently
+       blocked by `RestrictNamespaces=yes` (it seccomp-denies *all*
+       namespace ops). The unit MUST use `RestrictNamespaces=net`
+       (allow only the net type) or every container-side flow
+       attributes as host with no error in the log — the scanner
+       enters the netns loop, `setns()` returns EPERM, the per-netns
+       socket dump is skipped, and the merged map stays empty. This
+       bit us live (a `dockurr/tor` container showed no grouping);
+       the symptom is `netns-scan` advertised + "refreshed across N
+       netns" logged, yet zero container attribution. It also needs
+       `CAP_SYS_ADMIN` (granted) — both are required.
+
+6. **No `int`-returning syscalls without checking errno.** Anything
+   that can fail (socket, bind, sendto, recv, opendir, setns,
+   readlink, openat) must either bail out cleanly or log via
+   `qCWarning(lcVerbose)` exactly ONCE per cycle — not per failure.
+
+7. **Resolver methods must be safe to call from the data-emission
+   loop.** That loop has a per-tick budget; resolvers are NOT allowed
+   to do unbounded I/O or block on external services. The `kCacheTtlMs`
+   constants in each resolver are the contract: refresh costs amortise
+   to roughly once per TTL per pid, never per flow.
+
+8. **Bounded caches, hard cap, clear-on-overflow.** Every per-pid cache
+   has an upper bound (e.g. `CgroupClassifier::kCacheMaxItems = 8192`).
+   On overflow, full-clear rather than LRU-evict — at this scale the
+   complexity isn't justified and the next tick repopulates the hot
+   set. **Never** let the cache grow unbounded; a host with 100 k
+   short-lived workers per minute would OOM the agent otherwise.
+
+Unit coverage of the race surface lives in `tests/test_proc_snapshot.cpp`
+(parser robustness + live self-pid stability) and the existing resolver
+unit tests; for end-to-end "actually races a dying process" coverage we
+rely on the integration test running under `dbus-run-session`.
+
+When adding a new resolver: re-read this section, then ask yourself
+"what happens if every /proc/<pid>/* file I touch returns ENOENT?" If
+the answer is anything other than "the resolver returns nullopt and the
+caller carries on", the design is wrong.
 
 ---
 
@@ -519,7 +1063,7 @@ When you make a non-trivial change to the codebase:
 * Update the relevant section above so it still describes how the code
   actually works. Same commit as the code change.
 * If the change affects a dev-loop recipe (build, run, debug, package,
-  test), update [HACKING.md](HACKING.md) too.
+  test), update [docs/HACKING.md](docs/HACKING.md) too.
 * Don't add a dated entry here — the commit message and `git log` are
   the canonical record.
 

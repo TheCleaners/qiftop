@@ -6,6 +6,9 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 
+#include <limits>
+
+#include "backend/ProcessDetails.h"
 #include "dbus/Types.h"
 #include "util/Logging.h"
 
@@ -68,6 +71,39 @@ void DBusConnectionMonitor::sendDesiredIntervalAsync(int ms)
                                                QStringLiteral("SetDesiredIntervalMs"));
     call << QVariant::fromValue<quint32>(static_cast<quint32>(ms));
     conn.asyncCall(call);
+}
+
+void DBusConnectionMonitor::requestProcessDetails(qint32 pid)
+{
+    if (pid <= 0) return;
+    auto conn = bus(m_useSessionBus);
+    auto call = QDBusMessage::createMethodCall(QString::fromLatin1(kService),
+                                               QString::fromLatin1(kPath),
+                                               QString::fromLatin1(kIface),
+                                               QStringLiteral("GetProcessDetails"));
+    call << QVariant::fromValue<quint32>(static_cast<quint32>(pid));
+    auto *watcher = new QDBusPendingCallWatcher(conn.asyncCall(call), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this](QDBusPendingCallWatcher *w) {
+                w->deleteLater();
+                QDBusPendingReply<qiftop::dbus::ProcessDetailsDto> reply = *w;
+                if (reply.isError()) {
+                    qCInfo(lcVerbose) << "GetProcessDetails failed:"
+                                      << reply.error().message();
+                    return;
+                }
+                const auto d = reply.value();
+                backend::ProcessDetails out;
+                out.pid              = (d.pid <= quint32(std::numeric_limits<qint32>::max()))
+                                           ? qint32(d.pid) : 0;
+                out.uid              = d.uid;
+                out.comm             = d.comm;
+                out.exe              = d.exe;
+                out.cmdline          = d.cmdline;
+                out.cwd              = d.cwd;
+                out.startTimeJiffies = d.startTimeJiffies;
+                emit processDetailsReady(out);
+            });
 }
 
 void DBusConnectionMonitor::stop()

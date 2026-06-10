@@ -5,6 +5,7 @@
 
 #include "IdleManager.h"
 #include "backend/NetworkMonitor.h"
+#include "backend/ProcessResolver.h"
 
 namespace qiftop::agent {
 
@@ -14,7 +15,7 @@ namespace {
 // and gate optional feature use. Breaking wire changes still require a
 // NetworkAgent2 interface (AGENTS.md §8); this is the *additive* contract
 // version.
-constexpr auto kAgentVersion = "0.3";
+constexpr auto kAgentVersion = "0.5";
 } // namespace
 
 InterfacesService::InterfacesService(NetworkMonitor *monitor, QObject *parent)
@@ -35,6 +36,11 @@ void InterfacesService::setIdleManager(IdleManager *idle)
     }
 }
 
+void InterfacesService::setProcessResolver(backend::ProcessResolver *resolver)
+{
+    m_resolver = resolver;
+}
+
 QString InterfacesService::version() const
 {
     return QString::fromLatin1(kAgentVersion);
@@ -46,7 +52,7 @@ QStringList InterfacesService::capabilities() const
     // optional behaviour lands; never remove or rename. Clients gate
     // behaviour on token presence (defaulting to "off" when absent so
     // older agents still work).
-    return {
+    QStringList base = {
         QStringLiteral("cadence-hints"),     // SetDesiredIntervalMs supported
         QStringLiteral("cadence-signal"),    // CadenceChanged signal emitted
         QStringLiteral("name-owner-cleanup"),// hints dropped on peer disconnect
@@ -59,7 +65,39 @@ QStringList InterfacesService::capabilities() const
         QStringLiteral("oper-state"),        // InterfaceStatsDto carries IF_OPER_* per RFC 2863
         QStringLiteral("link-errors"),       // InterfaceStatsDto carries rx/tx errors + drops
         QStringLiteral("tcp-state"),         // ConnectionDto carries conntrack TCP state (TcpState enum)
+        QStringLiteral("on-demand-process-details"), // Connections.GetProcessDetails(pid) RPC available
     };
+    if (m_resolver) {
+        // Merge resolver tokens (process-attribution, container-attribution,
+        // netns-scan, ...) — append-only, never reordered, dedup against the
+        // base list as a safety net.
+        const auto resolverCaps = m_resolver->capabilities();
+        for (const auto &tok : resolverCaps) {
+            if (!base.contains(tok)) base.append(tok);
+        }
+        // v0.4 wire-level mirror of the resolver attribution capabilities:
+        // clients gate the new ConnectionDto fields (pid/uid/comm + container
+        // bulk + chain) on these tokens rather than poking at fields blindly.
+        // Only advertise when the underlying resolver token is present, so
+        // we never lie about data we don't actually populate.
+        if (resolverCaps.contains(QStringLiteral("process-attribution"))
+            && !base.contains(QStringLiteral("process-attribution-wire"))) {
+            base.append(QStringLiteral("process-attribution-wire"));
+        }
+        if (resolverCaps.contains(QStringLiteral("container-attribution"))
+            && !base.contains(QStringLiteral("container-attribution-wire"))) {
+            base.append(QStringLiteral("container-attribution-wire"));
+        }
+        // AGENTS.md §4: chain-wire is a strict superset of leaf container
+        // info, so it requires BOTH resolver tokens. Keep this in sync with
+        // Application::start()'s wantChain computation.
+        if (resolverCaps.contains(QStringLiteral("container-attribution"))
+            && resolverCaps.contains(QStringLiteral("container-chain"))
+            && !base.contains(QStringLiteral("container-chain-wire"))) {
+            base.append(QStringLiteral("container-chain-wire"));
+        }
+    }
+    return base;
 }
 
 dbus::InterfaceStatsDtoList InterfacesService::GetInterfaces()
