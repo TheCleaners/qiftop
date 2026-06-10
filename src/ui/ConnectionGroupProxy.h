@@ -164,6 +164,23 @@ private:
     // instead of snapping back to insertion order.
     void applyCurrentSort();
 
+    // Sorts `groups` (and each group's srcRows) by the current
+    // m_sortColumn / m_sortOrder. Shared by applyCurrentSort() and the
+    // dry-run inside resortGroupsPreservingIndexes().
+    void sortGroups(QList<Group> &groups) const;
+
+    // Re-applies the current sort with the FULL Qt layout-change
+    // protocol (layoutAboutToBeChanged → changePersistentIndexList →
+    // layoutChanged) so outstanding QPersistentModelIndexes — the
+    // view's expansion state, selection, current index — follow their
+    // groups instead of keeping stale (row, internalId) coordinates.
+    // No-op (no signals) when the order is already correct. Returns
+    // true if a re-order happened. Must be called after any
+    // insert/regroup/remove that can change group order; rebuild()
+    // keeps using the signal-less applyCurrentSort() because it runs
+    // inside a model reset.
+    bool resortGroupsPreservingIndexes();
+
     // Rebuilds m_srcIndex from m_groups in one O(N) pass. Called after
     // every STRUCTURAL change (rebuild / sort / incremental insert /
     // incremental remove) — i.e. O(1) times per polling tick — so that
@@ -185,6 +202,12 @@ private:
     QHash<int, QPair<int, int>> m_srcIndex;
     int m_sortColumn = -1;     // -1 = no sort applied yet
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
+    // True while the Flat branch of sort() drives m_src->sort(): the
+    // manual layout signals + persistent-index remap in sort() are the
+    // single source of truth there, so the source-layout forwarding
+    // lambdas must NOT also re-emit (double layoutAboutToBeChanged /
+    // layoutChanged pairs corrupt the view's state save/restore).
+    bool m_inFlatSort = false;
     // Snapshot of the pre-removal source-row span captured in
     // onSourceRowsAboutToBeRemoved so onSourceRowsRemoved can map
     // them back to (group, childRow) after the source has shifted.

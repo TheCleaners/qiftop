@@ -28,6 +28,18 @@ Connection connectionAt(QAbstractItemModel *src, int row)
     return idx.data(ConnectionModel::ConnectionRole).value<Connection>();
 }
 
+// PID-reuse guard for the on-demand process-details cache: a cached
+// entry is stale when its comm no longer matches the live flow's comm
+// (the kernel handed the pid to a different process). Both comms are
+// kernel-truncated the same way, so equality is meaningful. An empty
+// comm on either side can't be verified — trust the cache then rather
+// than discarding valid details.
+bool detailsMatchFlow(const qiftop::backend::ProcessDetails &d, const Connection &c)
+{
+    return c.process.comm.isEmpty() || d.comm.isEmpty()
+           || d.comm == c.process.comm;
+}
+
 } // namespace
 
 ConnectionGroupProxy::ConnectionGroupProxy(QObject *parent)
@@ -54,14 +66,15 @@ void ConnectionGroupProxy::setSourceModel(QAbstractItemModel *src)
         connect(m_src, &QAbstractItemModel::layoutAboutToBeChanged, this,
                 [this](const QList<QPersistentModelIndex> &parents,
                        QAbstractItemModel::LayoutChangeHint hint) {
-                    if (m_mode == ViewMode::Flat)
+                    if (m_mode == ViewMode::Flat && !m_inFlatSort)
                         emit layoutAboutToBeChanged(parents, hint);
                 });
         connect(m_src, &QAbstractItemModel::layoutChanged, this,
                 [this](const QList<QPersistentModelIndex> &parents,
                        QAbstractItemModel::LayoutChangeHint hint) {
                     if (m_mode == ViewMode::Flat) {
-                        emit layoutChanged(parents, hint);
+                        if (!m_inFlatSort)
+                            emit layoutChanged(parents, hint);
                     } else {
                         onSourceReset();
                     }
@@ -162,6 +175,10 @@ void ConnectionGroupProxy::onSourceRowsInserted(const QModelIndex &, int first, 
             beginInsertRows(parent, childRow, childRow);
             m_groups[existing].srcRows.append(srcRow);
             endInsertRows();
+            // The group header's aggregates (count, summed rates/bytes)
+            // changed — repaint it (M4).
+            emit dataChanged(index(existing, 0),
+                             index(existing, columnCount() - 1));
         } else {
             // New group at the end of m_groups.
             const int groupRow = m_groups.size();
@@ -175,12 +192,14 @@ void ConnectionGroupProxy::onSourceRowsInserted(const QModelIndex &, int first, 
         }
     }
 
-    // 3. Re-apply current sort. applyCurrentSort emits no signals so
-    //    this re-orders in place; the view will pick up the new order
-    //    on its next paint. Skipped when no sort has been requested
-    //    yet. Then rebuild the O(1) reverse index for the new layout.
-    applyCurrentSort();
+    // 3. Refresh the O(1) reverse index for the new layout (srcRows
+    //    were shifted in step 1 / appended in step 2), then re-apply
+    //    the current sort WITH the full layout-change protocol so the
+    //    view's persistent indexes (expansion / selection / current)
+    //    follow their groups when the new flow re-orders them. The
+    //    helper is a no-op (no signals) when the order is unchanged.
     refreshSrcIndex();
+    resortGroupsPreservingIndexes();
 }
 
 void ConnectionGroupProxy::onSourceRowsAboutToBeRemoved(const QModelIndex &parent, int first, int last)
@@ -218,8 +237,11 @@ void ConnectionGroupProxy::onSourceRowsRemoved(const QModelIndex &, int first, i
 
     // 1. For each removed source row, locate (group, childRow) and
     //    emit a begin/endRemoveRows pair. Track which groups became
-    //    empty so we can remove them from the top level after.
+    //    empty so we can remove them from the top level after, and
+    //    which survived with fewer children so their header aggregates
+    //    can be repainted (M4).
     QList<int> emptiedGroups;
+    QSet<QString> touchedKeys;
     for (int srcRow = first; srcRow <= last; ++srcRow) {
         for (int gi = 0; gi < m_groups.size(); ++gi) {
             const int childRow = static_cast<int>(
@@ -229,8 +251,12 @@ void ConnectionGroupProxy::onSourceRowsRemoved(const QModelIndex &, int first, i
             beginRemoveRows(parent, childRow, childRow);
             m_groups[gi].srcRows.removeAt(childRow);
             endRemoveRows();
-            if (m_groups[gi].srcRows.isEmpty() && !emptiedGroups.contains(gi))
-                emptiedGroups.append(gi);
+            if (m_groups[gi].srcRows.isEmpty()) {
+                if (!emptiedGroups.contains(gi))
+                    emptiedGroups.append(gi);
+            } else {
+                touchedKeys.insert(m_groups[gi].key);
+            }
             break;  // a srcRow lives in exactly one group
         }
     }
@@ -254,6 +280,18 @@ void ConnectionGroupProxy::onSourceRowsRemoved(const QModelIndex &, int first, i
     // The childRow positions within touched groups and the group
     // indices after any pruning have shifted — rebuild the O(1) index.
     refreshSrcIndex();
+
+    // Repaint headers of surviving groups that lost children (count +
+    // aggregates changed), then re-sort with full layout signalling in
+    // case the changed aggregates re-order the groups (no-op when not).
+    if (!touchedKeys.isEmpty()) {
+        const int lastCol = columnCount() - 1;
+        for (int gi = 0; gi < m_groups.size(); ++gi) {
+            if (touchedKeys.contains(m_groups[gi].key))
+                emit dataChanged(index(gi, 0), index(gi, lastCol));
+        }
+    }
+    resortGroupsPreservingIndexes();
 
     m_pendingRemovalFirst = -1;
     m_pendingRemovalLast  = -1;
@@ -280,8 +318,15 @@ void ConnectionGroupProxy::onSourceDataChanged(const QModelIndex &topLeft,
         // fine-grained insert/remove signals; the previous wholesale
         // onSourceReset() collapsed every expanded group in the view
         // every few seconds on a busy host (user-reported regression).
+        bool structuralChange = false;
         for (int row = topLeft.row(); row <= bottomRight.row(); ++row)
-            regroupSourceRow(row);
+            structuralChange = regroupSourceRow(row) || structuralChange;
+        // A structural move changes two groups' aggregates, which can
+        // re-order the groups under the current sort — re-apply it with
+        // full layout signalling so persistent indexes follow (no-op
+        // when the order is unchanged).
+        if (structuralChange)
+            resortGroupsPreservingIndexes();
     }
 
     forwardSourceDataChanged(topLeft, bottomRight, roles);
@@ -318,6 +363,10 @@ bool ConnectionGroupProxy::regroupSourceRow(int srcRow)
             beginRemoveRows({}, curGi, curGi);
             m_groups.removeAt(curGi);
             endRemoveRows();
+        } else {
+            // Surviving old group lost a child — its header aggregates
+            // (count, summed rates/bytes) changed (M4).
+            emit dataChanged(index(curGi, 0), index(curGi, columnCount() - 1));
         }
     }
 
@@ -332,6 +381,8 @@ bool ConnectionGroupProxy::regroupSourceRow(int srcRow)
         beginInsertRows(createIndex(targetGi, 0, kTopLevelId), childRow, childRow);
         m_groups[targetGi].srcRows.append(srcRow);
         endInsertRows();
+        // Existing target group gained a child — repaint its header (M4).
+        emit dataChanged(index(targetGi, 0), index(targetGi, columnCount() - 1));
     } else {
         const int groupRow = m_groups.size();
         beginInsertRows({}, groupRow, groupRow);
@@ -379,7 +430,11 @@ void ConnectionGroupProxy::applyCurrentSort()
 {
     if (m_sortColumn < 0 || m_mode == ViewMode::Flat || m_groups.isEmpty())
         return;
+    sortGroups(m_groups);
+}
 
+void ConnectionGroupProxy::sortGroups(QList<Group> &groups) const
+{
     const auto cmpVariant = [order = m_sortOrder](const QVariant &a, const QVariant &b) {
         // QVariant::compare returns QPartialOrdering. Use it so numeric and
         // string sort roles compare correctly without ambiguous toString.
@@ -391,7 +446,7 @@ void ConnectionGroupProxy::applyCurrentSort()
     };
 
     // Sort each group's children by the source SortRole for the sort column.
-    for (Group &g : m_groups) {
+    for (Group &g : groups) {
         std::sort(g.srcRows.begin(), g.srcRows.end(),
                   [&](int lhs, int rhs) {
                       const QVariant a = m_src->index(lhs, m_sortColumn)
@@ -403,7 +458,7 @@ void ConnectionGroupProxy::applyCurrentSort()
     }
 
     // Sort groups by their aggregated SortRole value.
-    std::sort(m_groups.begin(), m_groups.end(),
+    std::sort(groups.begin(), groups.end(),
               [&](const Group &lhs, const Group &rhs) {
                   const QVariant a = aggregateData(lhs, m_sortColumn,
                                                    ConnectionModel::SortRole);
@@ -413,54 +468,37 @@ void ConnectionGroupProxy::applyCurrentSort()
               });
 }
 
-void ConnectionGroupProxy::sort(int column, Qt::SortOrder order)
+bool ConnectionGroupProxy::resortGroupsPreservingIndexes()
 {
-    // Remember even when m_src isn't ready yet — applyCurrentSort()
-    // will pick it up the first time rebuild() runs.
-    m_sortColumn = column;
-    m_sortOrder  = order;
+    if (m_sortColumn < 0 || m_mode == ViewMode::Flat || m_groups.isEmpty()
+        || !m_src)
+        return false;
 
-    if (!m_src) return;
-
-    if (m_mode == ViewMode::Flat) {
-        // Forward to the source (QSortFilterProxyModel handles the real
-        // work + emits layoutChanged for its own persistents). We must
-        // additionally remap OUR persistent indexes — the view holds
-        // proxies into us, not into source.
-        emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
-
-        // Snapshot identities via source's QPersistentModelIndex; these
-        // follow the source's row remap automatically.
-        const auto oldList = persistentIndexList();
-        QList<QPersistentModelIndex> srcPersistents;
-        srcPersistents.reserve(oldList.size());
-        for (const QModelIndex &p : oldList)
-            srcPersistents.append(QPersistentModelIndex(m_src->index(p.row(), p.column())));
-
-        m_src->sort(column, order);
-
-        QModelIndexList newList;
-        newList.reserve(oldList.size());
-        for (int i = 0; i < oldList.size(); ++i) {
-            const QPersistentModelIndex &sp = srcPersistents[i];
-            newList.append(sp.isValid()
-                               ? createIndex(sp.row(), sp.column(), kTopLevelId)
-                               : QModelIndex{});
+    // Dry-run the sort on a copy so the (expensive for views) layout-
+    // change protocol is skipped entirely when the order is already
+    // correct — the common case on a quiet tick.
+    QList<Group> sorted = m_groups;
+    sortGroups(sorted);
+    bool changed = false;
+    for (int i = 0; i < sorted.size(); ++i) {
+        if (sorted[i].key != m_groups[i].key
+            || sorted[i].srcRows != m_groups[i].srcRows) {
+            changed = true;
+            break;
         }
-        changePersistentIndexList(oldList, newList);
-
-        emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
-        return;
     }
+    if (!changed)
+        return false;
 
-    // Grouped: rearrange m_groups + each group's srcRows, remap
-    // persistent indexes by (groupKey, sourceRow) identity so selection
-    // and tree expansion state survive sort.
+    // Full Qt model contract: announce the layout change, snapshot
+    // every outstanding persistent index by (groupKey, sourceRow)
+    // identity, install the new order, remap, announce completion.
+    // Without this, QTreeView expansion / selection / current keep
+    // stale (row, internalId=groupIndex) coordinates and jump to
+    // whichever group now occupies the old row.
     emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
 
     const auto oldList = persistentIndexList();
-    // identity[i] = pair(groupKey, sourceRow); sourceRow == -1 means
-    // the persistent points at a group row itself.
     struct Identity { QString key; int srcRow; int col; };
     QList<Identity> identities;
     identities.reserve(oldList.size());
@@ -480,7 +518,7 @@ void ConnectionGroupProxy::sort(int column, Qt::SortOrder order)
         identities.append(std::move(id));
     }
 
-    applyCurrentSort();
+    m_groups = std::move(sorted);
     // Rebuild the O(1) reverse index for the post-sort layout; the
     // persistent-index remap below then uses it instead of an O(N)
     // indexOf per persistent.
@@ -511,6 +549,59 @@ void ConnectionGroupProxy::sort(int column, Qt::SortOrder order)
     changePersistentIndexList(oldList, newList);
 
     emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
+    return true;
+}
+
+void ConnectionGroupProxy::sort(int column, Qt::SortOrder order)
+{
+    // Remember even when m_src isn't ready yet — applyCurrentSort()
+    // will pick it up the first time rebuild() runs.
+    m_sortColumn = column;
+    m_sortOrder  = order;
+
+    if (!m_src) return;
+
+    if (m_mode == ViewMode::Flat) {
+        // Forward to the source (QSortFilterProxyModel handles the real
+        // work + emits layoutChanged for its own persistents). We must
+        // additionally remap OUR persistent indexes — the view holds
+        // proxies into us, not into source. The source's own layout
+        // signals are suppressed while we drive the sort (m_inFlatSort)
+        // so the view sees exactly ONE layout-change pair, not a nested
+        // double emission.
+        emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
+
+        // Snapshot identities via source's QPersistentModelIndex; these
+        // follow the source's row remap automatically.
+        const auto oldList = persistentIndexList();
+        QList<QPersistentModelIndex> srcPersistents;
+        srcPersistents.reserve(oldList.size());
+        for (const QModelIndex &p : oldList)
+            srcPersistents.append(QPersistentModelIndex(m_src->index(p.row(), p.column())));
+
+        m_inFlatSort = true;
+        m_src->sort(column, order);
+        m_inFlatSort = false;
+
+        QModelIndexList newList;
+        newList.reserve(oldList.size());
+        for (int i = 0; i < oldList.size(); ++i) {
+            const QPersistentModelIndex &sp = srcPersistents[i];
+            newList.append(sp.isValid()
+                               ? createIndex(sp.row(), sp.column(), kTopLevelId)
+                               : QModelIndex{});
+        }
+        changePersistentIndexList(oldList, newList);
+
+        emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
+        return;
+    }
+
+    // Grouped: rearrange m_groups + each group's srcRows, remapping
+    // persistent indexes by (groupKey, sourceRow) identity so selection
+    // and tree expansion state survive sort. No-op when the order is
+    // already correct.
+    resortGroupsPreservingIndexes();
 }
 
 QString ConnectionGroupProxy::groupKeyFor(int srcRow) const
@@ -676,8 +767,13 @@ void ConnectionGroupProxy::refreshGroupTooltips()
 {
     if (m_mode == ViewMode::Flat || m_groups.isEmpty()) return;
     const int lastCol = columnCount() - 1;
+    // Freshly warmed on-demand details feed the inline cmdline chip and
+    // the plain-text Flow display, not just the tooltip — refresh all
+    // three roles so the view repaints immediately (M5).
     emit dataChanged(index(0, 0), index(m_groups.size() - 1, lastCol),
-                     {Qt::ToolTipRole});
+                     {Qt::DisplayRole,
+                      static_cast<int>(ConnectionModel::GroupChipsRole),
+                      Qt::ToolTipRole});
 }
 
 QVariantList ConnectionGroupProxy::groupChips(const Group &g) const
@@ -716,9 +812,11 @@ QVariantList ConnectionGroupProxy::groupChips(const Group &g) const
                               : QStringLiteral("%1 (uid %2)").arg(user).arg(c.process.uid),
                           "user");
             // On-demand cmdline (elided) once the RPC has answered.
+            // Skip stale entries left behind by PID reuse (M3).
             if (m_details) {
                 if (const auto it = m_details->constFind(c.process.pid);
                     it != m_details->constEnd() && it->valid()
+                    && detailsMatchFlow(*it, c)
                     && !it->cmdline.isEmpty()) {
                     QString cmd = it->cmdline;
                     if (cmd.size() > 60) cmd = cmd.left(57) + QStringLiteral("…");
@@ -769,12 +867,19 @@ QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
     const Connection c = m_src->index(g.srcRows.first(), 0)
                              .data(ConnectionModel::ConnectionRole)
                              .value<Connection>();
+    // Tooltip injection hardening (M2): Qt auto-detects rich text in
+    // tooltips (Qt::mightBeRichText), and comm / container names /
+    // cmdline etc. are attacker-controlled (prctl(PR_SET_NAME), image
+    // labels...). Escape every dynamic field and render the whole
+    // tooltip as DELIBERATE rich text (<qt> + <br> line breaks) so the
+    // escaping is interpreted instead of shown literally.
+    const auto esc = [](const QString &s) { return s.toHtmlEscaped(); };
     QStringList lines;
     switch (m_mode) {
     case ViewMode::ByProcess:
         if (c.process.pid > 0) {
             if (!c.process.comm.isEmpty())
-                lines << QStringLiteral("Process: %1").arg(c.process.comm);
+                lines << QStringLiteral("Process: %1").arg(esc(c.process.comm));
             lines << QStringLiteral("PID: %1").arg(c.process.pid);
             // Host-only uid→name resolution (see groupChips): a
             // container's uid is meaningless against the host passwd db.
@@ -786,19 +891,22 @@ QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
             lines << (user.isEmpty()
                           ? QStringLiteral("User: uid %1").arg(c.process.uid)
                           : QStringLiteral("User: %1 (uid %2)")
-                                .arg(user).arg(c.process.uid));
+                                .arg(esc(user)).arg(c.process.uid));
             // On-demand extended fields, if the agent has answered for
             // this pid (exe / cmdline / cwd). Absent until the RPC
             // returns — the tooltip degrades to the wire fields above.
+            // A cached entry whose comm mismatches the live flow is a
+            // PID-reuse leftover and is ignored the same way (M3).
             if (m_details) {
                 if (const auto it = m_details->constFind(c.process.pid);
-                    it != m_details->constEnd() && it->valid()) {
+                    it != m_details->constEnd() && it->valid()
+                    && detailsMatchFlow(*it, c)) {
                     if (!it->exe.isEmpty())
-                        lines << QStringLiteral("Exe: %1").arg(it->exe);
+                        lines << QStringLiteral("Exe: %1").arg(esc(it->exe));
                     if (!it->cmdline.isEmpty())
-                        lines << QStringLiteral("Cmdline: %1").arg(it->cmdline);
+                        lines << QStringLiteral("Cmdline: %1").arg(esc(it->cmdline));
                     if (!it->cwd.isEmpty())
-                        lines << QStringLiteral("Cwd: %1").arg(it->cwd);
+                        lines << QStringLiteral("Cwd: %1").arg(esc(it->cwd));
                 }
             }
         }
@@ -806,15 +914,15 @@ QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
     case ViewMode::ByContainer:
         if (!c.container.id.isEmpty() || !c.container.name.isEmpty()) {
             if (!c.container.runtime.isEmpty())
-                lines << QStringLiteral("Runtime: %1").arg(c.container.runtime);
+                lines << QStringLiteral("Runtime: %1").arg(esc(c.container.runtime));
             if (!c.container.name.isEmpty())
-                lines << QStringLiteral("Name: %1").arg(c.container.name);
+                lines << QStringLiteral("Name: %1").arg(esc(c.container.name));
             if (!c.container.id.isEmpty())
-                lines << QStringLiteral("ID: %1").arg(c.container.id);
+                lines << QStringLiteral("ID: %1").arg(esc(c.container.id));
         }
         break;
     case ViewMode::ByInterface:
-        lines << QStringLiteral("Interface: %1").arg(g.label);
+        lines << QStringLiteral("Interface: %1").arg(esc(g.label));
         break;
     default:
         break;
@@ -822,7 +930,8 @@ QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
     if (lines.isEmpty()) return {};
     lines << QStringLiteral("%1 flow%2").arg(g.srcRows.size())
                  .arg(g.srcRows.size() == 1 ? QString() : QStringLiteral("s"));
-    return lines.join(QLatin1Char('\n'));
+    return QStringLiteral("<qt>%1</qt>")
+        .arg(lines.join(QStringLiteral("<br>")));
 }
 
 QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int role) const
@@ -838,6 +947,16 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         rxBytes += c.rxBytes;
         txBytes += c.txBytes;
     }
+    // Max columns: SUM of the per-flow adaptive references (consistent
+    // with the other rate columns' SUM aggregation), fetched lazily —
+    // only the Max columns pay for the extra per-row data() calls (L1).
+    const auto sumMaxRefs = [&](Col c) {
+        double s = 0.0;
+        for (int r : g.srcRows)
+            s += m_src->index(r, static_cast<int>(c))
+                     .data(ConnectionModel::SortRole).toDouble();
+        return s;
+    };
 
     const auto col = static_cast<Col>(column);
     if (role == Qt::DisplayRole) {
@@ -854,8 +973,14 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         case Col::TxRate:  return util::formatByteRate(txSum);
         case Col::RxTotal: return util::formatBytes(rxBytes);
         case Col::TxTotal: return util::formatBytes(txBytes);
-        case Col::RxMax:   return QStringLiteral("—");
-        case Col::TxMax:   return QStringLiteral("—");
+        case Col::RxMax: {
+            const double v = sumMaxRefs(Col::RxMax);
+            return v > 0.0 ? util::formatByteRate(v) : QStringLiteral("—");
+        }
+        case Col::TxMax: {
+            const double v = sumMaxRefs(Col::TxMax);
+            return v > 0.0 ? util::formatByteRate(v) : QStringLiteral("—");
+        }
         case Col::Process: return QStringLiteral("—");
         case Col::Container: return QStringLiteral("—");
         case Col::ColumnCount: break;
@@ -870,8 +995,8 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         case Col::TxRate:  return txSum;
         case Col::RxTotal: return static_cast<qulonglong>(rxBytes);
         case Col::TxTotal: return static_cast<qulonglong>(txBytes);
-        case Col::RxMax:   return 0.0;
-        case Col::TxMax:   return 0.0;
+        case Col::RxMax:   return sumMaxRefs(Col::RxMax);
+        case Col::TxMax:   return sumMaxRefs(Col::TxMax);
         case Col::Process: return QString();
         case Col::Container: return QString();
         case Col::ColumnCount: break;

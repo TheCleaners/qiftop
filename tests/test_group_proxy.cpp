@@ -7,6 +7,7 @@
 
 #include <QAbstractTableModel>
 #include <QSignalSpy>
+#include <QSortFilterProxyModel>
 #include <QTest>
 
 #include "ui/ConnectionGroupProxy.h"
@@ -38,6 +39,11 @@ public:
             case ConnectionModel::Column::RxTotal: return static_cast<qulonglong>(c.rxBytes);
             case ConnectionModel::Column::TxTotal: return static_cast<qulonglong>(c.txBytes);
             case ConnectionModel::Column::Iface:   return c.iface;
+            // Per-flow adaptive Max references — pretend they're 2× the
+            // byte counts so aggregate-sum assertions have a distinct,
+            // deterministic value to check against.
+            case ConnectionModel::Column::RxMax:   return double(c.rxBytes) * 2.0;
+            case ConnectionModel::Column::TxMax:   return double(c.txBytes) * 2.0;
             default: return {};
             }
         }
@@ -549,6 +555,283 @@ private slots:
         QCOMPARE(resetSpy.size(), 0);
         QVERIFY(removeSpy.size() > prevRemoves);
         QCOMPARE(p.rowCount(), 1);                        // wlan0 group gone
+    }
+
+    // H1: when an insert re-orders the groups under the active sort,
+    // outstanding QPersistentModelIndexes (the view's expansion /
+    // selection / current bookkeeping) must FOLLOW their group via the
+    // layout-change protocol — not silently keep stale (row, internalId)
+    // coordinates that now point at a different group.
+    void groupedInsertResortMovesPersistentIndexWithGroup()
+    {
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, "", 100, 0),
+                     mk("wlan0", "", "", 0, "", 300, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+        // Order: wlan0 (300), eth0 (100).
+        QVERIFY(p.index(0, 0).data(Qt::DisplayRole).toString()
+                    .contains(QStringLiteral("wlan0")));
+
+        // Persistent index on the eth0 group (row 1) — stands in for
+        // the view's expandedIndexes / selection entry.
+        QPersistentModelIndex eth0 = p.index(1, 0);
+        QVERIFY(eth0.isValid());
+
+        // Insert a fat new eth0 flow: eth0's aggregate (600) overtakes
+        // wlan0 (300) → groups re-sort, eth0 moves to row 0.
+        src.addRow(mk("eth0", "", "", 0, "", 500, 0));
+
+        QVERIFY(eth0.isValid());
+        QCOMPARE(eth0.row(), 0);
+        QVERIFY2(eth0.data(Qt::DisplayRole).toString()
+                     .contains(QStringLiteral("eth0")),
+                 "persistent index no longer points at the eth0 group");
+    }
+
+    // H1, regroup path: a group-key change (attribution flap) that
+    // re-orders the groups must remap persistent indexes the same way.
+    void groupedRegroupResortMovesPersistentIndexWithGroup()
+    {
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, "", 100, 0),
+                     mk("wlan0", "", "", 0, "", 300, 0),
+                     mk("lo",    "", "", 0, "", 250, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+        // Order: wlan0 (300), lo (250), eth0 (100).
+        QPersistentModelIndex eth0 = p.index(2, 0);
+        QVERIFY(eth0.data(Qt::DisplayRole).toString()
+                    .contains(QStringLiteral("eth0")));
+
+        // Move the lo flow into eth0: lo group dissolves, eth0 jumps to
+        // 350 and overtakes wlan0 → order [eth0, wlan0].
+        Connection moved = src.rows[2];
+        moved.iface = QStringLiteral("eth0");
+        src.setRow(2, moved, {ConnectionModel::ConnectionRole});
+
+        QCOMPARE(p.rowCount(), 2);
+        QVERIFY(eth0.isValid());
+        QCOMPARE(eth0.row(), 0);
+        QVERIFY2(eth0.data(Qt::DisplayRole).toString()
+                     .contains(QStringLiteral("eth0")),
+                 "persistent index lost the eth0 group across a regroup re-sort");
+    }
+
+    // H1, remove path: removing a child that drops a group's aggregate
+    // below a sibling must re-order WITH persistent-index remapping.
+    void groupedRemoveResortMovesPersistentIndexWithGroup()
+    {
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, "", 100, 0),
+                     mk("eth0",  "", "", 0, "", 500, 0),
+                     mk("wlan0", "", "", 0, "", 300, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+        // Order: eth0 (600), wlan0 (300).
+        QPersistentModelIndex wlan0 = p.index(1, 0);
+        QVERIFY(wlan0.data(Qt::DisplayRole).toString()
+                    .contains(QStringLiteral("wlan0")));
+
+        // Remove eth0's 500-byte flow → eth0 drops to 100 < 300 →
+        // wlan0 moves to row 0.
+        src.removeAt(1);
+
+        QVERIFY(wlan0.isValid());
+        QCOMPARE(wlan0.row(), 0);
+        QVERIFY2(wlan0.data(Qt::DisplayRole).toString()
+                     .contains(QStringLiteral("wlan0")),
+                 "persistent index lost the wlan0 group across a remove re-sort");
+    }
+
+    // M4: child membership changes must repaint the group header row
+    // (count + aggregates), via a dataChanged that covers it.
+    void groupHeaderAggregatesRefreshOnMembershipChange()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "", "", 0, "", 100, 10)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const auto headerRefreshed = [&p](QSignalSpy &spy) {
+            for (int i = 0; i < spy.size(); ++i) {
+                const QModelIndex tl = spy.at(i).at(0).toModelIndex();
+                if (tl.isValid() && p.isGroupIndex(tl))
+                    return true;
+            }
+            return false;
+        };
+
+        // Insert into the existing group.
+        QSignalSpy changedIns(&p, &QAbstractItemModel::dataChanged);
+        src.addRow(mk("eth0", "", "", 0, "", 50, 5));
+        QVERIFY2(headerRefreshed(changedIns),
+                 "no dataChanged covered the group header after an insert");
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(),
+                 150.0);
+
+        // Remove from the (still two-child) group.
+        QSignalSpy changedRem(&p, &QAbstractItemModel::dataChanged);
+        src.removeAt(1);
+        QVERIFY2(headerRefreshed(changedRem),
+                 "no dataChanged covered the group header after a remove");
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(),
+                 100.0);
+    }
+
+    // M5: warming the on-demand details cache must repaint not just the
+    // tooltip but also the inline cmdline chip / plain-text display.
+    void refreshGroupTooltipsCoversDisplayAndChips()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "", "", 4242, "chrome")});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByProcess);
+
+        QSignalSpy changed(&p, &QAbstractItemModel::dataChanged);
+        p.refreshGroupTooltips();
+        QCOMPARE(changed.size(), 1);
+        const auto roles = changed.first().at(2).value<QList<int>>();
+        QVERIFY(roles.contains(int(Qt::ToolTipRole)));
+        QVERIFY2(roles.contains(int(Qt::DisplayRole)),
+                 "DisplayRole missing — inline cmdline text would stay stale");
+        QVERIFY2(roles.contains(int(ConnectionModel::GroupChipsRole)),
+                 "GroupChipsRole missing — chip row would stay stale");
+    }
+
+    // L1: grouped RxMax/TxMax aggregate the per-flow references (SUM,
+    // consistent with the other rate columns) instead of returning —/0.
+    void groupedMaxColumnsAggregateSum()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "", "", 0, "", 100, 10),
+                     mk("eth0", "", "", 0, "", 200, 20)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        QCOMPARE(p.rowCount(), 1);
+
+        // StubFlows reports per-flow Max refs of 2× the byte counts:
+        // RxMax sum = (100+200)*2 = 600, TxMax sum = (10+20)*2 = 60.
+        const int rxMax = static_cast<int>(ConnectionModel::Column::RxMax);
+        const int txMax = static_cast<int>(ConnectionModel::Column::TxMax);
+        QCOMPARE(p.index(0, rxMax).data(ConnectionModel::SortRole).toDouble(), 600.0);
+        QCOMPARE(p.index(0, txMax).data(ConnectionModel::SortRole).toDouble(),  60.0);
+        QVERIFY(p.index(0, rxMax).data(Qt::DisplayRole).toString()
+                    != QStringLiteral("—"));
+        QVERIFY(p.index(0, txMax).data(Qt::DisplayRole).toString()
+                    != QStringLiteral("—"));
+    }
+
+    // M7: a Flat-mode sort must produce exactly ONE
+    // layoutAboutToBeChanged/layoutChanged pair on the proxy. Pre-fix,
+    // the manual emission in sort() nested with the forwarded source
+    // (QSortFilterProxyModel) layout signals → two pairs, corrupting
+    // the view's save/restore bookkeeping.
+    void flatSortEmitsSingleLayoutChangePair()
+    {
+        StubFlows src;
+        src.replace({mk("eth0", "", "", 0, "", 100, 0),
+                     mk("eth0", "", "", 0, "", 300, 0),
+                     mk("eth0", "", "", 0, "", 200, 0)});
+        QSortFilterProxyModel filter;   // mimics ConnectionFilterProxy
+        filter.setSourceModel(&src);
+        filter.setSortRole(ConnectionModel::SortRole);
+        ConnectionGroupProxy p;
+        p.setSourceModel(&filter);
+        QCOMPARE(p.viewMode(), Settings::ConnectionViewMode::Flat);
+
+        QSignalSpy aboutSpy(&p, &QAbstractItemModel::layoutAboutToBeChanged);
+        QSignalSpy changedSpy(&p, &QAbstractItemModel::layoutChanged);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+
+        QCOMPARE(aboutSpy.size(), 1);
+        QCOMPARE(changedSpy.size(), 1);
+        // The sort itself still happened (300, 200, 100).
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 300.0);
+        QCOMPARE(p.index(2, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 100.0);
+
+        // Dynamic re-sorts triggered by the SOURCE (not by our sort())
+        // must still be forwarded — only the nested duplication is
+        // suppressed.
+        const int beforeDyn = changedSpy.size();
+        Connection boosted = src.rows[0];   // the 100-byte flow (source order)
+        boosted.rxBytes = 999;
+        src.setRow(0, boosted, {});         // empty roles → QSFPM re-sorts
+        QVERIFY2(changedSpy.size() > beforeDyn,
+                 "source-driven layoutChanged no longer forwarded in Flat mode");
+    }
+
+    // M2: group-header tooltips are rendered by Qt as rich text whenever
+    // Qt::mightBeRichText() fires — and comm / container names are
+    // attacker-controlled (prctl(PR_SET_NAME), image labels). The
+    // tooltip builder must escape every dynamic field and wrap the
+    // result in <qt>…</qt> so injected markup displays as text instead
+    // of being interpreted (remote <img> loads, spoofed content).
+    void groupTooltipEscapesAttackerControlledFields()
+    {
+        // --- ByProcess: hostile comm + hostile on-demand details ---
+        StubFlows src;
+        Connection a = mk("eth0", "", "", 4242, "<img src=x>");
+        src.replace({a});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        QHash<qint32, qiftop::backend::ProcessDetails> cache;
+        qiftop::backend::ProcessDetails d;
+        d.pid     = 4242;
+        d.comm    = QStringLiteral("<img src=x>");
+        d.exe     = QStringLiteral("/bin/<b>evil</b>");
+        d.cmdline = QStringLiteral("evil --x=\"<script>\"");
+        d.startTimeJiffies = 1;
+        cache.insert(4242, d);
+        p.setProcessDetailsCache(&cache);
+        p.setViewMode(Settings::ConnectionViewMode::ByProcess);
+        QCOMPARE(p.rowCount(), 1);
+
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+        const QString procTip =
+            p.index(0, flowCol).data(Qt::ToolTipRole).toString();
+        QVERIFY(procTip.startsWith(QStringLiteral("<qt>")));   // deliberate rich text
+        QVERIFY(procTip.contains(QStringLiteral("&lt;img")));
+        QVERIFY(!procTip.contains(QStringLiteral("<img")));
+        QVERIFY(procTip.contains(QStringLiteral("&lt;b&gt;evil&lt;/b&gt;")));
+        QVERIFY(!procTip.contains(QStringLiteral("<b>")));
+        QVERIFY(procTip.contains(QStringLiteral("&lt;script&gt;")));
+        QVERIFY(!procTip.contains(QStringLiteral("<script>")));
+
+        // --- ByContainer: hostile runtime / name / id ---
+        StubFlows src2;
+        Connection b = mk("eth0", "docker", "abc123def4567890", 10, "nginx");
+        b.container.name = QStringLiteral("<img src=http://evil/x>");
+        src2.replace({b});
+        ConnectionGroupProxy p2;
+        p2.setSourceModel(&src2);
+        p2.setViewMode(Settings::ConnectionViewMode::ByContainer);
+        QCOMPARE(p2.rowCount(), 1);
+
+        const QString ctTip =
+            p2.index(0, flowCol).data(Qt::ToolTipRole).toString();
+        QVERIFY(ctTip.startsWith(QStringLiteral("<qt>")));
+        QVERIFY(ctTip.contains(QStringLiteral("&lt;img")));
+        QVERIFY(!ctTip.contains(QStringLiteral("<img")));
+        QVERIFY(ctTip.contains(QStringLiteral("Runtime: docker")));
     }
 };
 

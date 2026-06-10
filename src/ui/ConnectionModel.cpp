@@ -422,34 +422,40 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
     }
 
     case Qt::ToolTipRole: {
+        // Tooltip injection hardening (M2): Qt auto-detects rich text in
+        // tooltips, and comm / container runtime/id/name are attacker-
+        // controlled (prctl(PR_SET_NAME), image labels...). Escape every
+        // dynamic field and render the tooltip as DELIBERATE rich text
+        // (<qt> + <br>) so the escaping displays correctly.
+        const auto esc = [](const QString &s) { return s.toHtmlEscaped(); };
         switch (col) {
         case Column::Process:
             if (c.process.pid <= 0) return QStringLiteral("Unattributed flow");
-            return QStringLiteral("pid: %1\ncomm: %2\nuid: %3\n\nRight-click → Details for cmdline / exe / cwd")
+            return QStringLiteral("<qt>pid: %1<br>comm: %2<br>uid: %3<br><br>Right-click → Details for cmdline / exe / cwd</qt>")
                 .arg(c.process.pid)
                 .arg(c.process.comm.isEmpty() ? QStringLiteral("?")
-                                              : c.process.comm)
+                                              : esc(c.process.comm))
                 .arg(c.process.uid);
         case Column::Container: {
             if (c.container.runtime.isEmpty() && c.container.id.isEmpty()
                 && c.container.name.isEmpty()) {
                 return QStringLiteral("Host process (no container)");
             }
-            QString s = QStringLiteral("runtime: %1\nid: %2\nname: %3")
-                .arg(c.container.runtime.isEmpty() ? QStringLiteral("?") : c.container.runtime,
-                     c.container.id.isEmpty()      ? QStringLiteral("?") : c.container.id,
-                     c.container.name.isEmpty()    ? QStringLiteral("?") : c.container.name);
+            QString s = QStringLiteral("runtime: %1<br>id: %2<br>name: %3")
+                .arg(c.container.runtime.isEmpty() ? QStringLiteral("?") : esc(c.container.runtime),
+                     c.container.id.isEmpty()      ? QStringLiteral("?") : esc(c.container.id),
+                     c.container.name.isEmpty()    ? QStringLiteral("?") : esc(c.container.name));
             if (c.containerChain.size() >= 2 && m_showContainerChainInTooltip) {
-                s += QStringLiteral("\n\nNesting (outer → inner):");
+                s += QStringLiteral("<br><br>Nesting (outer → inner):");
                 for (const auto &ci : c.containerChain) {
                     const QString disp = !ci.name.isEmpty() ? ci.name
                                                             : ci.id.left(12);
-                    s += QStringLiteral("\n  • %1:%2")
-                             .arg(ci.runtime.isEmpty() ? QStringLiteral("?") : ci.runtime,
-                                  disp);
+                    s += QStringLiteral("<br>&nbsp;&nbsp;• %1:%2")
+                             .arg(ci.runtime.isEmpty() ? QStringLiteral("?") : esc(ci.runtime),
+                                  esc(disp));
                 }
             }
-            return s;
+            return QStringLiteral("<qt>%1</qt>").arg(s);
         }
         default: return {};
         }
@@ -649,8 +655,14 @@ void ConnectionModel::updateConnections(QList<Connection> connections)
     // and have local.port masked to 0 ("*"); inbound rows share local.{
     // addr,port} and have remote.port masked to 0. Direction::Unknown
     // flows are left alone (can't tell which port is ephemeral).
+    //
+    // Aggregate counters come from retained per-member state (m_udpAgg),
+    // NOT from summing the current snapshot: UDP conntrack entries are
+    // timed out aggressively, and a member dropping out of the snapshot
+    // must not subtract its accumulated bytes from the aggregate (the
+    // total would regress and the m_prev rate diff would clamp to 0).
     if (m_udpAggregateByPeer) {
-        QHash<QString, Connection> agg;
+        QHash<QString, Connection> agg;   // aggKey → representative (masked) flow
         QList<Connection>          passthrough;
         agg.reserve(connections.size());
         for (const Connection &c : std::as_const(connections)) {
@@ -661,21 +673,72 @@ void ConnectionModel::updateConnections(QList<Connection> connections)
             Connection k = c;
             if (k.direction == Direction::Outbound) k.local.port  = 0;
             else                                    k.remote.port = 0;
-            const QString aggKey = k.key();
-            auto it = agg.find(aggKey);
-            if (it == agg.end()) {
-                agg.insert(aggKey, k);
-            } else {
-                it->rxBytes   += c.rxBytes;
-                it->txBytes   += c.txBytes;
-                it->rxPackets += c.rxPackets;
-                it->txPackets += c.txPackets;
+            const QString aggKey    = k.key();
+            const QString memberKey = c.key();
+            UdpAggState &st = m_udpAgg[aggKey];
+            st.lastSeenMs = nowMs;
+            UdpAggMember &mem = st.members[memberKey];
+            if (c.rxBytes < mem.rxBytes || c.txBytes < mem.txBytes) {
+                // Conntrack recycled the member tuple (counters reset):
+                // fold the previous incarnation's high-water mark into
+                // the base so the aggregate never regresses.
+                st.rxBase    += mem.rxBytes;   st.txBase    += mem.txBytes;
+                st.rxPktBase += mem.rxPackets; st.txPktBase += mem.txPackets;
             }
+            mem.rxBytes    = c.rxBytes;   mem.txBytes    = c.txBytes;
+            mem.rxPackets  = c.rxPackets; mem.txPackets  = c.txPackets;
+            mem.lastSeenMs = nowMs;
+            if (!agg.contains(aggKey))
+                agg.insert(aggKey, k);    // counters materialised below
         }
+
+        // Compact retained state: aggregates unseen beyond the UDP
+        // retention window are dropped wholesale (their model row has
+        // been pruned by then — a reappearing peer starts a fresh row);
+        // long-expired members are folded into the base and erased so
+        // the per-aggregate member map stays bounded under ephemeral-
+        // port churn. Members absent for LESS than the window keep
+        // their last counters in the sum — so a freshly expired member
+        // never drops bytes, and a member that merely flickered out of
+        // a capped snapshot isn't double-counted on return.
+        for (auto it = m_udpAgg.begin(); it != m_udpAgg.end();) {
+            UdpAggState &st = it.value();
+            if (nowMs - st.lastSeenMs > m_staleRetentionMsUdp) {
+                it = m_udpAgg.erase(it);
+                continue;
+            }
+            for (auto mIt = st.members.begin(); mIt != st.members.end();) {
+                if (nowMs - mIt->lastSeenMs > m_staleRetentionMsUdp) {
+                    st.rxBase    += mIt->rxBytes;   st.txBase    += mIt->txBytes;
+                    st.rxPktBase += mIt->rxPackets; st.txPktBase += mIt->txPackets;
+                    mIt = st.members.erase(mIt);
+                } else {
+                    ++mIt;
+                }
+            }
+            ++it;
+        }
+
+        // Materialise the aggregate counters: base + Σ retained members.
+        for (auto it = agg.begin(); it != agg.end(); ++it) {
+            const auto stIt = m_udpAgg.constFind(it.key());
+            if (stIt == m_udpAgg.constEnd()) continue;  // pruned above (retention 0)
+            quint64 rx = stIt->rxBase,    tx = stIt->txBase;
+            quint64 rxp = stIt->rxPktBase, txp = stIt->txPktBase;
+            for (const UdpAggMember &m : stIt->members) {
+                rx  += m.rxBytes;   tx  += m.txBytes;
+                rxp += m.rxPackets; txp += m.txPackets;
+            }
+            it->rxBytes   = rx;  it->txBytes   = tx;
+            it->rxPackets = rxp; it->txPackets = txp;
+        }
+
         connections = std::move(passthrough);
         connections.reserve(connections.size() + agg.size());
         for (auto it = agg.cbegin(); it != agg.cend(); ++it)
             connections.append(it.value());
+    } else if (!m_udpAgg.isEmpty()) {
+        m_udpAgg.clear();
     }
 
     // Index the (post-aggregation) snapshot by key so we can do row-level

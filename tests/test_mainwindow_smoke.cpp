@@ -1305,6 +1305,219 @@ private slots:
         QCOMPARE(connMon.detailsRequests, before);
     }
 
+    // M3: the on-demand details cache is keyed by pid; on PID reuse a
+    // NEW process under a recycled pid must not show the DEAD process's
+    // cached exe/cmdline/cwd. The staleness signal is comm mismatch
+    // (cached entry's comm vs. the live flow's wire comm), and an
+    // expand of the recycled group must re-request fresh details.
+    void staleProcessDetailsIgnoredOnPidReuse()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *combo    = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(combo && connView);
+
+        Connection a = mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443,
+                              L4Proto::Tcp, 1000, 500);
+        a.process.pid  = 4242;
+        a.process.comm = QStringLiteral("chrome");
+        connMon.emitSnapshot({a});
+        QTest::qWait(50);
+
+        combo->setCurrentIndex(combo->findData(
+            static_cast<int>(Settings::ConnectionViewMode::ByProcess)));
+        QTest::qWait(50);
+
+        auto *m = connView->model();
+        QCOMPARE(m->rowCount(), 1);
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+
+        // Warm the cache for pid 4242 (chrome).
+        connView->expand(m->index(0, 0));
+        QTest::qWait(20);
+        qiftop::backend::ProcessDetails d;
+        d.pid     = 4242;
+        d.comm    = QStringLiteral("chrome");
+        d.exe     = QStringLiteral("/usr/lib/chrome/chrome");
+        d.cmdline = QStringLiteral("/usr/lib/chrome/chrome --type=renderer");
+        d.cwd     = QStringLiteral("/home/ines");
+        d.startTimeJiffies = 111;
+        connMon.emitProcessDetails(d);
+        QTest::qWait(20);
+        QVERIFY(m->index(0, flowCol).data(Qt::ToolTipRole).toString()
+                    .contains(QStringLiteral("Exe: /usr/lib/chrome/chrome")));
+
+        // PID reuse: the same flow now belongs to a DIFFERENT process
+        // that the kernel gave the recycled pid 4242 (comm "nginx").
+        Connection b = a;
+        b.process.comm = QStringLiteral("nginx");
+        connMon.emitSnapshot({b});
+        QTest::qWait(50);
+
+        QCOMPARE(m->rowCount(), 1);
+        const QString tip = m->index(0, flowCol).data(Qt::ToolTipRole).toString();
+        QVERIFY2(!tip.contains(QStringLiteral("/usr/lib/chrome/chrome")),
+                 "stale cached exe/cmdline shown for a recycled pid");
+        QVERIFY(tip.contains(QStringLiteral("PID: 4242")));   // wire fields kept
+
+        // The inline chips must not carry the stale cmdline either.
+        const QVariantList chips =
+            m->index(0, flowCol).data(ConnectionModel::GroupChipsRole).toList();
+        for (const QVariant &v : chips) {
+            QVERIFY(v.toMap().value(QStringLiteral("kind")).toString()
+                        != QStringLiteral("cmdline"));
+        }
+
+        // Expanding the recycled group must evict the stale entry and
+        // re-request details (the bare contains(pid) guard would skip).
+        const int before = connMon.detailsRequests;
+        connView->collapse(m->index(0, 0));
+        connView->expand(m->index(0, 0));
+        QTest::qWait(20);
+        QCOMPARE(connMon.detailsRequests, before + 1);
+        QCOMPARE(connMon.lastRequestedPid, qint32(4242));
+    }
+
+    // M2: tooltips are auto-detected as rich text by Qt; comm and
+    // container fields are attacker-controlled (prctl(PR_SET_NAME),
+    // image labels). Injected markup must arrive HTML-escaped inside a
+    // deliberate <qt> wrapper — never as live tags (remote <img> loads
+    // = surveillance beacon; spoofed tooltip content). Covers both the
+    // ConnectionModel Process/Container ToolTipRole path and the
+    // grouped header tooltip path.
+    void tooltipRichTextInjectionEscaped()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *combo    = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(combo && connView);
+        auto *m = connView->model();
+
+        Connection a = mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443,
+                              L4Proto::Tcp, 1000, 500);
+        a.process.pid       = 666;
+        a.process.comm      = QStringLiteral("<img src=x>");
+        a.container.runtime = QStringLiteral("docker");
+        a.container.id      = QStringLiteral("abc123def4567890");
+        a.container.name    = QStringLiteral("<b>evil</b>");
+        connMon.emitSnapshot({a});
+        QTest::qWait(50);
+        QCOMPARE(m->rowCount(), 1);
+
+        // --- ConnectionModel ToolTipRole path (flat mode) ---
+        const int procCol = static_cast<int>(ConnectionModel::Column::Process);
+        const int ctCol   = static_cast<int>(ConnectionModel::Column::Container);
+
+        const QString procTip =
+            m->index(0, procCol).data(Qt::ToolTipRole).toString();
+        QVERIFY(procTip.startsWith(QStringLiteral("<qt>")));
+        QVERIFY(procTip.contains(QStringLiteral("&lt;img")));
+        QVERIFY(!procTip.contains(QStringLiteral("<img")));
+
+        const QString ctTip =
+            m->index(0, ctCol).data(Qt::ToolTipRole).toString();
+        QVERIFY(ctTip.startsWith(QStringLiteral("<qt>")));
+        QVERIFY(ctTip.contains(QStringLiteral("&lt;b&gt;evil&lt;/b&gt;")));
+        QVERIFY(!ctTip.contains(QStringLiteral("<b>")));
+
+        // --- Grouped header tooltip path (ByProcess) ---
+        combo->setCurrentIndex(combo->findData(
+            static_cast<int>(Settings::ConnectionViewMode::ByProcess)));
+        QTest::qWait(50);
+        QCOMPARE(m->rowCount(), 1);
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+        const QString grpTip =
+            m->index(0, flowCol).data(Qt::ToolTipRole).toString();
+        QVERIFY(grpTip.startsWith(QStringLiteral("<qt>")));
+        QVERIFY(grpTip.contains(QStringLiteral("&lt;img")));
+        QVERIFY(!grpTip.contains(QStringLiteral("<img")));
+
+        // --- Grouped header tooltip path (ByContainer) ---
+        combo->setCurrentIndex(combo->findData(
+            static_cast<int>(Settings::ConnectionViewMode::ByContainer)));
+        QTest::qWait(50);
+        QCOMPARE(m->rowCount(), 1);
+        const QString grpCtTip =
+            m->index(0, flowCol).data(Qt::ToolTipRole).toString();
+        QVERIFY(grpCtTip.startsWith(QStringLiteral("<qt>")));
+        QVERIFY(grpCtTip.contains(QStringLiteral("&lt;b&gt;evil&lt;/b&gt;")));
+        QVERIFY(!grpCtTip.contains(QStringLiteral("<b>")));
+    }
+
+    // M6: with UDP peer-aggregation on, an individual member conntrack
+    // entry expiring (dropping out of the snapshot) must NOT subtract
+    // its accumulated bytes from the aggregate row — totals are
+    // monotone, fed from retained per-member state. Also covers the
+    // member counter-reset (conntrack tuple recycling) fold.
+    void udpAggregateRetainsBytesWhenMemberExpires()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        settings.setUdpAggregateByPeer(true);
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(connView);
+        auto *m = connView->model();
+
+        const auto udp = [](quint16 lport, quint64 rx, quint64 tx) {
+            return mkFlow("eth0", "10.0.0.10", lport, "8.8.8.8", 53,
+                          L4Proto::Udp, rx, tx, Direction::Outbound);
+        };
+        const auto aggConn = [&]() {
+            return m->index(0, 0).data(ConnectionModel::ConnectionRole)
+                       .value<Connection>();
+        };
+
+        // Two members → one aggregate row totalling 200/100.
+        connMon.emitSnapshot({udp(40000, 100, 50), udp(40001, 100, 50)});
+        QTest::qWait(50);
+        QCOMPARE(m->rowCount(), 1);
+        QCOMPARE(aggConn().rxBytes, quint64(200));
+        QCOMPARE(aggConn().txBytes, quint64(100));
+
+        // Member 40001 expires from conntrack while 40000 keeps
+        // growing. The aggregate must KEEP 40001's 100/50 → 250/120,
+        // not regress to 150/70.
+        connMon.emitSnapshot({udp(40000, 150, 70)});
+        QTest::qWait(50);
+        QCOMPARE(m->rowCount(), 1);
+        QCOMPARE(aggConn().rxBytes, quint64(250));
+        QCOMPARE(aggConn().txBytes, quint64(120));
+
+        // Member 40000's tuple is recycled (counters reset below the
+        // high-water mark): old 150/70 folds into the base →
+        // 150+30+100 = 280 / 70+10+50 = 130. Still monotone.
+        connMon.emitSnapshot({udp(40000, 30, 10)});
+        QTest::qWait(50);
+        QCOMPARE(m->rowCount(), 1);
+        QCOMPARE(aggConn().rxBytes, quint64(280));
+        QCOMPARE(aggConn().txBytes, quint64(130));
+    }
+
     // PERF-L2: while the window is hidden to tray the agent cadence heartbeat
     // must be SUSPENDED (no SetDesiredIntervalMs pushes), so the agent can
     // wind down its expensive conntrack+attribution polling. Showing the

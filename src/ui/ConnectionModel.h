@@ -87,7 +87,12 @@ public:
     // If true, UDP flows sharing a peer are coalesced into a single row;
     // the ephemeral side is displayed as "*". Applied on each tick before
     // the model diff, so toggling it only takes effect on the next update.
-    void setUdpAggregateByPeer(bool v)  { m_udpAggregateByPeer = v; }
+    // Toggling clears the retained per-member aggregation state.
+    void setUdpAggregateByPeer(bool v)
+    {
+        if (v != m_udpAggregateByPeer) m_udpAgg.clear();
+        m_udpAggregateByPeer = v;
+    }
 
     // When false, the Container column's tooltip stops listing the
     // OUTER→INNER nesting breakdown (one-line summary only). Gated in
@@ -218,6 +223,30 @@ private:
     QHash<QString, Connection> m_prev;
     QElapsedTimer             m_elapsed;
     qint64                    m_lastElapsedMs = 0;
+
+    // --- UDP peer-aggregation state (m_udpAggregateByPeer) ---
+    // The aggregate row's counters are derived from RETAINED per-member
+    // state, not from the current snapshot alone: base counters folded
+    // in from expired/reset members + the last-seen counters of every
+    // member still tracked. This keeps the aggregate total monotone
+    // when an individual member conntrack entry expires (its bytes
+    // would otherwise vanish from the sum) and keeps the rate diff
+    // against m_prev meaningful (no spurious counter-reset clamps).
+    struct UdpAggMember {
+        quint64 rxBytes = 0, txBytes = 0;
+        quint64 rxPackets = 0, txPackets = 0;
+        qint64  lastSeenMs = 0;
+    };
+    struct UdpAggState {
+        // Counters accumulated from members that were compacted away
+        // (expired beyond the UDP retention window) or whose conntrack
+        // counters reset. Never decreases.
+        quint64 rxBase = 0, txBase = 0;
+        quint64 rxPktBase = 0, txPktBase = 0;
+        QHash<QString, UdpAggMember> members;  // member flow key → last counters
+        qint64 lastSeenMs = 0;
+    };
+    QHash<QString, UdpAggState> m_udpAgg;      // aggregate key → state
 
     DnsResolver *m_resolver       = nullptr;
     bool         m_resolveEnabled = false;

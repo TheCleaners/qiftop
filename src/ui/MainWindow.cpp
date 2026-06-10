@@ -144,9 +144,15 @@ MainWindow::MainWindow(Settings          *settings,
     // On-demand process details (exe/cmdline/cwd) arriving from the
     // agent's GetProcessDetails RPC — cache by pid and refresh the
     // grouped-view tooltips so the next hover shows the enriched data.
+    // The cache is bounded (clear-on-overflow, repopulated on demand)
+    // so heavy pid churn can't grow it without bound.
     connect(m_connMonitor, &ConnectionMonitor::processDetailsReady, this,
             [this](qiftop::backend::ProcessDetails d) {
                 if (d.pid <= 0) return;
+                constexpr qsizetype kProcDetailsCacheMax = 1024;
+                if (m_procDetails.size() >= kProcDetailsCacheMax
+                    && !m_procDetails.contains(d.pid))
+                    m_procDetails.clear();
                 m_procDetails.insert(d.pid, d);
                 if (m_connGroupProxy) m_connGroupProxy->refreshGroupTooltips();
             });
@@ -223,7 +229,24 @@ void MainWindow::setupUi()
             [this](const QModelIndex &idx) {
                 if (!m_connGroupProxy || !m_connMonitor) return;
                 const qint32 pid = m_connGroupProxy->representativePid(idx);
-                if (pid > 0 && !m_procDetails.contains(pid))
+                if (pid <= 0) return;
+                const auto it = m_procDetails.constFind(pid);
+                bool needFetch = (it == m_procDetails.constEnd());
+                if (!needFetch) {
+                    // PID-reuse guard: if the cached entry's comm no
+                    // longer matches the group's live comm, the kernel
+                    // recycled the pid for a different process — drop
+                    // the stale entry and re-request.
+                    const QString liveComm =
+                        m_connGroupProxy->index(0, 0, idx)
+                            .data(ConnectionModel::ProcessCommRole).toString();
+                    if (!liveComm.isEmpty() && !it->comm.isEmpty()
+                        && it->comm != liveComm) {
+                        m_procDetails.remove(pid);
+                        needFetch = true;
+                    }
+                }
+                if (needFetch)
                     m_connMonitor->requestProcessDetails(pid);
             });
     m_connView->setSortingEnabled(true);
