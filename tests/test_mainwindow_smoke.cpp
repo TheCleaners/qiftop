@@ -1134,6 +1134,77 @@ private slots:
         QVERIFY2(connView->isExpanded(m->index(chromeRow2, 0)),
                  "chrome group collapsed across attribution flap");
     }
+
+    // Companion to the flap test targeting the OTHER collapse cause: the
+    // filter proxy is sorted by RxRate at startup, and with
+    // dynamicSortFilter on it re-sorts on every source dataChanged —
+    // rates change each tick, so it emitted layoutChanged every tick,
+    // which the grouped handler turned into a full reset → collapse
+    // every tick (independent of attribution). The flap test missed
+    // this because its flows had CONSTANT rates. Here the rates churn
+    // each tick; the group must stay expanded with zero resets.
+    void groupedRateChurnDoesNotCollapseTree()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *combo    = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(combo && connView);
+
+        auto flow = [](quint16 lport, quint64 rx) {
+            return mkFlow("eth0", "10.0.0.10", lport, "1.1.1.1", 443,
+                          L4Proto::Tcp, rx, rx / 2);
+        };
+        connMon.emitSnapshot({flow(1001, 1000), flow(1002, 2000), flow(1003, 500)});
+        QTest::qWait(50);
+
+        // Sort by RxTotal while still in Flat mode. This forwards through
+        // the group proxy to the FILTER proxy (QSortFilterProxyModel),
+        // setting ITS sort column. RxTotal's SortRole is the raw byte
+        // count (changes immediately with each snapshot — unlike RxRate,
+        // which is smoothed and wouldn't move within the test's time
+        // budget). With dynamicSortFilter on, the filter proxy then
+        // re-sorts on every snapshot, emitting layoutChanged — the
+        // second collapse trigger this test targets.
+        const int rxTotal = static_cast<int>(ConnectionModel::Column::RxTotal);
+        connView->sortByColumn(rxTotal, Qt::DescendingOrder);
+        QTest::qWait(20);
+
+        combo->setCurrentIndex(combo->findData(
+            static_cast<int>(Settings::ConnectionViewMode::ByInterface)));
+        QTest::qWait(50);
+
+        auto *m = connView->model();
+        QCOMPARE(m->rowCount(), 1);          // single eth0 group
+        connView->expand(m->index(0, 0));
+        QVERIFY(connView->isExpanded(m->index(0, 0)));
+
+        QSignalSpy resetSpy(m, &QAbstractItemModel::modelReset);
+
+        // Churn byte totals every tick so the (would-be) sorted filter
+        // proxy reorders and emits layoutChanged. With the fix the
+        // source sort was cleared on entering grouped mode, so no
+        // layoutChanged → no reset → the group stays expanded.
+        for (int tick = 0; tick < 8; ++tick) {
+            const quint64 base = 1000 + quint64(tick) * 1370;
+            connMon.emitSnapshot({flow(1001, base),
+                                  flow(1002, base * 3),
+                                  flow(1003, base / 2 + 1)});
+            QTest::qWait(20);
+        }
+
+        QCOMPARE(resetSpy.size(), 0);
+        QVERIFY2(connView->isExpanded(m->index(0, 0)),
+                 "eth0 group collapsed across rate churn");
+    }
 };
 
 // We instantiate widgets, so QApplication is required (not

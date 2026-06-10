@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QPartialOrdering>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QStringList>
 
 #include <algorithm>
@@ -76,6 +77,29 @@ void ConnectionGroupProxy::setViewMode(ViewMode mode)
     if (mode == m_mode) return;
     beginResetModel();
     m_mode = mode;
+    // Sorting ownership moves with the mode:
+    //   Flat    — the group proxy is a pass-through, so the SOURCE
+    //             (filter proxy) does the sorting; restore its sort.
+    //   grouped — the group proxy sorts its own m_groups, and the
+    //             source MUST NOT sort: a QSortFilterProxyModel with
+    //             dynamicSortFilter re-sorts on every source dataChanged
+    //             (rates change each tick), emitting layoutChanged every
+    //             tick. In grouped mode that layoutChanged maps to a
+    //             full onSourceReset() → the QTreeView collapses every
+    //             tick. Clearing the source sort column eliminates the
+    //             per-tick layoutChanged entirely.
+    if (m_src) {
+        // Block m_src signals around the sort() — sort() emits
+        // layoutChanged synchronously, which our handler would otherwise
+        // turn into a nested onSourceReset() mid-beginResetModel. We
+        // rebuild() unconditionally right after, so the blocked signal
+        // would be redundant anyway.
+        const QSignalBlocker block(m_src);
+        if (mode == ViewMode::Flat)
+            m_src->sort(m_sortColumn, m_sortOrder);
+        else
+            m_src->sort(-1);
+    }
     rebuild();
     endResetModel();
 }
