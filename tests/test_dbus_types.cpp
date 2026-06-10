@@ -231,6 +231,83 @@ private slots:
         QCOMPARE(rebuilt.containerChain.size(), 2);
     }
 
+    void containerChainClampedOnReceivePath()
+    {
+        // L2 hardening: a malicious/buggy agent could ship a huge
+        // containerChain to DoS the client. Both the QDBusArgument
+        // receive operator and fromDto must truncate to the cap (16,
+        // matching the server-side kMaxContainerChainDepth) without
+        // disturbing any other field.
+        qiftop::dbus::ConnectionDto dto;
+        dto.proto         = 6;
+        dto.localAddress  = QStringLiteral("10.0.0.5");
+        dto.localPort     = 8080;
+        dto.remoteAddress = QStringLiteral("203.0.113.7");
+        dto.remotePort    = 443;
+        dto.rxBytes       = 111;
+        dto.txBytes       = 222;
+        dto.iface         = QStringLiteral("eth0");
+        dto.direction     = quint8(Direction::Outbound);
+        dto.pid           = 4321;
+        dto.uid           = 33;
+        dto.comm          = QStringLiteral("nginx");
+        dto.containerRuntime = QStringLiteral("docker");
+        dto.containerId      = QStringLiteral("af85275074f5");
+        dto.containerName    = QStringLiteral("web-frontend");
+        for (int i = 0; i < 100; ++i) {
+            dto.containerChain << qiftop::dbus::ContainerInfoDto{
+                QStringLiteral("docker"),
+                QStringLiteral("id-%1").arg(i),
+                QStringLiteral("name-%1").arg(i)};
+        }
+
+        // QVariant round-trip is a value copy (it does not run the DBus
+        // wire operators — same as the other tests here); it must
+        // preserve every field including the full chain.
+        QVariant v;
+        v.setValue(dto);
+        const auto round = qvariant_cast<qiftop::dbus::ConnectionDto>(v);
+        QCOMPARE(round.containerChain.size(), 100);
+
+        // No regression on the other fields.
+        QCOMPARE(round.proto,         dto.proto);
+        QCOMPARE(round.localAddress,  dto.localAddress);
+        QCOMPARE(round.localPort,     dto.localPort);
+        QCOMPARE(round.remoteAddress, dto.remoteAddress);
+        QCOMPARE(round.remotePort,    dto.remotePort);
+        QCOMPARE(round.rxBytes,       dto.rxBytes);
+        QCOMPARE(round.txBytes,       dto.txBytes);
+        QCOMPARE(round.iface,         dto.iface);
+        QCOMPARE(round.direction,     dto.direction);
+        QCOMPARE(round.pid,           dto.pid);
+        QCOMPARE(round.uid,           dto.uid);
+        QCOMPARE(round.comm,          dto.comm);
+        QCOMPARE(round.containerRuntime, dto.containerRuntime);
+        QCOMPARE(round.containerId,      dto.containerId);
+        QCOMPARE(round.containerName,    dto.containerName);
+
+        // fromDto is the client-side receive conversion (DBusConnectionMonitor
+        // demarshals into DTOs, then calls fromDtos): it MUST clamp the
+        // over-long chain to the cap, keeping the FIRST (outermost) entries.
+        const Connection rebuilt = qiftop::dbus::fromDto(round);
+        QVERIFY(rebuilt.containerChain.size() <= 16);
+        QCOMPARE(rebuilt.containerChain.size(), 16);
+        QCOMPARE(rebuilt.containerChain[0].id,  QStringLiteral("id-0"));
+        QCOMPARE(rebuilt.containerChain[15].id, QStringLiteral("id-15"));
+        QCOMPARE(rebuilt.process.pid,  qint32(4321));
+        QCOMPARE(rebuilt.process.comm, QStringLiteral("nginx"));
+        QCOMPARE(rebuilt.container.runtime, QStringLiteral("docker"));
+
+        // An in-bounds chain is untouched.
+        qiftop::dbus::ConnectionDto small = dto;
+        small.containerChain = dto.containerChain.mid(0, 2);
+        QVariant v2;
+        v2.setValue(small);
+        const auto smallRound = qvariant_cast<qiftop::dbus::ConnectionDto>(v2);
+        QCOMPARE(smallRound.containerChain.size(), 2);
+        QCOMPARE(qiftop::dbus::fromDto(small).containerChain.size(), 2);
+    }
+
     void connectionDtoOmitsAttributionWhenAbsent()
     {
         // When the agent has no resolver wired, attribution fields are

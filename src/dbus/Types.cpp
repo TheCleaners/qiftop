@@ -3,9 +3,17 @@
 #include <QDBusMetaType>
 #include <QHostAddress>
 
+#include <algorithm>
 #include <limits>
 
 namespace qiftop::dbus {
+
+// Receive-side bound on containerChain. Mirrors the server-side
+// kMaxContainerChainDepth in the cgroup classifier: a malicious or buggy
+// agent could ship an arbitrarily long chain and DoS the client's
+// memory/CPU. Truncation happens AFTER unmarshalling, so the wire
+// signature is unchanged.
+constexpr qsizetype kMaxContainerChainDepth = 16;
 
 QDBusArgument &operator<<(QDBusArgument &a, const InterfaceStatsDto &s)
 {
@@ -78,6 +86,10 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c)
       >> c.pid >> c.uid >> c.comm
       >> c.containerRuntime >> c.containerId >> c.containerName
       >> c.containerChain;
+    // Clamp wire-sourced chain length; an over-long chain from a
+    // malicious/buggy agent must not be retained on the receiver.
+    if (c.containerChain.size() > kMaxContainerChainDepth)
+        c.containerChain.resize(kMaxContainerChainDepth);
     a.endStructure();
     return a;
 }
@@ -209,8 +221,13 @@ Connection fromDto(const ConnectionDto &d)
     c.container.runtime = d.containerRuntime;
     c.container.id      = d.containerId;
     c.container.name    = d.containerName;
-    c.containerChain.reserve(d.containerChain.size());
-    for (const auto &ci : d.containerChain) {
+    // Clamp chain depth on the receive path (matches the server-side
+    // classifier cap) so a hostile DTO can't balloon client memory.
+    const qsizetype chainLen =
+        std::min(d.containerChain.size(), kMaxContainerChainDepth);
+    c.containerChain.reserve(chainLen);
+    for (qsizetype i = 0; i < chainLen; ++i) {
+        const auto &ci = d.containerChain.at(i);
         c.containerChain << qiftop::backend::ContainerInfo{ci.runtime, ci.id, ci.name};
     }
     return c;
