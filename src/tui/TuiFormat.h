@@ -37,6 +37,7 @@ constexpr int kTotalW  = 11; // "999.99 GiB"
 constexpr int kStateW  = 9;  // "lower-dn" / "dormant"
 constexpr int kMtuW    = 6;  // "65535"
 constexpr int kErrW    = 11; // "err/drop"
+constexpr int kIfaceNameW = 16; // pad iface name so the detail suffix aligns
 
 // Connections layout: [flow] [RX rate] [TX rate] [RX total] [TX total].
 // Interfaces layout (richer, mirrors the Qt UI's detail info):
@@ -113,7 +114,8 @@ inline QStringList cellsForInterface(const aggregate::InterfaceAggregator::Row &
     const InterfaceStats &s = r.current;
 
     // Flexible first column: name + the extra detail the Qt UI shows (type and
-    // assigned addresses). Loopback is tagged so it's obvious at a glance.
+    // assigned addresses). The name is padded to a fixed sub-width so the detail
+    // suffix lines up down the column.
     QString name = s.name;
     QStringList detail;
     if (s.isLoopback)
@@ -123,7 +125,8 @@ inline QStringList cellsForInterface(const aggregate::InterfaceAggregator::Row &
     if (!s.addresses.isEmpty())
         detail << s.addresses.join(QStringLiteral(", "));
     if (!detail.isEmpty())
-        name += QStringLiteral("  \u2014 ") + detail.join(QStringLiteral("  "));
+        name = s.name.leftJustified(kIfaceNameW) + QStringLiteral("\u2014 ")
+               + detail.join(QStringLiteral("  "));
 
     const quint64 errs  = s.rxErrors + s.txErrors;
     const quint64 drops = s.rxDropped + s.txDropped;
@@ -157,9 +160,17 @@ inline QStringList cellsForConnection(const aggregate::ConnectionAggregator &agg
 
 inline Role rowRoleForInterface(const aggregate::InterfaceAggregator::Row &r)
 {
-    if (!r.current.isUp && !r.current.isLoopback)
+    const InterfaceStats &s = r.current;
+    // Loopback and down/inactive links are de-emphasised (dim); a link that is
+    // up AND currently moving data is highlighted so the busy NIC stands out;
+    // up-but-idle is normal. (operState 2/1 = down/absent.)
+    if (s.isLoopback)
         return Role::Stale;
-    return Role::Normal;
+    if (!s.isUp || s.operState == 2 || s.operState == 1)
+        return Role::Stale;
+    if (r.rxRate + r.txRate > 0.0)
+        return Role::Outbound;   // live link — green-ish accent
+    return Role::Normal;         // up but idle
 }
 
 inline Role rowRoleForConnection(const aggregate::ConnectionAggregator &agg,
