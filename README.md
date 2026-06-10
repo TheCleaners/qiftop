@@ -77,10 +77,10 @@ sudo cmake --install build
 sudo systemctl start qiftop-agent
 ```
 
-## Debian packaging
+## Packaging (.deb / .rpm)
 
-CPack produces two `.deb` packages — one for the daemon (+ systemd / DBus
-units) and one for the GUI:
+CPack produces two packages — one for the daemon (+ systemd / DBus
+units) and one for the GUI. Debian/Ubuntu (`.deb`):
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -91,9 +91,23 @@ ls *.deb
 # qiftop_<ver>_amd64.deb
 ```
 
-`qiftop` depends on `qiftop-agent` only via a `Recommends:`; the GUI
-still runs (with reduced functionality and a "Relaunch as
-administrator" fallback) on machines without the agent installed.
+Fedora (`.rpm`) — requires `rpm-build` and the Fedora `-devel` libs, so
+build it on Fedora (or in a `fedora` container; see
+[`dist/rpm/build-and-verify.sh`](dist/rpm/build-and-verify.sh)):
+
+```sh
+cd build && cpack -G RPM
+ls *.rpm
+# qiftop-agent-<ver>-1.fc44.x86_64.rpm
+# qiftop-<ver>-1.fc44.x86_64.rpm
+```
+
+Library dependencies are resolved automatically (rpm find-requires /
+`dpkg-shlibdeps`); `qiftop` depends on `qiftop-agent` only via a weak
+`Recommends:`, so the GUI still runs (with reduced functionality and a
+"Relaunch as administrator" fallback) on machines without the agent
+installed. Prebuilt `.deb` and `.rpm` assets are attached to each
+[GitHub Release](https://github.com/TheCleaners/qiftop/releases).
 
 ## Contributing & internals
 

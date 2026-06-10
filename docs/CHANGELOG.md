@@ -55,6 +55,16 @@ human-readable summary for *shipping* releases.
   Container / Runtime, Copy process / container info. All filter
   values are quoted via the filter mini-language so colons,
   spaces, etc. don't break parsing.
+- **RPM / Fedora packages** — `cpack -G RPM` now produces
+  `qiftop` + `qiftop-agent` `.rpm`s alongside the existing `.deb`s,
+  following RPM naming conventions
+  (`qiftop-<ver>-1.fc<NN>.x86_64.rpm`). Library deps are discovered
+  by rpm find-requires; `agent.conf` is `%config(noreplace)`; a
+  native `%post`/`%postun` scriptlet pair manages the `netdev`
+  group + systemd reload. Prerelease tags map `-rcN` → `~rcN` so rpm
+  sorts the prerelease before the final, mirroring the `.deb`
+  behaviour. The release workflow builds and publishes both package
+  formats as assets.
 
 ### Changed
 

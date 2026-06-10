@@ -278,6 +278,51 @@ with CAP_NET_ADMIN only.")
 set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_CONTROL_EXTRA
     "${CMAKE_SOURCE_DIR}/dist/debian/postinst;${CMAKE_SOURCE_DIR}/dist/debian/postrm;${CMAKE_SOURCE_DIR}/dist/debian/conffiles")
 
+# --- RPM generator (Fedora / openSUSE etc.) ---------------------------------
+# Mirrors the DEB config above. Built with `cpack -G RPM` (needs rpmbuild +
+# the Fedora -devel libs). Library Requires are discovered automatically by
+# rpmbuild's find-requires (CPACK_RPM_PACKAGE_AUTOREQ defaults ON), so we only
+# declare the non-library deps. Filenames follow RPM convention:
+# name-version-release.dist.arch.rpm, e.g. qiftop-0.2~rc1-1.fc44.x86_64.rpm
+# (rpm 4.10+ sorts the '~' before the final release, matching the DEB '~rcN').
+set(CPACK_RPM_COMPONENT_INSTALL ON)
+set(CPACK_RPM_FILE_NAME            "RPM-DEFAULT")
+set(CPACK_RPM_PACKAGE_LICENSE      "GPLv2+")
+set(CPACK_RPM_PACKAGE_GROUP        "Applications/System")
+set(CPACK_RPM_PACKAGE_URL          "${CPACK_PACKAGE_HOMEPAGE_URL}")
+set(CPACK_RPM_PACKAGE_VENDOR       "${CPACK_PACKAGE_VENDOR}")
+# Append the %{?dist} tag (.fc44 etc.) — standard Fedora practice.
+set(CPACK_RPM_PACKAGE_RELEASE      "1")
+set(CPACK_RPM_PACKAGE_RELEASE_DIST ON)
+
+# GUI subpackage
+set(CPACK_RPM_QIFTOP_PACKAGE_NAME     "qiftop")
+set(CPACK_RPM_QIFTOP_PACKAGE_SUMMARY  "Qt6 iftop-style network monitor (GUI)")
+# Weak dep on the agent (rpm Recommends), matching the DEB Recommends. Pinned
+# to the exact version built alongside it.
+set(CPACK_RPM_QIFTOP_PACKAGE_RECOMMENDS "qiftop-agent = ${CPACK_PACKAGE_VERSION}")
+
+# Agent subpackage
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_NAME    "qiftop-agent")
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_SUMMARY "Privileged DBus agent for qiftop")
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_REQUIRES   "dbus, shadow-utils")
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables")
+# Preserve user edits to the config file across upgrades (Fedora %config(noreplace)).
+set(CPACK_RPM_QIFTOP-AGENT_USER_FILELIST "%config(noreplace) /etc/qiftop/agent.conf")
+# Group creation + user enrollment + systemd reload, mirroring the DEB
+# maintainer scripts (RPM scriptlet semantics differ — see the files).
+set(CPACK_RPM_QIFTOP-AGENT_POST_INSTALL_SCRIPT_FILE
+    "${CMAKE_SOURCE_DIR}/dist/rpm/post-agent.sh")
+set(CPACK_RPM_QIFTOP-AGENT_POST_UNINSTALL_SCRIPT_FILE
+    "${CMAKE_SOURCE_DIR}/dist/rpm/postun-agent.sh")
+# Don't claim ownership of standard system directories that are already owned
+# by the `filesystem`, `systemd`, `dbus`, and `hicolor-icon-theme` packages —
+# otherwise rpm reports a file conflict (notably `/lib`, which is a usrmerge
+# symlink owned by `filesystem`). The package-specific dirs (/etc/qiftop,
+# /usr/share/qiftop) are deliberately NOT excluded so we keep owning them.
+set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+    "/lib;/lib/systemd;/lib/systemd/system;/usr/share/dbus-1;/usr/share/dbus-1/system.d;/usr/share/dbus-1/system-services;/usr/share/applications;/usr/share/icons;/usr/share/icons/hicolor;/usr/share/icons/hicolor/scalable;/usr/share/icons/hicolor/scalable/apps")
+
 include(CPack)
 cpack_add_component(qiftop
     DISPLAY_NAME "qiftop GUI"

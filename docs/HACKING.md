@@ -103,6 +103,38 @@ qiftop-agent_<ver>_amd64.deb   (daemon + systemd + dbus policy + /etc conffile)
 `dpkg-deb -c <file>.deb` to inspect contents; `dpkg-deb -e <file>.deb /tmp/d`
 then `cat /tmp/d/conffiles` to confirm config files are correctly tagged.
 
+### Building the `.rpm`s (Fedora)
+
+RPMs need `rpmbuild` + the Fedora `-devel` libraries, so they can't be
+built on the Debian dev box directly. Build them inside a `fedora`
+container — the helper script does configure → build → `cpack -G RPM`
+→ a clean-container install + verification in one shot:
+
+```bash
+docker run --rm -v "$PWD":/src:ro fedora:44 bash /src/dist/rpm/build-and-verify.sh
+```
+
+Output (RPM naming convention, `name-version-release.dist.arch`):
+```
+qiftop-<ver>-1.fc44.x86_64.rpm          (GUI)
+qiftop-agent-<ver>-1.fc44.x86_64.rpm    (daemon + systemd + dbus + /etc config)
+```
+
+`rpm -qpR <file>.rpm` lists Requires (library deps auto-discovered by
+find-requires); `rpm -qp --recommends <file>.rpm` shows the weak deps
+(`nftables`, the GUI's `qiftop-agent` pin); `rpm -qc qiftop-agent`
+confirms `/etc/qiftop/agent.conf` is `%config(noreplace)`. The CPack RPM
+config lives in `CMakeLists.txt` (the `CPACK_RPM_*` block); the native
+`%post`/`%postun` scriptlets are `dist/rpm/{post,postun}-agent.sh`. The
+release workflow builds both `.deb` and `.rpm` on tag push.
+
+> **usrmerge gotcha**: the systemd unit installs to `/lib/systemd/system`
+> (a `/usr/lib` symlink on Fedora). Without
+> `CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION` listing `/lib` and the
+> other shared system dirs, rpm tries to own `/lib` and conflicts with
+> the `filesystem` package. The exclusion drops *directory ownership*
+> only — the files inside are still packaged.
+
 > **Implementation note** (don't repeat the mistake): the auto-package step
 > uses `add_custom_command(TARGET qiftop-agent POST_BUILD …)`, **not** an
 > `add_custom_target(... ALL)` with file-level `DEPENDS`. The latter caused
