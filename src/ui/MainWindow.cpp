@@ -229,7 +229,13 @@ void MainWindow::setupUi()
     m_connView->setSortingEnabled(true);
     m_connView->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_connView->setAlternatingRowColors(true);
-    m_connView->setUniformRowHeights(true);
+    // Variable row heights: the Flow column wraps long content (e.g.
+    // big IPv6 endpoints in a narrow window) and the affected row grows
+    // to fit. uniformRowHeights MUST be off for per-row heights — the
+    // view then takes the per-row max of all columns' sizeHints, and
+    // only the Flow column reports a multi-line height.
+    m_connView->setUniformRowHeights(false);
+    m_connView->setWordWrap(true);
     // Flat-mode defaults — match v0.1's QTableView geometry exactly so
     // the RowGaugeDelegate / ConnectionFlowDelegate keep painting at
     // the same coordinates. The mode-switch path in applySettingsToUi()
@@ -241,6 +247,23 @@ void MainWindow::setupUi()
     m_connView->header()->setStretchLastSection(false);
     m_connView->header()->setSectionResizeMode(
         static_cast<int>(ConnectionModel::Column::Flow), QHeaderView::Stretch);
+    // When the Flow column width changes (window resize, user drag), the
+    // wrapped-content row heights must be recomputed — QTreeView caches
+    // per-row heights and won't re-measure on its own. Debounce via a
+    // 0-timer so a burst of resize events coalesces into one relayout.
+    {
+        auto *relayout = new QTimer(this);
+        relayout->setSingleShot(true);
+        relayout->setInterval(0);
+        connect(relayout, &QTimer::timeout, this, [this] {
+            if (m_connView) m_connView->doItemsLayout();
+        });
+        connect(m_connView->header(), &QHeaderView::sectionResized, this,
+                [relayout](int logical, int, int) {
+                    if (logical == static_cast<int>(ConnectionModel::Column::Flow))
+                        relayout->start();
+                });
+    }
     m_connFlowDelegate = new ConnectionFlowDelegate(m_connView);
     m_connView->setItemDelegateForColumn(
         static_cast<int>(ConnectionModel::Column::Flow),

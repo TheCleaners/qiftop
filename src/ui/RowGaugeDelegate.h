@@ -3,7 +3,7 @@
 #include <QStyledItemDelegate>
 #include <QPointer>
 
-class QAbstractItemView;
+#include <QAbstractItemView>
 
 // Paints a row-spanning "gauge" background underneath the cell's content:
 // the row is filled (with a darker overlay color sourced from the model's
@@ -38,6 +38,10 @@ protected:
     bool paintGaugeBackground(QPainter *painter,
                               const QStyleOptionViewItem &option,
                               const QModelIndex &index) const;
+
+    // The view this delegate paints into (may be null). Subclasses use
+    // it to query live column widths for wrap-aware sizeHint().
+    [[nodiscard]] QAbstractItemView *view() const { return m_view; }
 
 private:
     QPointer<QAbstractItemView> m_view;

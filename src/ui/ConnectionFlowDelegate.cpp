@@ -3,9 +3,13 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QPainter>
 #include <QPalette>
+#include <QTableView>
 #include <QTextDocument>
+#include <QTextOption>
+#include <QTreeView>
 
 namespace {
 
@@ -89,6 +93,9 @@ QTextDocument *buildGroupDoc(const QStyleOptionViewItem &option,
     auto *doc = new QTextDocument;
     doc->setDocumentMargin(0);
     doc->setDefaultFont(option.font);
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    doc->setDefaultTextOption(wrap);
     doc->setHtml(spans.join(sep));
     return doc;
 }
@@ -140,6 +147,9 @@ QTextDocument *buildDoc(const QStyleOptionViewItem &option,
     auto *doc = new QTextDocument;
     doc->setDocumentMargin(0);
     doc->setDefaultFont(option.font);
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    doc->setDefaultTextOption(wrap);
     doc->setHtml(html);
     return doc;
 }
@@ -203,7 +213,23 @@ QSize ConnectionFlowDelegate::sizeHint(const QStyleOptionViewItem &option,
     initStyleOption(&opt, index);
 
     QTextDocument *doc = chooseDoc(opt, index, m_colorCode);
-    doc->setTextWidth(-1);
+
+    // Measure at the live column width so wrapped content (long IPv6
+    // endpoints in a narrow window) reports its true multi-line height
+    // — only the affected row grows (the view takes the per-row max of
+    // all columns' sizeHints, and only the Flow column wraps). Fall
+    // back to the unwrapped single-line width before the view has laid
+    // out (column width 0).
+    int colWidth = 0;
+    if (auto *tree = qobject_cast<QTreeView*>(view()))
+        colWidth = tree->columnWidth(index.column());
+    else if (auto *table = qobject_cast<QTableView*>(view()))
+        colWidth = table->columnWidth(index.column());
+    if (colWidth > 8) {
+        doc->setTextWidth(colWidth - 6);   // small text margin
+    } else {
+        doc->setTextWidth(-1);
+    }
     const QSize hint = doc->size().toSize();
     delete doc;
     return {hint.width(), hint.height() + 4};
