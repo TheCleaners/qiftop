@@ -29,6 +29,7 @@
 #include "backend/dbus/DBusConnectionMonitor.h"
 #include "backend/dbus/DBusNetworkMonitor.h"
 #include "dbus/Types.h"
+#include "dns/QtDnsResolver.h"
 #include "tui/Screen.h"
 #include "tui/TuiApp.h"
 #include "util/Logging.h"
@@ -157,6 +158,11 @@ int main(int argc, char *argv[])
     ConnectionAggregator connAgg;
     connAgg.setRateSmoothingMs(300);
     connAgg.setPollIntervalMs(pollMs);
+
+    // Reverse-DNS resolver (client-side, async, cached). Wired but disabled
+    // until the user enables "Resolve hostnames" in the settings modal.
+    QtDnsResolver dnsResolver;
+    connAgg.setDnsResolver(&dnsResolver);
 
     QObject::connect(netMon.get(),  &NetworkMonitor::statsUpdated,
                      &ifaceAgg, &InterfaceAggregator::updateStats);

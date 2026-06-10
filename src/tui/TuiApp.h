@@ -38,6 +38,9 @@ public:
 private:
     void  doRedraw();
     Frame buildFrame();
+    void  buildSettingsModal(Frame &f) const;  // fill f.settings when open
+    void  handleSettingsKey(int key);          // key routing while modal open
+    void  applyAggregatorSettings();           // push flags into the aggregator
 
     Screen                           *m_screen   = nullptr;
     aggregate::InterfaceAggregator   *m_ifaceAgg = nullptr;
@@ -52,6 +55,16 @@ private:
     int  m_connSortCol  = 1;  bool m_connSortDesc  = true;  // RX rate desc
     int  m_ifaceScroll  = 0;
     int  m_connScroll   = 0;
+
+    // Runtime-toggleable settings (the modal). Defaults mirror main.cpp's
+    // initial aggregator wiring (smoothing on @ 300ms, UDP-by-peer on).
+    bool m_settingsOpen   = false;
+    int  m_settingsSel    = 0;
+    bool m_gaugeEnabled   = true;
+    bool m_dnsEnabled     = false;
+    bool m_udpAggregate   = true;
+    bool m_smoothing      = true;
+    int  m_pollMs         = 1000;
 
     QTimer *m_redrawTimer = nullptr; // single-shot throttle
     QTimer *m_smoothTimer = nullptr; // advanceSmoothing tick

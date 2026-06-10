@@ -196,4 +196,50 @@ inline QList<int> sortedConnectionIndices(const QList<aggregate::ConnectionAggre
     return idx;
 }
 
+// --- settings model ---------------------------------------------------------
+// A small, pure description of the runtime-toggleable settings, shared by the
+// controller (which mutates the flags) and Screen (which paints the modal).
+// Drawn from top's `f` fields screen + aptitude's Options dialog: a navigable
+// list, each row carrying a label, its current value, and a one-line help
+// string shown for the selected row.
+
+enum class Setting {
+    Theme,          // cycles through the built-in palettes
+    Gauge,          // row-spanning bandwidth gauge on/off
+    Dns,            // reverse-DNS hostname resolution on/off
+    UdpAggregate,   // collapse UDP flows per peer on/off
+    Smoothing,      // EMA rate smoothing on/off
+    Count
+};
+
+struct SettingRow {
+    QString label;
+    QString value;  // human value: theme name, "on"/"off"
+    QString help;   // aptitude-style one-line description
+};
+
+inline QString onOff(bool v)
+{
+    return v ? QStringLiteral("on") : QStringLiteral("off");
+}
+
+// Build the settings list for the modal. Order matches the Setting enum so the
+// selected index maps straight onto a Setting.
+inline QList<SettingRow> settingsRows(const QString &theme, bool gauge, bool dns,
+                                      bool udp, bool smoothing)
+{
+    return {
+        {QStringLiteral("Theme"), theme,
+         QStringLiteral("Colour palette. ←/→ or Space cycles dark / light / colourblind / mono.")},
+        {QStringLiteral("Bandwidth gauge"), onOff(gauge),
+         QStringLiteral("Row-spanning background bar scaled to the loudest flow (iftop-style).")},
+        {QStringLiteral("Resolve hostnames"), onOff(dns),
+         QStringLiteral("Reverse-DNS lookups for peer addresses (async, cached).")},
+        {QStringLiteral("Aggregate UDP by peer"), onOff(udp),
+         QStringLiteral("Collapse a peer's UDP flows into one row instead of per-port.")},
+        {QStringLiteral("Rate smoothing"), onOff(smoothing),
+         QStringLiteral("EMA-smooth the displayed rates so they ease between polls.")},
+    };
+}
+
 } // namespace qiftop::tui

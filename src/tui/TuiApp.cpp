@@ -30,6 +30,7 @@ TuiApp::TuiApp(Screen *screen,
     , m_connAgg(connAgg)
     , m_sourceLabel(std::move(sourceLabel))
 {
+    m_pollMs = std::max(1, pollMs);
     m_themes = builtinThemes();
     for (int i = 0; i < m_themes.size(); ++i) {
         if (m_themes[i].name.compare(themeName, Qt::CaseInsensitive) == 0) {
@@ -86,6 +87,11 @@ void TuiApp::doRedraw()
 
 void TuiApp::handleKey(int key)
 {
+    if (m_settingsOpen) {
+        handleSettingsKey(key);
+        return;
+    }
+
     const int nCols = static_cast<int>(columnsFor(m_view).size());
     int &scroll = (m_view == View::Interfaces) ? m_ifaceScroll : m_connScroll;
     int &sortCol = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
@@ -97,6 +103,10 @@ void TuiApp::handleKey(int key)
         if (m_screen) m_screen->shutdown();
         QCoreApplication::quit();
         return;
+    case 'S':
+    case KEY_F(2):
+        m_settingsOpen = true;
+        break;
     case '\t':
     case KEY_BTAB:
         m_view = (m_view == View::Interfaces) ? View::Connections : View::Interfaces;
@@ -108,7 +118,6 @@ void TuiApp::handleKey(int key)
         m_view = View::Connections;
         break;
     case 's':
-    case 'S':
         sortCol = (sortCol + 1) % nCols;
         break;
     case 'r':
@@ -193,8 +202,10 @@ Frame TuiApp::buildFrame()
     // scale >= the loudest row (iftop's ruler). Each row gets a [0,1]
     // fraction that Screen paints as a background fill behind the text.
     const double scale = niceScale(maxRate);
-    for (double cr : rates)
-        f.rowGauge << gaugeFraction(cr, scale);
+    if (m_gaugeEnabled) {
+        for (double cr : rates)
+            f.rowGauge << gaugeFraction(cr, scale);
+    }
 
     // Summary (top-style): aggregate throughput + the gauge scale + source.
     f.sourceLabel = QStringLiteral("\u03a3 %1\u2193 %2\u2191 \u00b7 \u2264%3 \u00b7 %4")
@@ -212,8 +223,82 @@ Frame TuiApp::buildFrame()
     f.scrollOffset = scroll;
 
     f.footer = QStringLiteral(
-        " q quit · Tab/1/2 view · s sort · r reverse · t theme · ↑↓/PgUp/PgDn scroll ");
+        " q quit · Tab/1/2 view · s sort · r reverse · t theme · S settings · ↑↓/PgUp/PgDn scroll ");
+
+    buildSettingsModal(f);
     return f;
+}
+
+void TuiApp::buildSettingsModal(Frame &f) const
+{
+    if (!m_settingsOpen)
+        return;
+    f.settings.visible  = true;
+    f.settings.title    = QStringLiteral("Settings");
+    f.settings.items    = settingsRows(m_themes.isEmpty() ? QString()
+                                                          : m_themes[m_themeIdx].name,
+                                        m_gaugeEnabled, m_dnsEnabled,
+                                        m_udpAggregate, m_smoothing);
+    f.settings.selected = m_settingsSel;
+    f.settings.footer   = QStringLiteral("↑↓ move · ←/→/Space change · S/Esc close");
+}
+
+void TuiApp::applyAggregatorSettings()
+{
+    if (!m_connAgg)
+        return;
+    m_connAgg->setUdpAggregateByPeer(m_udpAggregate);
+    m_connAgg->setRateSmoothingMs(m_smoothing ? 300 : 0);
+    m_connAgg->setHostnameResolutionEnabled(m_dnsEnabled);
+}
+
+void TuiApp::handleSettingsKey(int key)
+{
+    const int n = static_cast<int>(Setting::Count);
+    const auto change = [this] {
+        switch (static_cast<Setting>(m_settingsSel)) {
+        case Setting::Theme:
+            if (!m_themes.isEmpty()) {
+                m_themeIdx = (m_themeIdx + 1) % m_themes.size();
+                if (m_screen) m_screen->setTheme(m_themes[m_themeIdx]);
+            }
+            break;
+        case Setting::Gauge:        m_gaugeEnabled = !m_gaugeEnabled; break;
+        case Setting::Dns:          m_dnsEnabled   = !m_dnsEnabled;   break;
+        case Setting::UdpAggregate: m_udpAggregate = !m_udpAggregate; break;
+        case Setting::Smoothing:    m_smoothing    = !m_smoothing;    break;
+        case Setting::Count:        break;
+        }
+        applyAggregatorSettings();
+    };
+
+    switch (key) {
+    case 'S':
+    case 'q':
+    case 'Q':
+    case 27: // Esc
+        m_settingsOpen = false;
+        break;
+    case KEY_UP:
+        m_settingsSel = (m_settingsSel - 1 + n) % n;
+        break;
+    case KEY_DOWN:
+        m_settingsSel = (m_settingsSel + 1) % n;
+        break;
+    case KEY_LEFT:
+    case KEY_RIGHT:
+    case ' ':
+    case '\n':
+    case '\r':
+    case KEY_ENTER:
+        change();
+        break;
+    case KEY_RESIZE:
+        break;
+    default:
+        return; // ignore, no repaint
+    }
+    requestRedraw();
 }
 
 } // namespace qiftop::tui
