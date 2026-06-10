@@ -84,6 +84,7 @@ public:
     [[nodiscard]] bool showProcessColumn() const   { return m_showProcessColumn; }
     [[nodiscard]] bool showContainerColumn() const { return m_showContainerColumn; }
     [[nodiscard]] bool showContainerChainInTooltip() const { return m_showContainerChainInTooltip; }
+    [[nodiscard]] bool showGroupHeaderDetails() const { return m_showGroupHeaderDetails; }
     [[nodiscard]] int  throughputWindowSecs() const          { return m_throughputWindowSecs; }
     // EMA time constant (milliseconds) for smoothing per-connection
     // instantaneous rx/tx rates. 0 = no smoothing (raw per-tick deltas).
@@ -143,6 +144,7 @@ public:
     void setShowProcessColumn(bool v);
     void setShowContainerColumn(bool v);
     void setShowContainerChainInTooltip(bool v);
+    void setShowGroupHeaderDetails(bool v);
 
 signals:
     void changed();
@@ -179,4 +181,8 @@ private:
     bool m_showProcessColumn             = false;
     bool m_showContainerColumn           = false;
     bool m_showContainerChainInTooltip   = true;
+    // When grouping (ByInterface/ByContainer/ByProcess), show extra
+    // attribution detail inline on the group header rows (pid, user,
+    // container id, etc). On by default — it's the point of grouping.
+    bool m_showGroupHeaderDetails        = true;
 };

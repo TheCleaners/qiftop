@@ -171,7 +171,8 @@ target_include_directories(test_mainwindow_smoke PRIVATE
 
 qiftop_add_test(test_group_proxy
     test_group_proxy.cpp
-    ${CMAKE_SOURCE_DIR}/src/ui/ConnectionGroupProxy.cpp)
+    ${CMAKE_SOURCE_DIR}/src/ui/ConnectionGroupProxy.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp)
 target_link_libraries(test_group_proxy PRIVATE Qt6::Widgets)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

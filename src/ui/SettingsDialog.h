@@ -48,4 +48,5 @@ private:
     QCheckBox *m_showProcessColumnBox   = nullptr;
     QCheckBox *m_showContainerColumnBox = nullptr;
     QCheckBox *m_showChainInTooltipBox  = nullptr;
+    QCheckBox *m_showGroupHeaderDetailsBox = nullptr;
 };

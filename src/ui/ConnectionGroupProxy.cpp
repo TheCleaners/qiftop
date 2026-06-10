@@ -2,6 +2,7 @@
 
 #include "ui/ConnectionModel.h"
 #include "backend/Connection.h"
+#include "backend/PlatformInfo.h"
 #include "util/Units.h"
 
 #include <QFont>
@@ -646,6 +647,87 @@ int ConnectionGroupProxy::columnCount(const QModelIndex &) const
     return m_src ? m_src->columnCount() : 0;
 }
 
+void ConnectionGroupProxy::setShowGroupDetails(bool on)
+{
+    if (m_showGroupDetails == on) return;
+    m_showGroupDetails = on;
+    if (m_mode == ViewMode::Flat || m_groups.isEmpty())
+        return;
+    // Repaint every group header row (column 0 .. last) so the inline
+    // detail + tooltip appear/disappear immediately.
+    const int lastCol = columnCount() - 1;
+    emit dataChanged(index(0, 0), index(m_groups.size() - 1, lastCol));
+}
+
+QString ConnectionGroupProxy::groupDetailInline(const Group &g) const
+{
+    if (!m_showGroupDetails || g.srcRows.isEmpty() || !m_src)
+        return {};
+    const Connection c = m_src->index(g.srcRows.first(), 0)
+                             .data(ConnectionModel::ConnectionRole)
+                             .value<Connection>();
+    switch (m_mode) {
+    case ViewMode::ByProcess: {
+        if (c.process.pid <= 0) return {};
+        const QString user = qiftop::platform::userNameForUid(c.process.uid);
+        return user.isEmpty()
+            ? QStringLiteral("uid %1").arg(c.process.uid)
+            : QStringLiteral("%1 (uid %2)").arg(user).arg(c.process.uid);
+    }
+    case ViewMode::ByContainer: {
+        if (c.container.id.isEmpty()) return {};
+        // Label already shows runtime + name; the inline detail adds the
+        // short container id sysadmins paste into `docker inspect` etc.
+        return QStringLiteral("id %1").arg(c.container.id.left(12));
+    }
+    default:
+        return {};
+    }
+}
+
+QString ConnectionGroupProxy::groupDetailTooltip(const Group &g) const
+{
+    if (!m_showGroupDetails || g.srcRows.isEmpty() || !m_src)
+        return {};
+    const Connection c = m_src->index(g.srcRows.first(), 0)
+                             .data(ConnectionModel::ConnectionRole)
+                             .value<Connection>();
+    QStringList lines;
+    switch (m_mode) {
+    case ViewMode::ByProcess:
+        if (c.process.pid > 0) {
+            if (!c.process.comm.isEmpty())
+                lines << QStringLiteral("Process: %1").arg(c.process.comm);
+            lines << QStringLiteral("PID: %1").arg(c.process.pid);
+            const QString user = qiftop::platform::userNameForUid(c.process.uid);
+            lines << (user.isEmpty()
+                          ? QStringLiteral("User: uid %1").arg(c.process.uid)
+                          : QStringLiteral("User: %1 (uid %2)")
+                                .arg(user).arg(c.process.uid));
+        }
+        break;
+    case ViewMode::ByContainer:
+        if (!c.container.id.isEmpty() || !c.container.name.isEmpty()) {
+            if (!c.container.runtime.isEmpty())
+                lines << QStringLiteral("Runtime: %1").arg(c.container.runtime);
+            if (!c.container.name.isEmpty())
+                lines << QStringLiteral("Name: %1").arg(c.container.name);
+            if (!c.container.id.isEmpty())
+                lines << QStringLiteral("ID: %1").arg(c.container.id);
+        }
+        break;
+    case ViewMode::ByInterface:
+        lines << QStringLiteral("Interface: %1").arg(g.label);
+        break;
+    default:
+        break;
+    }
+    if (lines.isEmpty()) return {};
+    lines << QStringLiteral("%1 flow%2").arg(g.srcRows.size())
+                 .arg(g.srcRows.size() == 1 ? QString() : QStringLiteral("s"));
+    return lines.join(QLatin1Char('\n'));
+}
+
 QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int role) const
 {
     using Col = ConnectionModel::Column;
@@ -667,10 +749,15 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
             return QStringLiteral("%1  [%2]")
                 .arg(g.label).arg(g.srcRows.size());
         case Col::Flow:
-            return QStringLiteral("%1 flow%2 in “%3”")
-                .arg(g.srcRows.size())
-                .arg(g.srcRows.size() == 1 ? QStringLiteral("") : QStringLiteral("s"),
-                     g.label);
+            return groupDetailInline(g).isEmpty()
+                ? QStringLiteral("%1 flow%2 in “%3”")
+                      .arg(g.srcRows.size())
+                      .arg(g.srcRows.size() == 1 ? QStringLiteral("") : QStringLiteral("s"),
+                           g.label)
+                : QStringLiteral("%1 flow%2 in “%3”  ·  %4")
+                      .arg(g.srcRows.size())
+                      .arg(g.srcRows.size() == 1 ? QStringLiteral("") : QStringLiteral("s"),
+                           g.label, groupDetailInline(g));
         case Col::RxRate:  return util::formatByteRate(rxSum);
         case Col::TxRate:  return util::formatByteRate(txSum);
         case Col::RxTotal: return util::formatBytes(rxBytes);
@@ -697,6 +784,9 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         case Col::Container: return QString();
         case Col::ColumnCount: break;
         }
+    }
+    if (role == Qt::ToolTipRole) {
+        return groupDetailTooltip(g);
     }
     if (role == ConnectionModel::RxRateRole) return rxSum;
     if (role == ConnectionModel::TxRateRole) return txSum;

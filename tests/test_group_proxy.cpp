@@ -284,6 +284,70 @@ private slots:
         QCOMPARE(p.rowCount(), 2);          // eth0 + new wlan0 group
     }
 
+    // Group-header detail (Settings::showGroupHeaderDetails). When on,
+    // the Flow column of a group header carries inline attribution
+    // detail and a ToolTipRole multi-line breakdown; when off, neither.
+    void groupHeaderDetailInlineAndTooltip()
+    {
+        StubFlows src;
+        // Two flows of the same NAMED container so the label shows the
+        // name and the inline detail is what carries the short id.
+        Connection a = mk("eth0", "docker", "abc123def4567890", 10, "nginx");
+        a.container.name = QStringLiteral("happy_einstein");
+        Connection b = a;
+        b.process.pid = 11;
+        src.replace({a, b});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByContainer);
+        QCOMPARE(p.rowCount(), 1);
+
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+        const QModelIndex grp = p.index(0, flowCol);
+
+        // Details ON by default → label shows name, inline detail adds
+        // the short id, tooltip carries the full breakdown.
+        QVERIFY(p.showGroupDetails());
+        const QString disp = grp.data(Qt::DisplayRole).toString();
+        QVERIFY(disp.contains(QStringLiteral("happy_einstein")));
+        QVERIFY(disp.contains(QStringLiteral("abc123def456")));   // inline id
+        const QString tip = grp.data(Qt::ToolTipRole).toString();
+        QVERIFY(tip.contains(QStringLiteral("Runtime: docker")));
+        QVERIFY(tip.contains(QStringLiteral("ID: abc123def4567890")));
+
+        // Toggle OFF → inline id + tooltip gone; label (name) remains.
+        QSignalSpy changed(&p, &QAbstractItemModel::dataChanged);
+        p.setShowGroupDetails(false);
+        QVERIFY(changed.size() > 0);
+        const QModelIndex grp2 = p.index(0, flowCol);
+        const QString disp2 = grp2.data(Qt::DisplayRole).toString();
+        QVERIFY(disp2.contains(QStringLiteral("happy_einstein")));   // label kept
+        QVERIFY(!disp2.contains(QStringLiteral("abc123def456")));    // detail gone
+        QVERIFY(grp2.data(Qt::ToolTipRole).toString().isEmpty());
+    }
+
+    void groupHeaderDetailByProcessShowsUser()
+    {
+        StubFlows src;
+        Connection a = mk("eth0", "", "", 4242, "chrome");
+        a.process.uid = 0;   // root — deterministic name across hosts
+        src.replace({a});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByProcess);
+        QCOMPARE(p.rowCount(), 1);
+
+        const int flowCol = static_cast<int>(ConnectionModel::Column::Flow);
+        const QModelIndex grp = p.index(0, flowCol);
+        // uid 0 resolves to "root" on any POSIX host; the inline detail
+        // must mention it.
+        const QString disp = grp.data(Qt::DisplayRole).toString();
+        QVERIFY(disp.contains(QStringLiteral("uid 0")));
+        const QString tip = grp.data(Qt::ToolTipRole).toString();
+        QVERIFY(tip.contains(QStringLiteral("PID: 4242")));
+        QVERIFY(tip.contains(QStringLiteral("uid 0")));
+    }
+
     void switchingModesResetsModel()
     {
         StubFlows src;

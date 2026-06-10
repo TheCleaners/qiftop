@@ -46,4 +46,10 @@ namespace qiftop::platform {
 // Guaranteed: low < high, low >= 1024, high <= 65535.
 [[nodiscard]] std::pair<quint16, quint16> ephemeralPortRange();
 
+// Resolve a numeric uid to a login name (e.g. 1000 → "ines").
+// Returns an empty string when the uid has no passwd entry or the
+// platform has no user database (the caller then shows the numeric
+// uid). Cheap + cached internally; safe to call per row render.
+[[nodiscard]] QString userNameForUid(uint uid);
+
 } // namespace qiftop::platform

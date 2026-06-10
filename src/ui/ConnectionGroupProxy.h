@@ -44,6 +44,14 @@ public:
     void setViewMode(ViewMode mode);
     [[nodiscard]] ViewMode viewMode() const { return m_mode; }
 
+    // When true, group header rows carry extra attribution detail
+    // inline (pid / user for ByProcess, full container id for
+    // ByContainer) in the Flow column, plus a full multi-line
+    // ToolTipRole. Gated by Settings::showGroupHeaderDetails. Triggers
+    // a repaint of existing group rows when toggled.
+    void setShowGroupDetails(bool on);
+    [[nodiscard]] bool showGroupDetails() const { return m_showGroupDetails; }
+
     // True for the synthetic group row at index. False for flat rows
     // and for child flow rows. Used by the view (delegate selection,
     // context menu).
@@ -101,6 +109,13 @@ private:
     [[nodiscard]] QString groupKeyFor(int srcRow) const;
     [[nodiscard]] QString groupLabelFor(int srcRow, const QString &key) const;
     [[nodiscard]] QVariant aggregateData(const Group &g, int column, int role) const;
+    // Compact inline detail appended to a group header's Flow column,
+    // and the full multi-line tooltip — both derived from a
+    // representative flow of the group (all flows in a Process/Container
+    // group share the same attribution). Empty for ByInterface / when
+    // the group has no attribution.
+    [[nodiscard]] QString groupDetailInline(const Group &g) const;
+    [[nodiscard]] QString groupDetailTooltip(const Group &g) const;
     [[nodiscard]] int groupIndexForSourceRow(int srcRow) const;
     void forwardSourceDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight,
                                   const QVector<int> &roles);
@@ -138,6 +153,7 @@ private:
     QAbstractItemModel *m_src = nullptr;
     ViewMode m_mode = ViewMode::Flat;
     QList<Group> m_groups;     // empty when mode==Flat
+    bool m_showGroupDetails = true;
     // Reverse index: source row → (group index, child row in group).
     // Empty in Flat mode. Rebuilt en masse by refreshSrcIndex().
     QHash<int, QPair<int, int>> m_srcIndex;

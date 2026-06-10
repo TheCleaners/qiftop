@@ -1,6 +1,8 @@
 #include "PlatformInfo.h"
 
 #include <QFile>
+#include <QHash>
+#include <QReadWriteLock>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -8,6 +10,9 @@
 #  include <ifaddrs.h>
 #  include <netinet/in.h>
 #  include <sys/socket.h>
+#  include <sys/types.h>
+#  include <pwd.h>
+#  include <unistd.h>
 #endif
 
 namespace qiftop::platform {
@@ -84,6 +89,41 @@ std::pair<quint16, quint16> ephemeralPortRange()
     // "...portrange.last") on Darwin/FreeBSD.
 #endif
     return {kIanaEphemeralLow, kIanaEphemeralHigh};
+}
+
+QString userNameForUid(uint uid)
+{
+#if defined(Q_OS_UNIX)
+    // Small process-lifetime cache: uid→name mappings effectively never
+    // change while we run, and getpwuid_r hits NSS (potentially LDAP/SSSD)
+    // so we don't want it on every row render.
+    static QReadWriteLock lock;
+    static QHash<uint, QString> cache;
+    {
+        QReadLocker rl(&lock);
+        if (const auto it = cache.constFind(uid); it != cache.constEnd())
+            return it.value();
+    }
+
+    QString name;
+    long bufLen = ::sysconf(_SC_GETPW_R_SIZE_MAX);
+    if (bufLen <= 0) bufLen = 16384;
+    QByteArray buf(static_cast<int>(bufLen), Qt::Uninitialized);
+    struct passwd pwd{};
+    struct passwd *result = nullptr;
+    const int rc = ::getpwuid_r(static_cast<uid_t>(uid), &pwd,
+                                buf.data(), static_cast<size_t>(buf.size()),
+                                &result);
+    if (rc == 0 && result && result->pw_name)
+        name = QString::fromLocal8Bit(result->pw_name);
+
+    QWriteLocker wl(&lock);
+    cache.insert(uid, name);   // cache empty results too (avoids re-probing)
+    return name;
+#else
+    Q_UNUSED(uid);
+    return {};
+#endif
 }
 
 } // namespace qiftop::platform

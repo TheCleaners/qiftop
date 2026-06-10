@@ -283,6 +283,17 @@ SettingsDialog::SettingsDialog(Settings *settings,
     }
     displayForm->addRow(m_showChainInTooltipBox);
 
+    m_showGroupHeaderDetailsBox =
+        new QCheckBox(tr("Show extra info on grouping header rows"));
+    m_showGroupHeaderDetailsBox->setChecked(m_settings->showGroupHeaderDetails());
+    m_showGroupHeaderDetailsBox->setToolTip(tr(
+        "When grouping the Connections view by Process or Container, "
+        "show extra attribution detail inline on each group header — "
+        "the owning user (for Process) or the short container id (for "
+        "Container) — plus a full breakdown on hover. Applies only in "
+        "the grouped view modes."));
+    displayForm->addRow(m_showGroupHeaderDetailsBox);
+
     tabs->addTab(displayTab, tr("Display"));
 
     // --- DNS tab ---
@@ -361,6 +372,7 @@ void SettingsDialog::apply()
     m_settings->setShowProcessColumn(m_showProcessColumnBox->isChecked());
     m_settings->setShowContainerColumn(m_showContainerColumnBox->isChecked());
     m_settings->setShowContainerChainInTooltip(m_showChainInTooltipBox->isChecked());
+    m_settings->setShowGroupHeaderDetails(m_showGroupHeaderDetailsBox->isChecked());
     m_settings->setCloseToTray(m_closeToTrayBox->isChecked());
     m_settings->setStartOnLogin(m_startOnLoginBox->isChecked());
 }

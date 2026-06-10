@@ -30,6 +30,7 @@ constexpr auto kConnectionViewMode        = "connections/viewMode";
 constexpr auto kShowProcessColumn         = "connections/showProcessColumn";
 constexpr auto kShowContainerColumn       = "connections/showContainerColumn";
 constexpr auto kShowContainerChainInTooltip = "connections/showContainerChainInTooltip";
+constexpr auto kShowGroupHeaderDetails      = "connections/showGroupHeaderDetails";
 } // namespace
 
 Settings::Settings(QObject *parent)
@@ -97,6 +98,8 @@ void Settings::load()
     m_showContainerColumn = m_store.value(kShowContainerColumn, m_showContainerColumn).toBool();
     m_showContainerChainInTooltip = m_store.value(kShowContainerChainInTooltip,
                                                   m_showContainerChainInTooltip).toBool();
+    m_showGroupHeaderDetails = m_store.value(kShowGroupHeaderDetails,
+                                             m_showGroupHeaderDetails).toBool();
 }
 
 void Settings::store(const char *key, const QVariant &value)
@@ -337,5 +340,13 @@ void Settings::setShowContainerChainInTooltip(bool v)
     if (v == m_showContainerChainInTooltip) return;
     m_showContainerChainInTooltip = v;
     store(kShowContainerChainInTooltip, v);
+    emit changed();
+}
+
+void Settings::setShowGroupHeaderDetails(bool v)
+{
+    if (v == m_showGroupHeaderDetails) return;
+    m_showGroupHeaderDetails = v;
+    store(kShowGroupHeaderDetails, v);
     emit changed();
 }

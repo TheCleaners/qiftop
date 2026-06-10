@@ -706,6 +706,7 @@ void MainWindow::applySettingsToUi()
         // to v0.1 (no indent, no branch markers) and grouped modes
         // expose the normal tree branches.
         const auto mode = m_settings->connectionViewMode();
+        m_connGroupProxy->setShowGroupDetails(m_settings->showGroupHeaderDetails());
         m_connGroupProxy->setViewMode(mode);
         const bool flat = (mode == Settings::ConnectionViewMode::Flat);
         m_connView->setRootIsDecorated(!flat);
