@@ -151,8 +151,11 @@ Frame TuiApp::buildFrame()
     Frame f;
     f.tabs        = {QStringLiteral("Interfaces"), QStringLiteral("Connections")};
     f.activeTab   = (m_view == View::Interfaces) ? 0 : 1;
-    f.sourceLabel = m_sourceLabel;
     f.columns     = columnsFor(m_view);
+
+    QList<double> rates;       // combined rate per displayed row (for the bar)
+    double maxRate = 0.0;
+    double aggRx = 0.0, aggTx = 0.0;
 
     if (m_view == View::Interfaces) {
         f.sortCol  = m_ifaceSortCol;
@@ -163,6 +166,11 @@ Frame TuiApp::buildFrame()
         for (int i : order) {
             f.rows     << cellsForInterface(rows[i]);
             f.rowRoles << rowRoleForInterface(rows[i]);
+            const double cr = combinedRate(rows[i]);
+            rates << cr;
+            maxRate = std::max(maxRate, cr);
+            aggRx += rows[i].rxRate;
+            aggTx += rows[i].txRate;
         }
     } else {
         f.sortCol  = m_connSortCol;
@@ -173,8 +181,26 @@ Frame TuiApp::buildFrame()
         for (int i : order) {
             f.rows     << cellsForConnection(*m_connAgg, rows[i]);
             f.rowRoles << rowRoleForConnection(*m_connAgg, rows[i]);
+            const double cr = combinedRate(rows[i]);
+            rates << cr;
+            maxRate = std::max(maxRate, cr);
+            aggRx += rows[i].rxRate;
+            aggTx += rows[i].txRate;
         }
     }
+
+    // Bandwidth gauge: scale a full bar to a "nice" round value >= the loudest
+    // row (iftop's scale), then fill each row's bar cell.
+    const double scale = niceScale(maxRate);
+    f.columns[kBarColumn].title = QStringLiteral("\u2264%1").arg(util::formatByteRate(scale));
+    for (int k = 0; k < f.rows.size() && k < rates.size(); ++k)
+        f.rows[k][kBarColumn] = barString(rates[k], scale, kBarWidth);
+
+    // Aggregate throughput in the tab-line right gutter, next to the source.
+    f.sourceLabel = QStringLiteral("\u03a3 %1\u2193 %2\u2191 \u00b7 %3")
+                        .arg(util::formatByteRate(aggRx),
+                             util::formatByteRate(aggTx),
+                             m_sourceLabel);
 
     // Clamp scroll to the valid range for the current body height.
     const int body  = m_screen ? m_screen->bodyHeight() : 0;

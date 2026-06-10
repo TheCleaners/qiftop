@@ -163,11 +163,15 @@ void Screen::render(const Frame &f)
     QList<int> w(n, 0);
     int fixedSum = 0;
     for (int c = 1; c < n; ++c) {
-        int natural = cols[c].title.size();
-        for (const QStringList &row : f.rows)
-            if (c < row.size())
-                natural = std::max(natural, static_cast<int>(row[c].size()));
-        w[c] = std::min(natural, kNumColCap);
+        if (cols[c].fixedWidth > 0) {
+            w[c] = cols[c].fixedWidth;
+        } else {
+            int natural = cols[c].title.size();
+            for (const QStringList &row : f.rows)
+                if (c < row.size())
+                    natural = std::max(natural, static_cast<int>(row[c].size()));
+            w[c] = std::min(natural, kNumColCap);
+        }
         fixedSum += w[c];
     }
     w[0] = width - fixedSum - kSep * (n - 1);

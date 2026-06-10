@@ -10,6 +10,8 @@
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QHostAddress>
+#include <QSet>
 #include <QSocketNotifier>
 #include <QTimer>
 
@@ -23,6 +25,7 @@
 #include "aggregate/InterfaceAggregator.h"
 #include "backend/ConnectionMonitor.h"
 #include "backend/NetworkMonitor.h"
+#include "backend/PlatformInfo.h"
 #include "backend/dbus/DBusConnectionMonitor.h"
 #include "backend/dbus/DBusNetworkMonitor.h"
 #include "dbus/Types.h"
@@ -159,6 +162,26 @@ int main(int argc, char *argv[])
                      &ifaceAgg, &InterfaceAggregator::updateStats);
     QObject::connect(connMon.get(), &ConnectionMonitor::connectionsUpdated,
                      &connAgg, &ConnectionAggregator::updateConnections);
+
+    // Keep the connection aggregator's notion of "our own addresses" current,
+    // so direction inference + forwarded-flow detection (and therefore the
+    // colour coding) work. Seed immediately from the platform, then refresh
+    // from the live interface stats (CIDRs) as they change — like the GUI.
+    connAgg.setLocalAddresses(qiftop::platform::localAddresses());
+    const auto refreshLocalAddrs = [&ifaceAgg, &connAgg] {
+        QSet<QHostAddress> locals;
+        for (const auto &r : ifaceAgg.rows()) {
+            for (const QString &cidr : r.current.addresses) {
+                const QHostAddress a(cidr.left(cidr.indexOf(QLatin1Char('/'))));
+                if (!a.isNull())
+                    locals.insert(a);
+            }
+        }
+        connAgg.setLocalAddresses(std::move(locals));
+    };
+    QObject::connect(&ifaceAgg, &InterfaceAggregator::didReset, &app, refreshLocalAddrs);
+    QObject::connect(&ifaceAgg, &InterfaceAggregator::rowsChanged, &app,
+                     [refreshLocalAddrs](int, int) { refreshLocalAddrs(); });
 
     // --- ncurses + controller ---
     qiftop::tui::Screen screen;

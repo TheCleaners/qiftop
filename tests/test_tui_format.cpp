@@ -39,22 +39,41 @@ class TestTuiFormat : public QObject {
 private slots:
     void columnsMatchView()
     {
-        QCOMPARE(columnsFor(View::Interfaces).size(), 6);
-        QCOMPARE(columnsFor(View::Connections).size(), 5);
-        // Numeric columns are right-aligned; the first (name/flow) is not.
+        // [name/flow] [bar] [RX rate] [TX rate] [RX total] [TX total] (+Status)
+        QCOMPARE(columnsFor(View::Interfaces).size(), 7);
+        QCOMPARE(columnsFor(View::Connections).size(), 6);
+        // Column 0 (name/flow) and the bar (1) are left-aligned; rates (2..) right.
         QVERIFY(!columnsFor(View::Connections)[0].rightAlign);
-        QVERIFY(columnsFor(View::Connections)[1].rightAlign);
+        QVERIFY(!columnsFor(View::Connections)[kBarColumn].rightAlign);
+        QVERIFY(columnsFor(View::Connections)[2].rightAlign);
+        // The bar column is fixed-width.
+        QCOMPARE(columnsFor(View::Connections)[kBarColumn].fixedWidth, kBarWidth);
     }
 
     void interfaceCells()
     {
         const QStringList cells = cellsForInterface(ifaceRow(QStringLiteral("eth0"), 0, 0, true));
-        QCOMPARE(cells.size(), 6);
+        QCOMPARE(cells.size(), 7);
         QCOMPARE(cells[0], QStringLiteral("eth0"));
-        QCOMPARE(cells[5], QStringLiteral("up"));
-        // down + loopback render their own status strings.
-        QCOMPARE(cellsForInterface(ifaceRow(QStringLiteral("x"), 0, 0, false))[5],
+        QVERIFY(cells[kBarColumn].isEmpty());  // bar filled in by the caller
+        QCOMPARE(cells[6], QStringLiteral("up"));
+        QCOMPARE(cellsForInterface(ifaceRow(QStringLiteral("x"), 0, 0, false))[6],
                  QStringLiteral("down"));
+    }
+
+    void barScalesAndFills()
+    {
+        // niceScale rounds up to 1/2/5 × 10^k.
+        QCOMPARE(niceScale(0.0), 1024.0);
+        QVERIFY(niceScale(900.0) >= 900.0);
+        QVERIFY(niceScale(1.5e6) >= 1.5e6);
+        // A full-rate bar fills the width; half fills ~half; zero is blank;
+        // a tiny non-zero rate still shows at least one cell.
+        const QChar block(0x2588);
+        QCOMPARE(barString(100, 100, 10).count(block), 10);
+        QCOMPARE(barString(0, 100, 10).count(block), 0);
+        QCOMPARE(barString(50, 100, 10).count(block), 5);
+        QVERIFY(barString(1, 1e9, 10).count(block) >= 1); // non-zero floor
     }
 
     void connectionCellsRenderFlow()
@@ -72,7 +91,7 @@ private slots:
         QCOMPARE(agg.rowCount(), 1);
 
         const QStringList cells = cellsForConnection(agg, agg.rowAt(0));
-        QCOMPARE(cells.size(), 5);
+        QCOMPARE(cells.size(), 6);
         QVERIFY(cells[0].contains(QStringLiteral("TCP")));
         QVERIFY(cells[0].contains(QStringLiteral("10.0.0.1:5000")));
         QVERIFY(cells[0].contains(QStringLiteral("1.1.1.1:443")));
@@ -86,10 +105,9 @@ private slots:
             ifaceRow(QStringLiteral("b"), 90, 0),
             ifaceRow(QStringLiteral("c"), 50, 0),
         };
-        // Column 1 = RX rate, descending => b(90), c(50), a(10).
+        // Column 1 = bandwidth (combined; tx==0 so == rx rate), descending.
         const QList<int> desc = sortedInterfaceIndices(rows, 1, true);
         QCOMPARE(desc, (QList<int>{1, 2, 0}));
-        // Ascending reverses.
         const QList<int> asc = sortedInterfaceIndices(rows, 1, false);
         QCOMPARE(asc, (QList<int>{0, 2, 1}));
     }
