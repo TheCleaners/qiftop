@@ -36,6 +36,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QToolButton>
 #include <QTreeView>
 
 #include "config/Settings.h"
@@ -667,6 +668,205 @@ private slots:
         QTest::qWait(20);
         QVERIFY(banner2->isVisible());
         QVERIFY(label2->text().contains(QStringLiteral("counters")));
+    }
+
+    // ---- batch 3 (scenario audit P1/P2 fully-feasible picks) ------------
+
+    // #7 emptyStateOverlayTracksProxyRowCount. The overlay visibility is
+    // driven by the FILTER proxy's rowsInserted/Removed/modelReset/
+    // layoutChanged signals (NOT the group proxy). A filter that hides
+    // every row should resurface the overlay — that path depends on
+    // which signal invalidateFilter happens to emit, and nothing else
+    // pins it.
+    void emptyStateOverlayTracksProxyRowCount()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        // Overlay lives in the Connections tab viewport; isVisible() is
+        // false while another tab is current regardless of state.
+        w.selectConnectionsTab();
+        QTest::qWait(20);
+
+        auto *overlay = w.findChild<QLabel*>(QStringLiteral("connEmptyOverlay"));
+        auto *edit    = w.findChild<QLineEdit*>(QStringLiteral("connFilterEdit"));
+        QVERIFY(overlay && edit);
+
+        // No flows yet → overlay visible.
+        QVERIFY2(overlay->isVisible(), "overlay hidden with zero flows");
+
+        // Flows arrive → overlay hidden.
+        connMon.emitSnapshot({
+            mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+        });
+        QTest::qWait(30);
+        QVERIFY2(!overlay->isVisible(), "overlay still visible with flows present");
+
+        // A filter that matches nothing → overlay resurfaces.
+        edit->setText(QStringLiteral("port=9999"));
+        QTest::qWait(350);
+        QVERIFY2(overlay->isVisible(),
+                 "overlay did not resurface when filter hid every row");
+
+        // Clearing the filter → overlay hides again.
+        edit->clear();
+        QTest::qWait(350);
+        QVERIFY(!overlay->isVisible());
+    }
+
+    // #8 settingsChangeSyncsViewModeComboAndTreeDecorations. The
+    // EXISTING smoke test covers the combo→Settings direction; this is
+    // the reverse edge (Settings dialog → applySettingsToUi → group
+    // proxy mode + tree decorations + combo back-sync via QSignalBlocker).
+    // A missing QSignalBlocker would cause a re-entrant feedback loop.
+    void settingsChangeSyncsViewModeComboAndTreeDecorations()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *combo    = w.findChild<QComboBox*>(QStringLiteral("connViewModeCombo"));
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(combo && connView);
+
+        // Default Flat: no decoration, zero indent.
+        QCOMPARE(combo->currentIndex(),
+                 static_cast<int>(Settings::ConnectionViewMode::Flat));
+        QVERIFY(!connView->rootIsDecorated());
+        QCOMPARE(connView->indentation(), 0);
+
+        // Change mode through Settings (the dialog path) — combo must
+        // follow, tree must gain decoration + nonzero indent.
+        settings.setConnectionViewMode(Settings::ConnectionViewMode::ByInterface);
+        QTest::qWait(30);
+        QCOMPARE(combo->currentIndex(),
+                 static_cast<int>(Settings::ConnectionViewMode::ByInterface));
+        QVERIFY(connView->rootIsDecorated());
+        QVERIFY(connView->indentation() > 0);
+
+        // Back to Flat restores the v0.1 geometry.
+        settings.setConnectionViewMode(Settings::ConnectionViewMode::Flat);
+        QTest::qWait(30);
+        QCOMPARE(combo->currentIndex(),
+                 static_cast<int>(Settings::ConnectionViewMode::Flat));
+        QCOMPARE(connView->indentation(), 0);
+    }
+
+    // #9 pollIntervalChangePropagatesDesiredCadenceToBackends. A poll-
+    // interval change in Preferences must immediately push
+    // setDesiredIntervalMs to BOTH monitors (the agent-liveness hint;
+    // PERF-L2 family). The fakes already record lastDesiredMs.
+    void pollIntervalChangePropagatesDesiredCadenceToBackends()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        settings.setPollIntervalMs(250);
+        QTest::qWait(30);
+        QCOMPARE(netMon.lastDesiredMs,  250);
+        QCOMPARE(connMon.lastDesiredMs, 250);
+
+        settings.setPollIntervalMs(2000);
+        QTest::qWait(30);
+        QCOMPARE(netMon.lastDesiredMs,  2000);
+        QCOMPARE(connMon.lastDesiredMs, 2000);
+    }
+
+    // #10 ifaceFilterFromSettingsHidesRowsAndUpdatesButtonLabel. The
+    // per-interface visibility filter fans out from Settings to the
+    // proxy AND the toolbar button text. Unit tests cover the proxy
+    // alone; the Settings→button label fan-out is unwireable without
+    // anyone noticing.
+    void ifaceFilterFromSettingsHidesRowsAndUpdatesButtonLabel()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        auto *btn      = w.findChild<QToolButton*>(QStringLiteral("connIfaceFilterBtn"));
+        QVERIFY(connView && btn);
+
+        connMon.emitSnapshot({
+            mkFlow("eth0",  "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
+            mkFlow("wlan0", "10.0.0.11", 2001, "8.8.8.8", 53,  L4Proto::Udp),
+        });
+        QTest::qWait(50);
+        QCOMPARE(connView->model()->rowCount(), 2);
+        QVERIFY(btn->text().contains(QStringLiteral("All")));
+
+        // Restrict to eth0 → wlan0 row hidden, button shows the iface.
+        settings.setConnectionVisibleIfaces({QStringLiteral("eth0")});
+        QTest::qWait(30);
+        QCOMPARE(connView->model()->rowCount(), 1);
+        QCOMPARE(btn->text(), QStringLiteral("eth0"));
+
+        // Clear → all rows return, label back to "All interfaces".
+        settings.setConnectionVisibleIfaces({});
+        QTest::qWait(30);
+        QCOMPARE(connView->model()->rowCount(), 2);
+        QVERIFY(btn->text().contains(QStringLiteral("All")));
+    }
+
+    // #17 gaugeColumnsFollowThroughputSetting. The RxMax/TxMax columns
+    // are gauge-dependent (not user-controlled) — applySettingsToUi
+    // force-toggles them based on throughputGaugeEnabled. Same AND-gate
+    // family as the Process column but without the capability axis.
+    void gaugeColumnsFollowThroughputSetting()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(connView);
+        const int rxMax = static_cast<int>(ConnectionModel::Column::RxMax);
+        const int txMax = static_cast<int>(ConnectionModel::Column::TxMax);
+
+        // Default OFF → both gauge columns hidden.
+        QVERIFY(connView->isColumnHidden(rxMax));
+        QVERIFY(connView->isColumnHidden(txMax));
+
+        settings.setThroughputGaugeEnabled(true);
+        QTest::qWait(30);
+        QVERIFY2(!connView->isColumnHidden(rxMax), "RxMax hidden with gauge on");
+        QVERIFY2(!connView->isColumnHidden(txMax), "TxMax hidden with gauge on");
+
+        settings.setThroughputGaugeEnabled(false);
+        QTest::qWait(30);
+        QVERIFY(connView->isColumnHidden(rxMax));
+        QVERIFY(connView->isColumnHidden(txMax));
     }
 };
 
