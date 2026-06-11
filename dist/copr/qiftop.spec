@@ -11,7 +11,7 @@
 # clean apart from spelling false-positives (ncurses/Nagios/libqiftop/perfdata).
 
 Name:           qiftop
-Version:        0.2.4
+Version:        0.2.5
 Release:        1%{?dist}
 Summary:        Qt6 iftop-style network monitor
 
@@ -206,6 +206,9 @@ fi
 
 
 %changelog
+* Wed Jun 11 2026 qiftop maintainers <noreply@example.com> - 0.2.5-1
+- Performance: aggregator signal coalescing, single-pass netns scan,
+  delegate allocation reuse, bounded LRU route cache.
 * Wed Jun 11 2026 qiftop maintainers <noreply@example.com> - 0.2.4-1
 - Rounded-out distribution: freedesktop metainfo + launchers, shell
   completions, broader-distro packaging recipes.
