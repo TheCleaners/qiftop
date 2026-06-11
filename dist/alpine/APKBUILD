@@ -36,7 +36,9 @@ makedepends="
 	samurai
 	"
 install="$pkgname.pre-install $pkgname.post-install"
-source="$pkgname-$pkgver.tar.gz::https://github.com/TheCleaners/qiftop/archive/refs/tags/v$pkgver.tar.gz"
+source="$pkgname-$pkgver.tar.gz::https://github.com/TheCleaners/qiftop/archive/refs/tags/v$pkgver.tar.gz
+	qiftop-agent.openrc
+	"
 builddir="$srcdir/$pkgname-$pkgver"
 
 build() {
@@ -60,6 +62,10 @@ package() {
 		mv "$pkgdir"/lib/systemd/system/* "$pkgdir/usr/lib/systemd/system/"
 		rmdir "$pkgdir/lib/systemd/system" "$pkgdir/lib/systemd" "$pkgdir/lib" 2>/dev/null || true
 	fi
+
+	# Native OpenRC service: loads the conntrack shim + supervises the agent.
+	# See the script header; enable with `rc-update add qiftop-agent`.
+	install -Dm755 "$srcdir/qiftop-agent.openrc" "$pkgdir/etc/init.d/qiftop-agent"
 }
 
 # Fill this with the release tarball checksum when publishing to Alpine/aports.

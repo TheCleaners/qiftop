@@ -25,8 +25,12 @@ fi
 
 cat >&2 <<'MSG'
 qiftop: qiftop-agent DBus access is restricted to root and netdev members.
-Alpine uses OpenRC, so the packaged systemd unit is not enabled or used.
-A native OpenRC service for qiftop-agent is not shipped yet.
+Alpine uses OpenRC, so the packaged systemd unit is inert. The agent is
+D-Bus-activated on demand, but for full functionality (the nftables conntrack
+shim for IPv6 flow visibility + a supervised, auto-restarting agent) enable the
+shipped OpenRC service:
+    rc-update add qiftop-agent
+    rc-service qiftop-agent start
 MSG
 
 exit 0
