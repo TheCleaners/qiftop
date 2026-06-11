@@ -21,6 +21,33 @@
 namespace util {
 
 namespace {
+
+// Portable peer-uid lookup over a connected AF_LOCAL socket. Linux exposes
+// this via SO_PEERCRED (struct ucred); the BSDs and macOS via getpeereid(3).
+// Returns true and sets *uid on success. Only the uid is needed by the
+// handoff credential gate (the pid is not used).
+bool peerUid(int fd, uid_t *uid)
+{
+    if (fd < 0)
+        return false;
+#if defined(__linux__)
+    struct ucred cred{};
+    socklen_t len = sizeof(cred);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0)
+        return false;
+    *uid = cred.uid;
+    return true;
+#else
+    // getpeereid() is available on NetBSD, FreeBSD, OpenBSD, DragonFly, macOS.
+    uid_t euid = 0;
+    gid_t egid = 0;
+    if (getpeereid(fd, &euid, &egid) != 0)
+        return false;
+    *uid = euid;
+    return true;
+#endif
+}
+
 // Generate 256 bits of cryptographic-grade randomness rendered as 64 hex
 // chars. QRandomGenerator::system() is the OS CSPRNG (getrandom / /dev/urandom
 // on Linux), which is what we want — we are NOT looking for reproducibility.
@@ -178,17 +205,16 @@ void HandoffServer::handleNewConnection()
         // before they even get a chance to send HELLO. This is defence in
         // depth — UserAccessOption already 0600s the socket — but cheap.
         const qintptr fd = sock->socketDescriptor();
-        struct ucred cred{};
-        socklen_t len = sizeof(cred);
-        if (fd < 0 || getsockopt(int(fd), SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
-            qCWarning(lcVerbose) << "handoff: SO_PEERCRED failed; rejecting peer";
+        uid_t peer = 0;
+        if (!peerUid(int(fd), &peer)) {
+            qCWarning(lcVerbose) << "handoff: peer-credential lookup failed; rejecting peer";
             sock->disconnectFromServer();
             sock->deleteLater();
             continue;
         }
-        if (cred.uid != m_expectedChildUid && cred.uid != 0) {
+        if (peer != m_expectedChildUid && peer != 0) {
             qCWarning(lcVerbose).noquote()
-                << "handoff: rejecting peer uid" << cred.uid
+                << "handoff: rejecting peer uid" << peer
                 << "(expected" << m_expectedChildUid << "or 0)";
             sock->disconnectFromServer();
             sock->deleteLater();

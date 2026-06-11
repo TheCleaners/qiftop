@@ -16,6 +16,29 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network DBus)
 
+# --- Platform family detection ----------------------------------------------
+# QIFTOP_PLATFORM is the backend family: "linux", "bsd", or "" (unsupported).
+# The BSD family (NetBSD/FreeBSD/OpenBSD/DragonFly) shares one getifaddrs(3)
+# backend (src/backend/bsd); only future per-flow capture diverges.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(QIFTOP_PLATFORM "linux")
+elseif(CMAKE_SYSTEM_NAME MATCHES "NetBSD|FreeBSD|OpenBSD|DragonFly")
+    set(QIFTOP_PLATFORM "bsd")
+else()
+    set(QIFTOP_PLATFORM "")
+endif()
+
+# Backend target + compile define for the detected family, reused by every
+# frontend that links a backend directly (the GUI/agent get them transitively
+# via libqiftop's PUBLIC link, but nqiftop names the backend explicitly).
+if(QIFTOP_PLATFORM STREQUAL "linux")
+    set(QIFTOP_BACKEND_TARGET backend_linux)
+    set(QIFTOP_BACKEND_DEFINE BACKEND_LINUX)
+elseif(QIFTOP_PLATFORM STREQUAL "bsd")
+    set(QIFTOP_BACKEND_TARGET backend_bsd)
+    set(QIFTOP_BACKEND_DEFINE BACKEND_BSD)
+endif()
+
 # --- Per-flow process / container attribution (v0.2+) -----------------------
 # Three independent compile-time toggles. Each gates a layer of the
 # ProcessResolver pipeline; absent flags mean the corresponding source
@@ -57,8 +80,10 @@ endfunction()
 
 # --- Shared DBus type marshalling (used by both client and agent) -----------
 # --- Platform backend (static; absorbed into libqiftop below) ---------------
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(QIFTOP_PLATFORM STREQUAL "linux")
     add_subdirectory(src/backend/linux)
+elseif(QIFTOP_PLATFORM STREQUAL "bsd")
+    add_subdirectory(src/backend/bsd)
 else()
     message(FATAL_ERROR "No backend available for platform: ${CMAKE_SYSTEM_NAME}")
 endif()
@@ -99,9 +124,12 @@ set_target_properties(qiftoplib PROPERTIES
     SOVERSION 0)
 target_include_directories(qiftoplib PUBLIC src)
 target_link_libraries(qiftoplib PUBLIC Qt6::Core Qt6::Network Qt6::DBus)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(QIFTOP_PLATFORM STREQUAL "linux")
     target_link_libraries(qiftoplib PUBLIC backend_linux)
     target_compile_definitions(qiftoplib PUBLIC BACKEND_LINUX)
+elseif(QIFTOP_PLATFORM STREQUAL "bsd")
+    target_link_libraries(qiftoplib PUBLIC backend_bsd)
+    target_compile_definitions(qiftoplib PUBLIC BACKEND_BSD)
 endif()
 qiftop_apply_attribution_defs(qiftoplib)
 
@@ -142,27 +170,40 @@ target_compile_definitions(qiftop PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
 # --- Privileged agent (qiftop-agent) ----------------------------------------
 # Agent-specific TUs only; everything shared (monitors, resolver factory,
 # backend, DTO marshalling, logging) comes in via libqiftop.
-add_executable(qiftop-agent
-    src/agent/main.cpp
-    src/agent/Application.cpp
-    src/agent/Config.cpp
-    src/agent/InterfacesService.cpp
-    src/agent/ConnectionsService.cpp
-    src/agent/Attribution.cpp
-    src/agent/IdleManager.cpp
-)
-target_include_directories(qiftop-agent PRIVATE src)
-target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qiftoplib)
-target_compile_definitions(qiftop-agent PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
-qiftop_apply_attribution_defs(qiftop-agent)
+#
+# Linux-only for now: the agent's attribution layer (Attribution.cpp pulls in
+# backend/linux/ProcSnapshot.h, ConnectionsService uses ProcDetails) and its
+# main() hard-require a Linux capture backend. A BSD agent would need a
+# pf/npf flow source and a BSD-native process-attribution path first; the
+# client side (libqiftop, GUI, TUI, monitoring plugin) is already portable.
+if(QIFTOP_PLATFORM STREQUAL "linux")
+    add_executable(qiftop-agent
+        src/agent/main.cpp
+        src/agent/Application.cpp
+        src/agent/Config.cpp
+        src/agent/InterfacesService.cpp
+        src/agent/ConnectionsService.cpp
+        src/agent/Attribution.cpp
+        src/agent/IdleManager.cpp
+    )
+    target_include_directories(qiftop-agent PRIVATE src)
+    target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qiftoplib)
+    target_compile_definitions(qiftop-agent PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
+    qiftop_apply_attribution_defs(qiftop-agent)
+endif()
 
 # --- ncurses TUI (nqiftop) --------------------------------------------------
 # Headless frontend built entirely on libqiftop (no Qt Widgets). Needs
 # ncursesw (wide chars for UTF-8 arrows) and, like the GUI, the platform
 # backend for the in-process fallback when no agent is reachable.
 option(QIFTOP_BUILD_TUI "Build the ncurses nqiftop frontend" ON)
-if(QIFTOP_BUILD_TUI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(CURSES_NEED_WIDE TRUE)
+if(QIFTOP_BUILD_TUI AND QIFTOP_PLATFORM)
+    # The BSD base systems ship a wide-capable curses that is NOT named
+    # ncursesw, so FindCurses' CURSES_NEED_WIDE probe misses it. Use plain
+    # base curses there; everywhere else require the wide ncursesw build.
+    if(NOT QIFTOP_PLATFORM STREQUAL "bsd")
+        set(CURSES_NEED_WIDE TRUE)
+    endif()
     find_package(Curses)
     if(CURSES_FOUND)
         add_executable(nqiftop
@@ -170,9 +211,9 @@ if(QIFTOP_BUILD_TUI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
             src/tui/TuiApp.cpp
             src/tui/Screen.cpp)
         target_include_directories(nqiftop PRIVATE src ${CURSES_INCLUDE_DIRS})
-        target_link_libraries(nqiftop PRIVATE qiftoplib backend_linux ${CURSES_LIBRARIES})
+        target_link_libraries(nqiftop PRIVATE qiftoplib ${QIFTOP_BACKEND_TARGET} ${CURSES_LIBRARIES})
         target_compile_definitions(nqiftop PRIVATE
-            BACKEND_LINUX QIFTOP_VERSION="${PROJECT_VERSION}")
+            ${QIFTOP_BACKEND_DEFINE} QIFTOP_VERSION="${PROJECT_VERSION}")
         qiftop_apply_attribution_defs(nqiftop)
     else()
         message(WARNING "ncursesw not found — nqiftop will not be built "
@@ -303,9 +344,12 @@ install(TARGETS qiftop
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         COMPONENT qiftop)
 
-install(TARGETS qiftop-agent
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-        COMPONENT qiftop-agent)
+# qiftop-agent is Linux-only for now (see the agent target guard above).
+if(TARGET qiftop-agent)
+    install(TARGETS qiftop-agent
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            COMPONENT qiftop-agent)
+endif()
 
 # nqiftop is conditional (QIFTOP_BUILD_TUI + ncursesw present).
 if(TARGET nqiftop)
@@ -716,7 +760,7 @@ cpack_add_component(check-qiftop
 # no file-level DEPENDS on source files, no reconfigure churn.
 option(QIFTOP_AUTO_PACKAGE
     "Run cpack -G DEB automatically after each build" ON)
-if(QIFTOP_AUTO_PACKAGE)
+if(QIFTOP_AUTO_PACKAGE AND TARGET qiftop-agent)
     add_custom_command(TARGET qiftop-agent POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E echo "[qiftop] regenerating .deb packages"
         COMMAND ${CMAKE_CPACK_COMMAND} -G DEB

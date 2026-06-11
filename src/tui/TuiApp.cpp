@@ -17,7 +17,7 @@
 #include <limits>
 
 // ncurses last (KEY_* constants); after Qt to avoid macro clashes.
-#include <ncurses.h>
+#include "tui/Curses.h"
 
 namespace qiftop::tui {
 

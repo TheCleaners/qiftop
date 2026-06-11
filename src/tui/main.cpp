@@ -40,8 +40,13 @@
 #include "backend/linux/NetlinkMonitor.h"
 #endif
 
+#ifdef BACKEND_BSD
+#include "backend/bsd/BsdConnectionMonitor.h"
+#include "backend/bsd/BsdNetworkMonitor.h"
+#endif
+
 // ncurses last (ERR, resizeterm) — after Qt to avoid macro clashes.
-#include <ncurses.h>
+#include "tui/Curses.h"
 
 #ifndef QIFTOP_VERSION
 #define QIFTOP_VERSION "0.0-dev"
@@ -157,6 +162,10 @@ int main(int argc, char *argv[])
 #ifdef BACKEND_LINUX
         netMon  = std::make_unique<NetlinkMonitor>();
         connMon = std::make_unique<ConntrackMonitor>();
+        sourceLabel = QStringLiteral("in-process");
+#elif defined(BACKEND_BSD)
+        netMon  = std::make_unique<qiftop::backend::bsd::BsdNetworkMonitor>();
+        connMon = std::make_unique<qiftop::backend::bsd::BsdConnectionMonitor>();
         sourceLabel = QStringLiteral("in-process");
 #else
         std::fprintf(stderr, "nqiftop: no capture backend on this platform\n");

@@ -5,7 +5,7 @@
 
 // ncurses last: it defines lower-case macros (erase, move, refresh, timeout…)
 // that would clash with Qt/STL identifiers if included before them.
-#include <ncurses.h>
+#include "tui/Curses.h"
 
 namespace qiftop::tui {
 
