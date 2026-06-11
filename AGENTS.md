@@ -9,18 +9,22 @@ section in the same commit.
 
 ## 1. What is qiftop?
 
-`qiftop` is a Qt 6 iftop-style Linux network monitor. It ships as two
-Debian packages built from this single tree:
+`qiftop` is a Qt 6 iftop-style Linux network monitor. This tree builds
+several component packages:
 
-| Package        | Binary           | Privilege               | Talks to                                     |
-|----------------|------------------|-------------------------|----------------------------------------------|
-| `qiftop`       | `qiftop`         | Unprivileged GUI client | `qiftop-agent` over DBus (system or session) |
-| `qiftop-agent` | `qiftop-agent`   | `CAP_NET_ADMIN` daemon  | Linux kernel (libnl-3, libnetfilter_conntrack) |
+| Package(s)                         | Binary / content          | Privilege               | Talks to                                     |
+|------------------------------------|---------------------------|-------------------------|----------------------------------------------|
+| `qiftop`                           | Qt Widgets GUI            | Unprivileged GUI client | `qiftop-agent` over DBus (system or session) |
+| `nqiftop`                          | ncurses TUI               | Unprivileged TUI client | `qiftop-agent` over DBus (system or session) |
+| `qiftop-agent`                     | `qiftop-agent` daemon     | `CAP_NET_ADMIN` daemon  | Linux kernel (libnl-3, libnetfilter_conntrack) |
+| `libqiftop0` / `qiftop-libs`       | `libqiftop.so.0` runtime  | none                    | DBus client + data/format helpers            |
+| `libqiftop-dev` / `qiftop-devel`   | headers, CMake, pkg-config | none                   | build-time API for libqiftop consumers       |
 
-The agent is the only component that touches the kernel. The GUI is a pure
-DBus consumer (with optional self-elevation as a fallback when the agent
-isn't installed). DNS resolution and any other "soft" enrichment happens
-strictly client-side.
+In the normal packaged path, the agent is the component that touches the
+kernel; GUI/TUI and example consumers stream from it over DBus. The GUI
+retains the self-elevation fallback, and the TUI can use in-process capture
+when run privileged, for machines where the agent isn't installed. DNS
+resolution and any other "soft" enrichment happens strictly client-side.
 
 ---
 
@@ -36,6 +40,9 @@ src/
 │   ├── ConnectionsService.{h,cpp}  # /.../Connections — GetProcessDetails RPC, snapshot cap
 │   ├── Attribution.{h,cpp}  # pure helper: enrich Connection list via ProcessResolver
 │   └── IdleManager.{h,cpp}   # adaptive polling cadence + per-client hints
+├── aggregate/                # libqiftop row/rate aggregators (plain QObject)
+│   ├── InterfaceAggregator.{h,cpp}   # per-interface rates + sorted rows
+│   └── ConnectionAggregator.{h,cpp}  # flow rates, EMA/tween, DNS, UDP peer aggregation
 ├── backend/                  # backend interfaces + platform impls
 │   ├── NetworkMonitor.{h,cpp}      # abstract: per-interface stats
 │   ├── ConnectionMonitor.{h,cpp}   # abstract: per-flow stats
@@ -53,18 +60,29 @@ src/
 │   │   ├── NetnsScanner.{h,cpp}                            # per-netns socket dump (setns)
 │   │   ├── ProcDetails.{h,cpp}                             # on-demand /proc/<pid> reads
 │   │   └── ProcSnapshot.h                                  # /proc/<pid>/stat starttime parser
-│   └── dbus/                       # client-side DBus proxies (used by GUI)
-│       ├── DBusNetworkMonitor.{h,cpp}
-│       └── DBusConnectionMonitor.{h,cpp}
+│   ├── dbus/                       # libqiftop DBus source proxies for consumers
+│   │   ├── DBusNetworkMonitor.{h,cpp}
+│   │   └── DBusConnectionMonitor.{h,cpp}
+│   └── null/NullProcessResolver.h  # no-op resolver fallback
 ├── config/Settings.{h,cpp}   # QSettings-backed app prefs (Qt6::Core-only), emits changed()
 ├── dbus/Types.{h,cpp}        # DTOs + Qt marshalling for the wire format
 ├── dns/                      # client-side async DNS (never in the agent)
 │   ├── DnsResolver.{h,cpp}         # abstract async resolver
 │   └── QtDnsResolver.{h,cpp}       # QHostInfo-backed, LRU-cached
+├── tui/                      # ncurses frontend (nqiftop), built on libqiftop
+│   ├── main.cpp, TuiApp.{h,cpp}
+│   └── Screen.{h,cpp}, TuiFormat.h, TuiTheme.h, Expansion.h
 ├── ui/                       # MainWindow, models, delegates, tray (Qt Widgets)
 ├── util/                     # Logging, Units, Exporter, ConnectionFilter, Autostart,
 │                             #   PrivilegeEscalator, HandoffServer/Client (legacy elevation)
 └── main.cpp                  # GUI entry point
+
+examples/
+├── ndjson-stream/            # interface snapshots as NDJSON
+├── ndjson-connections/       # flow snapshots as NDJSON
+├── prometheus-exporter/      # /metrics endpoint over libqiftop aggregators
+├── snapshot-export/          # one-shot CSV/JSON export
+└── top-talkers/              # headless iftop -t-style top-N printer
 
 dist/
 ├── conf/agent.conf           # ships to /etc/qiftop/agent.conf (Debian conffile)
@@ -85,12 +103,15 @@ dist/
    self-elevated, the platform monitor).
 4. **`dbus/Types.h` is the wire contract.** Changing it is a breaking change
    for every installed client; bump a version or add a new method.
-5. **`util/`, `dbus/`, and `backend/` (excluding `backend/dbus/` which is
-   client-side) must not include from `ui/` or depend on Qt Widgets.**
-   These directories — plus the pure-logic headers under `ui/` like
-   `util/ConnectionHeuristics.h` — are the future `libqiftop` material
-   (see §10). Anything pulling in `QWidget`, `QAbstract*Model`,
-   `QSortFilterProxyModel`, or similar belongs in `ui/`.
+5. **`aggregate/`, `util/`, `dbus/`, `config/`, `dns/`, and `backend/`
+   (including `backend/dbus/` client proxies, excluding `backend/linux/`
+   from the installed headers) must not include from `ui/` or depend on
+   Qt Widgets.** These directories form the Widgets-free `libqiftop`
+   public surface (Qt Core/Network/DBus). Anything pulling in `QWidget`,
+   `QAbstract*Model`, `QSortFilterProxyModel`, or similar belongs in
+   `ui/`. Keep pure helpers such as `util/ConnectionHeuristics.h` free of
+   Network/DBus includes too so a future `libqiftop-core` split stays
+   mechanical.
 6. **No platform headers outside `backend/<os>/` or `backend/PlatformInfo.cpp`.**
    `<linux/*>`, `<sys/un.h>`, `<netinet/*>`, `<ifaddrs.h>`, `<windows.h>`,
    `<sys/sysctl.h>` etc. live in the platform subdirectory's translation
@@ -100,24 +121,38 @@ dist/
    any Qt 6 target. See `docs/PORTABILITY.md` for the full survey of
    what each target OS would need.
 
-### Future direction (long-term)
+### libqiftop and future direction
 
-The current binary split (`qiftop` GUI + `qiftop-agent` daemon) is
-expected to grow a third component: **`libqiftop`**, a Qt6::Core-only
-shared library carrying the DTOs, aggregation/EMA helpers, filter
-mini-language, and unit formatters. Planned consumers beyond the Qt
-GUI: a Prometheus-style metrics exporter, an alerting daemon, and
-possibly an ncurses frontend. This is **not v0.1 work**, but two
-things follow now:
+The third component now exists: **`libqiftop`** is the Widgets-free shared
+data facility (`OUTPUT_NAME qiftop`, SONAME `libqiftop.so.0`) used by the
+GUI, the `nqiftop` TUI, the agent, and standalone consumers. Its public
+surface is the DBus wire DTOs, DBus client proxies, abstract monitors,
+`InterfaceAggregator` / `ConnectionAggregator`, `Settings`, DNS helpers,
+the filter mini-language, IEC unit formatters, and JSON/CSV exporter. It
+installs CMake and pkg-config metadata (`find_package(qiftop)` →
+`qiftop::qiftop`) and is packaged as `libqiftop0` / `libqiftop-dev`
+on Debian and `qiftop-libs` / `qiftop-devel` on RPM distros. See
+[`docs/LIBQIFTOP.md`](docs/LIBQIFTOP.md) for the authoritative consumer
+guide.
 
-* The DBus contract is effectively a public ABI for those future
-  consumers — treat DTO breakage as a multi-frontend cost, not just
-  a GUI cost.
-* Resist any change that tightens Widgets coupling in `util/`,
-  `dbus/`, `backend/`, or the pure-logic headers under `ui/`. If you
-  catch yourself reaching for `QAbstractItemModel` in a utility,
-  that's a smell — the model should wrap a plain `QObject`
-  aggregator, not be the aggregator.
+Shipped example consumers live under `examples/`: `ndjson-stream`,
+`ndjson-connections`, `prometheus-exporter`, `snapshot-export`, and
+`top-talkers`. They are standalone `find_package(qiftop)` projects and
+should remain thin source → aggregator → serialise examples, not forks of
+GUI logic.
+
+The v0.3 alerting direction is designed but not built as a new full stack:
+prefer integration-first alerting (the Prometheus/OpenMetrics exporter +
+Prometheus/Alertmanager; a planned Nagios check; and, only where useful, a
+thin `qiftop-alertd` that reuses the existing `ConnectionFilter` grammar).
+The implications stay the same:
+
+* The DBus contract is effectively a public ABI for all consumers — treat
+  DTO breakage as a multi-frontend cost, not just a GUI cost.
+* Resist any change that tightens Widgets coupling in libqiftop-facing code.
+  If you catch yourself reaching for `QAbstractItemModel` in a utility,
+  that's a smell — the model should wrap a plain `QObject` aggregator, not
+  be the aggregator.
 
 ---
 
@@ -133,7 +168,7 @@ cmake --build build -j$(nproc)
 # Run the GUI
 ./build/qiftop
 
-# Build both .debs
+# Build component .debs
 cd build && cpack -G DEB
 ```
 
@@ -500,6 +535,10 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_direction`           | `inferDirection` (ephemeral-port + local-end fallback)            |
 | `test_forwarded`           | `isForwardedFlow` heuristic                                       |
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
+| `test_interface_aggregator` | `InterfaceAggregator` row identity, sorted snapshots, and per-interface rate computation without Qt model/view. |
+| `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, and copy helpers. |
+| `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. |
+| `test_tui_theme`           | Built-in `nqiftop` themes, case-insensitive lookup, fallback, and direction colour/attribute separation. |
 | `test_settings_migration`  | `Settings` legacy-key migration logic; chip-colour + v0.2 attribution view settings (view mode, process/container column toggles, chain-in-tooltip) round-trip + out-of-range view-mode clamp |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
 | `test_exporter`            | JSON quint64-as-string, qint64 numeric, CSV formula-injection     |
@@ -515,6 +554,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
 | `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
+| `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. |
 | `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). Uses a tiny stub source model — no real ConnectionModel needed. |
 | `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. |
 | `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
@@ -922,9 +962,14 @@ can be dropped with `vagrant destroy default`.
 
 ## 8. Release / versioning
 
-* `project(... VERSION 0.2)` in `CMakeLists.txt` is the single source of
-  truth. Both .debs, `CPACK_PACKAGE_VERSION`, and the binaries' runtime
-  `--version` (via the `QIFTOP_VERSION` compile definition) derive from it.
+* `project(qiftop VERSION ...)` in `CMakeLists.txt` is the single source of
+  truth. Component package versions, `CPACK_PACKAGE_VERSION`, and the
+  binaries' runtime `--version` (via the `QIFTOP_VERSION` compile definition)
+  derive from it.
+  CPack emits one package per component: `qiftop`, `qiftop-agent`,
+  `nqiftop` when built, and the libqiftop runtime/development packages
+  (`libqiftop0` / `libqiftop-dev` for DEB, `qiftop-libs` /
+  `qiftop-devel` for RPM).
 * The DBus interface name (`org.qiftop.NetworkAgent1`) carries the
   contract version. **If you make a breaking change to a DTO or to a
   method signature, bump to `NetworkAgent2` and keep the old one alive

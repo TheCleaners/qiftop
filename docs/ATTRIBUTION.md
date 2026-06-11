@@ -37,11 +37,11 @@ For every observed flow we want to emit:
 | Field              | Source                                            |
 |--------------------|---------------------------------------------------|
 | `pid`              | sock_diag inode → `/proc/<pid>/fd/*` reverse-walk |
-| `comm` / `exe`     | `/proc/<pid>/{comm,exe}`                          |
-| `uid`              | sock_diag `idiag_uid`                             |
+| `comm` / `uid`     | `/proc/<pid>/status`                              |
+| `cmdline` / `exe`  | `/proc/<pid>/{cmdline,exe}`                       |
 | `container.runtime`| classify `/proc/<pid>/cgroup` line                |
-| `container.id`     | the 64-hex blob in the cgroup path                |
-| `container.name`   | runtime-specific lookup (often skipped — costly)  |
+| `container.id`     | short hex ID, human name, or `unit:<name>` from the cgroup path |
+| `container.name`   | reserved; currently empty (no CLI/API lookup in the hot path) |
 
 Three properties matter:
 
@@ -52,7 +52,7 @@ Three properties matter:
    process's `starttime` jiffies at enrollment and re-check at lookup;
    a mismatch means the cache is poisoned and we drop the answer
    rather than misattribute (`ProcSnapshot::pidStartTime`,
-   `SockDiagResolver.cpp:147`).
+   plus the resolver starttime guards).
 3. **Cheap.** sock_diag dumps are the cheapest API the kernel exposes
    for "list every socket"; we rebuild caches at most once per agent
    tick (~1 Hz).
@@ -92,7 +92,31 @@ Three properties matter:
 The split into independent resolvers behind a `CompositeResolver` is
 deliberate: each can be unit-tested in isolation, each declares its
 own `capabilities()`, and they fail independently (no `CAP_SYS_ADMIN`
-just disables `NetnsScanner` — the rest keep working).
+just makes `NetnsScanner` skip namespaces it cannot enter — the rest
+keep working).
+
+The factory order is deliberate and currently fixed:
+`SockDiagResolver` → `CgroupClassifier` → `NetnsScanner`, gated by the
+compile-time `QIFTOP_ENABLE_*` switches (default ON on Linux) and each
+resolver's startup probe. `CompositeResolver` asks children in that
+order and returns the first useful answer for each method; e.g.
+`resolvePid()` uses host sock_diag first, then cross-netns results,
+while `resolveContainerForPid()` is supplied by the cgroup classifier.
+
+Capability tokens come from the resolvers whose startup probes
+succeeded:
+
+| Resolver | Tokens |
+|----------|--------|
+| `SockDiagResolver` | `process-attribution` |
+| `CgroupClassifier` | `container-attribution`, `container-chain` |
+| `NetnsScanner` | `netns-scan` |
+
+`InterfacesService` also mirrors these into wire-level UI gates:
+`process-attribution-wire`, `container-attribution-wire`, and
+`container-chain-wire` (the last requires both `container-attribution`
+and `container-chain`). `netns-scan` means the worker started; individual
+namespace entries can still be skipped later if `setns()` is denied.
 
 ---
 
@@ -107,9 +131,11 @@ This is the modern replacement for parsing `/proc/net/tcp`. It is:
 * **Privileged for cross-user lookups.** Unprivileged callers get
   their own sockets; full visibility needs `CAP_NET_ADMIN` (or root).
 
-What it returns per socket: the 4-tuple, the inet UID, and crucially
-the **kernel inode of the socket** (`idiag_inode`). The inode is the
-join key for the next step.
+What qiftop uses from each socket: the 4-tuple and, crucially, the
+**kernel inode of the socket** (`idiag_inode`). The inode is the join
+key for the next step. sock_diag also exposes an inet UID, but qiftop
+currently reads UID next to `comm` from `/proc/<pid>/status` after the
+inode→pid join.
 
 What it does **not** return: the owning PID. Linux does not maintain
 socket→pid in-kernel because sockets are fds (multiple processes can
@@ -124,13 +150,43 @@ Lessons:
 
 * `QDir::Files` filters by `S_ISREG` of the symlink target, which an
   unresolved `socket:[…]` link is not. Use `QDir::System` instead
-  (`SockDiagResolver.cpp:118`).
+  (or the current raw `readdir`/`readlink` walk).
 * If a PID dies between starttime read and fd walk, just drop it;
-  don't propagate the error (`SockDiagResolver.cpp:65`).
+  don't propagate the error.
 * **Snapshot the starttime at enrollment**, store it next to the pid,
   re-read at lookup time. If they differ, the kernel reused the pid
   for a fresh process and your cache is lying — return `nullopt`,
   don't return the wrong cmdline.
+
+### Socket-key matching: 4-tuple first, local 2-tuple fallback
+
+The socket dump records each socket under two lookup keys:
+
+1. the full key: `(proto, local-address, local-port,
+   remote-address, remote-port)`;
+2. a tagged local-only key: `(proto, local-address, local-port)`.
+
+`SockDiagResolver::resolvePid()` then tries, in order:
+
+1. exact full 4-tuple — connected UDP and established TCP;
+2. exact local 2-tuple — unconnected UDP sockets and TCP listeners
+   bound to one address;
+3. wildcard local 2-tuple — sockets bound to `0.0.0.0:<port>` or
+   `::<port>`.
+
+This matters because common server sockets do **not** carry the remote
+peer in sock_diag. An unconnected UDP socket (the usual `recvfrom()`
+service shape) and a TCP listener both report `idiag_dst` as
+`0.0.0.0:0` / `:::0`, while conntrack rows contain the real peer. A
+4-tuple-only join therefore missed those flows entirely. Indexing the
+local-only key and falling back through exact-local then wildcard-local
+is what made UDP services and listener-side TCP attribution work; on a
+busy host this raised overall flow attribution from roughly 17% to 77%.
+
+The full key is still tried first so connected sockets keep their
+precise peer identity. The local-only key lives in a distinct tagged
+namespace (`sockdiag::makeLocalKey`) so it cannot collide with a full
+4-tuple cache entry.
 
 ---
 
@@ -149,35 +205,36 @@ The file format trips up almost every implementation:
 ...
 ```
 
-`extractPath()` (`CgroupParse.h:24`) handles both: prefer the v2 line
+`extractPath()` handles both: prefer the v2 line
 (`0::/path`); fall back to any v1 line if v2 isn't present. **Every
 modern Linux has v2**; the v1 fallback exists for old RHEL 7-era
 hosts where qiftop might be installed for portability.
 
 ### The runtime regex cookbook
 
-We classify the path against a table of regexes (`classifyPath`,
-`CgroupParse.h:60`). The patterns matter more than they look — each
+We classify the path against a table of regexes (`classifyPath` /
+`classifyPathChain`). The patterns matter more than they look — each
 one was discovered the hard way:
 
 | Runtime    | Pattern (real example)                                                | Notes |
 |------------|------------------------------------------------------------------------|-------|
 | docker     | `/system.slice/docker-<64hex>.scope` <br> `/docker/<64hex>`            | Both shapes exist; systemd cgroup driver vs cgroupfs driver. |
-| containerd | `cri-containerd-<64hex>.scope`                                         | k8s-on-containerd. |
-| cri-o      | `/kubepods.slice/.../crio-<64hex>.scope`                               | The `(?:^\|/)` prefix is required — without it `pkrio-…` would match. |
-| kubernetes | `kubepods[./].*?pod<32-72hex_underscores>`                             | Pod-level fallback when no runtime-specific scope is present. Underscores in the class because systemd-escaped UIDs are `665b0949_7b83_…`, NOT dashes. |
-| podman     | `libpod-<64hex>.scope`                                                 | Same shape rootful or rootless; differs by parent slice (`machine.slice` vs `user.slice/.../user@N.service/user.slice/`). |
-| lxd        | `/system.slice/lxd-<name>.service/lxc.payload`                         | Match the `.service` segment; tested before generic systemd unit so LXD wins. |
+| containerd | `cri-containerd-<64hex>.scope` <br> `.../pod<uid>/<64hex>`             | k8s-on-containerd. The bare 64-hex cgroupfs leaf only counts when it immediately follows a kubernetes pod segment. |
+| cri-o      | `crio-<64hex>.scope` <br> `.../pod<uid>/<64hex>` when CRI-O is probed  | Systemd-driver paths identify CRI-O directly. Cgroupfs-driver CRI-O is indistinguishable from containerd, so `CgroupClassifier::initialize()` flips a hint when `/run/crio/crio.sock` exists. |
+| kubernetes | `kubepods[./].*?pod<32-72hex_underscores>` <br> bare `pod<uid>`        | Pod-level fallback when no runtime-specific leaf is present. Underscores in the class because systemd-escaped UIDs are `665b0949_7b83_…`, NOT dashes. |
+| podman     | `libpod-<64hex>.scope` <br> `libpod-<64hex>`                           | Systemd and cgroupfs shapes; the no-`.scope` branch must be checked before the generic kubepods match. |
+| lxd        | `lxd-<name>.service`                                                   | Match the `.service` segment; tested before generic systemd unit so LXD wins. |
 | lxc        | `/lxc(\.payload)?[./]<name>`                                           | Plain LXC, names not hex. |
 | nspawn     | `/machine.slice/machine-<NAME>.scope` <br> `systemd-nspawn@<NAME>.service` | systemd-nspawn registered via machined (default) or started via the template unit. NAME is human-readable, NOT a content-addressable hash — distinguishes nspawn from every other supported runtime. Caveat: libvirt VMs (when libvirtd has machined integration) also register as `machine-qemu\x2d<id>.scope` and get mislabelled `nspawn`; the machine name typically makes it obvious. |
-| systemd    | `/<unit>.{service,socket,mount}`                                       | Non-container scope but useful — UI labels it `unit:nginx.service`. |
+| systemd    | `/<unit>.{service,socket,mount}`                                       | Non-container scope but useful — UI labels it `unit:nginx.service`. Excluded under `/user.slice` so desktop sessions stay host processes. |
 
 Order matters in `classifyPath`: lxd before generic systemd, kubepods
 fallback after the runtime-specific scopes, etc.
 
-**The 12-char short ID** is what every CLI shows (`docker ps`,
-`podman ps`); we slice it as `id.left(12)` everywhere to match what a
-sysadmin pastes from elsewhere.
+**The 12-char short ID** is what every hex-ID CLI shows (`docker ps`,
+`podman ps`, `crictl ps`); hex-ID runtimes slice with `id.left(12)` to
+match what a sysadmin pastes from elsewhere. Human-name runtimes
+(`lxc`, `lxd`, `nspawn`) keep the full captured name.
 
 ### Host-vs-container heuristic
 
@@ -186,9 +243,12 @@ These cgroup paths mean **the host**, not a container:
 * empty
 * `/`
 * `/init.scope`
+* anything under `/user.slice` (desktop user managers and apps)
 
-`classifyPath` returns `nullopt` for them. Anything else gets a label
-(possibly just `unit:foo.service`).
+`classifyPath` returns `nullopt` for them. If no container-shaped
+segment matches, a system-level unit under e.g. `/system.slice` may get
+the fallback label `systemd:unit:foo.service`; otherwise the process
+stays a plain host process.
 
 ### 5a. Nested containers — leaf wins, chain is preserved
 
@@ -379,19 +439,25 @@ namespace. This has consequences:
 * Skip the inode of `/proc/1/ns/net` — that's the host netns, already
   covered by the main dump.
 * Open the symlink as an fd; that's what you pass to `setns(2)`.
+  `fstat()` it before entering and verify the inode still matches the
+  one you enumerated, or a recycled representative pid could send you
+  into the wrong namespace.
+* The worker refreshes every 5 s and caps each pass at 256 non-host
+  namespaces. Socket maps are capped at `sockdiag::kMaxSocketEntries`
+  (65,536) so a pathological host cannot OOM the agent.
 
 ### Failure modes (all routine, all silent)
 
 | Error                           | Cause                                       | Action |
 |---------------------------------|---------------------------------------------|--------|
 | `ENOENT` reading `/proc/X/ns/net` | pid vanished between readdir and open    | skip   |
-| `EPERM` on setns                | not CAP_SYS_ADMIN                           | scanner disabled in `initialize()` |
-| `EINVAL` on setns               | netns destroyed mid-walk                    | skip   |
+| `EPERM` on setns                | missing `CAP_SYS_ADMIN` or systemd namespace sandbox | skip that namespace (capability may still be advertised) |
+| `EINVAL`/`ENOENT` on setns/open | netns destroyed mid-walk                    | skip   |
 | sock_diag dump fails post-setns | netns has no inet (unusual)                 | log once per cycle, continue |
 | setns(anchor) restore fails     | catastrophic — anchor netns gone            | `qFatal`, agent dies cleanly |
 
 The rule is: **anything except restore failure is routine**. Don't
-spam logs. (`NetnsScanner.cpp:186-197`)
+spam logs.
 
 ---
 
@@ -407,8 +473,10 @@ The kernel's pid space is small (32k by default, 4M with
 recycling within minutes on a busy host.
 
 **Defence:** snapshot `/proc/<pid>/stat` field 22 (starttime in
-jiffies since boot) at enrollment, store it next to the pid in the
-inode→pid map. At lookup, re-read and compare; mismatch → drop the
+jiffies since boot) at enrollment, store it next to the pid in every
+pid-bearing cache (`SockDiagResolver` host maps, `NetnsScanner` maps,
+`CgroupClassifier` per-pid cache, and the agent's per-snapshot
+memoisation). At lookup, re-read and compare; mismatch → drop the
 cached entry, return `nullopt`. The starttime is monotonic per real
 process; a new process reusing the pid will have a higher value.
 
@@ -597,7 +665,9 @@ red.
 * **Container *names*** (as opposed to IDs). The runtime CLI knows
   the human name, but resolving it requires shelling out to
   `docker inspect` / `podman inspect`, which we don't do in the
-  hot path. The UI currently shows the 12-char ID.
+  hot path. `containerName` is therefore empty today; the UI shows the
+  runtime plus the short hex ID (or the full human-name ID for
+  lxc/lxd/nspawn).
 
 ---
 
@@ -629,8 +699,9 @@ red.
 Build in this order; each layer is independently shippable and
 testable:
 
-1. **sock_diag dump → inode list.** Get the 4-tuple → inode map
-   working on the host netns only. Test with `iperf3` to localhost.
+1. **sock_diag dump → inode list.** Get the full 4-tuple and
+   local-only key → inode maps working on the host netns only. Test
+   with `iperf3` to localhost and a UDP listener.
 2. **`/proc/<pid>/fd` reverse-walk + starttime stamping.** Now you
    have pid attribution for host processes. Compare against `ss
    -tpn` for ground truth.

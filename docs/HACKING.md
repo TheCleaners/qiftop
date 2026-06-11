@@ -9,7 +9,7 @@ If you are an LLM agent picking this repo up cold:
 * Read AGENTS.md first for the architecture and the DBus contract.
 * Read this file for build/run/debug recipes and conventions.
 * When you make a major change or refactor, update both:
-  * AGENTS.md gets a changelog line + any contract/layering edits.
+  * AGENTS.md gets any contract/layering/architecture edits.
   * HACKING.md gets any new recipe, debugging tip, or dev-loop change.
 
 ---
@@ -22,8 +22,9 @@ If you are an LLM agent picking this repo up cold:
 sudo apt install --no-install-recommends \
     build-essential cmake pkg-config ninja-build \
     qt6-base-dev qt6-base-dev-tools libqt6dbus6 libqt6network6 \
+    libgl1-mesa-dev libncurses-dev \
     libnl-3-dev libnl-route-3-dev libnetfilter-conntrack-dev \
-    dbus dpkg-dev fakeroot
+    dbus dbus-x11 dpkg-dev fakeroot
 ```
 
 ### Arch
@@ -31,7 +32,7 @@ sudo apt install --no-install-recommends \
 ```bash
 sudo pacman -S --needed base-devel cmake ninja \
     qt6-base \
-    libnl libnetfilter_conntrack \
+    libnl libnetfilter_conntrack ncurses \
     dbus
 ```
 
@@ -41,13 +42,24 @@ sudo pacman -S --needed base-devel cmake ninja \
 sudo dnf install -y \
     gcc-c++ cmake ninja-build pkgconf-pkg-config \
     qt6-qtbase-devel qt6-qtbase-private-devel \
-    libnl3-devel libnetfilter_conntrack-devel \
-    dbus-daemon
+    mesa-libGL-devel ncurses-devel \
+    libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
+    dbus-daemon dbus-tools
 ```
 
 If `cmake` complains about a missing Qt6 component, search the distro
 package list — every component (`Core`, `Widgets`, `Network`, `DBus`) is
 usually in `qt6-base*-dev`/`qt6-qtbase-devel`.
+
+Packaging / repository extras:
+
+```bash
+# Debian / Ubuntu
+sudo apt install --no-install-recommends apt-utils createrepo-c gnupg rpm lintian desktop-file-utils
+
+# Fedora
+sudo dnf install -y rpm-build createrepo_c gnupg2 rpmlint desktop-file-utils
+```
 
 ---
 
@@ -65,8 +77,30 @@ Useful overrides:
 |---------------------------------|---------|------------------------------------------------------|
 | `CMAKE_BUILD_TYPE`              | (empty) | `Debug`, `Release`, `RelWithDebInfo`.                |
 | `CMAKE_INSTALL_PREFIX`          | `/usr/local` | Where `cmake --install` lands. Use `/usr` for `.deb`. |
-| `QIFTOP_BUILD_TESTS`            | `ON`    | Build the test suite under `tests/`. Turn `OFF` for distro builds that don't want QtTest in the build deps. |
+| `QIFTOP_BUILD_TESTS`            | `ON`    | Build the QtTest suite under `tests/`. |
+| `QIFTOP_BUILD_INTEGRATION_TESTS` | `ON`   | Include the session-bus `test_agent_integration` test. Only matters when tests are enabled. |
+| `QIFTOP_BUILD_TUI`              | `ON`    | Build `nqiftop` when ncursesw is found (`libncurses-dev` / `ncurses-devel`). |
+| `QIFTOP_BUILD_DEMO`             | `OFF`   | Build the synthetic GUI/TUI demo harnesses under `docs/demo/`. |
+| `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION` | `OFF` | Build Tier-2 runtime attribution tests. Requires root + container runtimes; leave off for normal dev. |
 | `QIFTOP_AUTO_PACKAGE`           | `ON`    | Run `cpack -G DEB` automatically after each agent re-link. |
+
+The normal "build everything useful for development" configure is:
+
+```bash
+cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DQIFTOP_BUILD_TESTS=ON \
+    -DQIFTOP_BUILD_TUI=ON \
+    -DQIFTOP_BUILD_DEMO=OFF \
+    -DQIFTOP_BUILD_ATTRIBUTION_INTEGRATION=OFF \
+    -DQIFTOP_AUTO_PACKAGE=OFF
+```
+
+Flip `QIFTOP_BUILD_DEMO=ON` when generating screenshots/demo captures.
+Flip `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON` only through the integration
+drivers that provide docker/podman/k3d/k0s and the needed privileges. Leave
+`QIFTOP_AUTO_PACKAGE=OFF` for fast edit/build/test loops; turn it on (or run
+`cpack` manually) when you actually need fresh `.deb`s.
 
 ### Incremental rebuild
 
@@ -74,14 +108,114 @@ Useful overrides:
 cmake --build build -j$(nproc)
 ```
 
-Both targets (`qiftop`, `qiftop-agent`) build from the same tree; CMake
-deduplicates the shared backend objects automatically.
+Core targets built from the same tree:
+
+* `qiftoplib` → `libqiftop.so` (the Widgets-free data library).
+* `qiftop` → Qt Widgets GUI.
+* `qiftop-agent` → privileged DBus agent.
+* `nqiftop` → ncurses TUI, when `QIFTOP_BUILD_TUI=ON` and ncursesw is found.
+* tests, when `QIFTOP_BUILD_TESTS=ON`.
+
+To force one target:
+
+```bash
+cmake --build build --target qiftoplib
+cmake --build build --target nqiftop
+```
+
+### ncurses TUI (`nqiftop`)
+
+`nqiftop` lives under `src/tui/` and links only libqiftop + ncursesw. Install
+`libncurses-dev` (Debian/Ubuntu) or `ncurses-devel` (Fedora), then:
+
+```bash
+cmake -S . -B build -G Ninja -DQIFTOP_BUILD_TUI=ON
+cmake --build build --target nqiftop
+./build/nqiftop --help
+```
+
+For development against a session-bus agent:
+
+```bash
+./build/qiftop-agent --session --verbose -c dist/conf/agent.conf
+./build/nqiftop --session --verbose
+```
+
+Like the GUI, `nqiftop` probes the agent first and falls back to the
+in-process Linux backend only when the agent is unavailable (that fallback
+needs root for conntrack).
+
+### libqiftop
+
+`qiftoplib` builds the shared library whose installed name is `libqiftop.so`
+with SONAME `libqiftop.so.0`. It is built by default and consumed by the GUI,
+TUI, agent, and standalone examples.
+
+Install just the runtime + development components to a local prefix:
+
+```bash
+P="$PWD/_install"
+cmake --install build --component libqiftop     --prefix "$P"
+cmake --install build --component libqiftop-dev --prefix "$P"
+```
+
+Downstream CMake consumers use:
+
+```cmake
+find_package(qiftop REQUIRED)
+target_link_libraries(my_tool PRIVATE qiftop::qiftop)
+```
+
+Then configure the consumer with `-DCMAKE_PREFIX_PATH="$P"` (or install the
+`libqiftop-dev` / `qiftop-devel` package under `/usr`). Non-CMake consumers can
+use `pkg-config --cflags --libs qiftop`.
+
+**DBus type gotcha:** every libqiftop process that talks to the agent must call
+`qiftop::dbus::registerTypes()` once at startup, before creating DBus monitors
+or issuing DBus calls. Without it, QtDBus cannot unmarshal replies/signals and
+you see errors like:
+
+```
+type QList<qiftop::dbus::ConnectionDto> is not registered with QtDBus
+```
+
+### Building the examples against an installed libqiftop
+
+Each `examples/*` directory is a standalone `find_package(qiftop)` project:
+
+| Directory | Binary |
+|-----------|--------|
+| `examples/ndjson-stream` | `qiftop-ndjson` |
+| `examples/ndjson-connections` | `qiftop-ndjson-connections` |
+| `examples/prometheus-exporter` | `qiftop-exporter` |
+| `examples/snapshot-export` | `qiftop-snapshot-export` |
+| `examples/top-talkers` | `qiftop-top` |
+
+CI's packaging-QA job deliberately builds them against a component-only install
+(not the build tree) so the public CMake package cannot bit-rot:
+
+```bash
+cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DQIFTOP_BUILD_TESTS=OFF \
+    -DQIFTOP_AUTO_PACKAGE=OFF
+cmake --build build --parallel
+
+P="$PWD/_install"
+cmake --install build --component libqiftop     --prefix "$P"
+cmake --install build --component libqiftop-dev --prefix "$P"
+
+for ex in examples/*/; do
+    [ -f "$ex/CMakeLists.txt" ] || continue
+    cmake -S "$ex" -B "$ex/build" -G Ninja -DCMAKE_PREFIX_PATH="$P"
+    cmake --build "$ex/build" --parallel
+done
+```
 
 ### Packaging
 
-Both `.deb`s are **regenerated automatically on every build** that re-links
-`qiftop-agent` (which is the natural moment to repackage — by then `qiftop`
-has linked too). This is a developer convenience; disable with:
+The `.deb`s are **regenerated automatically on every build** that re-links
+`qiftop-agent`. This is a developer convenience; disable with:
 
 ```bash
 cmake -S . -B build -DQIFTOP_AUTO_PACKAGE=OFF
@@ -90,34 +224,60 @@ cmake -S . -B build -DQIFTOP_AUTO_PACKAGE=OFF
 To force a manual run (rare):
 
 ```bash
-cd build
-cpack -G DEB
+(cd build && cpack -G DEB)
 ```
 
-Output:
+DEB output (component packages):
 ```
-qiftop_<ver>_amd64.deb         (GUI + .desktop + icon)
-qiftop-agent_<ver>_amd64.deb   (daemon + systemd + dbus policy + /etc conffile)
+qiftop_<ver>_amd64.deb          (GUI + .desktop + icon)
+qiftop-agent_<ver>_amd64.deb    (daemon + systemd + dbus policy + /etc conffile)
+libqiftop0_<ver>_amd64.deb      (runtime shared library)
+libqiftop-dev_<ver>_amd64.deb   (headers + CMake/pkg-config files)
+nqiftop_<ver>_amd64.deb         (ncurses frontend, if built)
 ```
 
-`dpkg-deb -c <file>.deb` to inspect contents; `dpkg-deb -e <file>.deb /tmp/d`
-then `cat /tmp/d/conffiles` to confirm config files are correctly tagged.
+`dpkg-deb -c <file>.deb` inspects contents. To inspect control metadata without
+using system temp dirs:
+
+```bash
+rm -rf _debctl && mkdir _debctl
+dpkg-deb -e build/qiftop-agent_<ver>_amd64.deb _debctl
+cat _debctl/conffiles
+rm -rf _debctl
+```
 
 ### Building the `.rpm`s (Fedora)
 
-RPMs need `rpmbuild` + the Fedora `-devel` libraries, so they can't be
-built on the Debian dev box directly. Build them inside a `fedora`
-container — the helper script does configure → build → `cpack -G RPM`
-→ a clean-container install + verification in one shot:
+RPMs need `rpmbuild` + the Fedora `-devel` libraries. The release workflow
+builds them inside `fedora:44`; locally, mirror that:
 
 ```bash
-docker run --rm -v "$PWD":/src:ro fedora:44 bash /src/dist/rpm/build-and-verify.sh
+docker run --rm -v "$PWD:/src" -w /src fedora:44 bash -euxc '
+  dnf -y --setopt=install_weak_deps=False install \
+    cmake ninja-build gcc-c++ pkgconf-pkg-config rpm-build \
+    qt6-qtbase-devel qt6-qtbase-private-devel mesa-libGL-devel \
+    libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
+    ncurses-devel dbus-daemon systemd shadow-utils
+  cmake -S . -B build-rpm -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DQIFTOP_BUILD_TESTS=OFF \
+    -DQIFTOP_AUTO_PACKAGE=OFF
+  cmake --build build-rpm --target qiftop qiftop-agent nqiftop --parallel
+  cd build-rpm && cpack -G RPM -V
+'
 ```
+
+Docker writes `build-rpm/` as root on many hosts; run
+`sudo chown -R "$(id -u):$(id -g)" build-rpm` afterwards if you need to clean
+or re-use that directory.
 
 Output (RPM naming convention, `name-version-release.dist.arch`):
 ```
 qiftop-<ver>-1.fc44.x86_64.rpm          (GUI)
 qiftop-agent-<ver>-1.fc44.x86_64.rpm    (daemon + systemd + dbus + /etc config)
+qiftop-libs-<ver>-1.fc44.x86_64.rpm     (runtime shared library)
+qiftop-devel-<ver>-1.fc44.x86_64.rpm    (headers + CMake/pkg-config files)
+nqiftop-<ver>-1.fc44.x86_64.rpm         (ncurses frontend)
 ```
 
 `rpm -qpR <file>.rpm` lists Requires (library deps auto-discovered by
@@ -127,6 +287,35 @@ confirms `/etc/qiftop/agent.conf` is `%config(noreplace)`. The CPack RPM
 config lives in `CMakeLists.txt` (the `CPACK_RPM_*` block); the native
 `%post`/`%postun` scriptlets are `dist/rpm/{post,postun}-agent.sh`. The
 release workflow builds both `.deb` and `.rpm` on tag push.
+
+### Building the signed apt + dnf repositories
+
+Release assets are indexed into a static GitHub Pages tree by:
+
+```bash
+PAGES_BASE_URL="https://thecleaners.github.io/qiftop" \
+GPG_KEY_ID="<project-key-id-or-empty-for-unsigned>" \
+dist/repo/build-pages.sh pkgs public
+```
+
+`pkgs/` must contain the `.deb` and `.rpm` files; `public/` receives:
+
+* `deb/` — apt repo (`Packages`, `Release`, plus `InRelease`/`Release.gpg`
+  when `GPG_KEY_ID` is set).
+* `rpm/` — dnf repo (`repodata/`, `qiftop.repo`).
+* `qiftop-archive-keyring.{asc,gpg}` and a small landing page.
+
+Signing model:
+
+* apt signs repository metadata (standard apt trust model).
+* dnf signs repository metadata **and** each package (`rpm --addsign`), so
+  generated `.repo` files can enable both `repo_gpgcheck=1` and `gpgcheck=1`.
+
+Headless GPG gotcha: `rpm --addsign` must be given an explicit
+`__gpg_sign_cmd` that includes `--batch --pinentry-mode loopback`; otherwise
+rpm's default GPG invocation can fail with `gpg exec failed` even for the
+passphraseless CI key. `dist/repo/build-pages.sh` carries the known-good
+definition; copy that shape if you need to sign RPMs elsewhere.
 
 > **usrmerge gotcha**: the systemd unit installs to `/lib/systemd/system`
 > (a `/usr/lib` symlink on Fedora). Without
@@ -164,8 +353,14 @@ Two terminals.
 DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS ./build/qiftop --verbose
 ```
 
-(Or pass `--no-agent` to the GUI to use in-process backends without the
-agent at all.)
+**Or Terminal B — TUI:**
+
+```bash
+./build/nqiftop --session --verbose
+```
+
+(Or pass `--no-agent` to the GUI/TUI to use in-process backends without the
+agent at all; on Linux that path needs privileges for conntrack.)
 
 ### Without installing — system bus (the real path)
 
@@ -234,6 +429,17 @@ busctl --user call org.qiftop.NetworkAgent1 \
 busctl --user call org.qiftop.NetworkAgent1 \
     /org/qiftop/NetworkAgent1/Interfaces \
     org.qiftop.NetworkAgent1.Interfaces SetDesiredIntervalMs u 250
+
+# Connections.GetConnections returns the service's cached m_last snapshot.
+# Warm the Connections service, wait for a poll tick, then read it; otherwise
+# you can get a stale snapshot from before your test flow existed.
+busctl --user call org.qiftop.NetworkAgent1 \
+    /org/qiftop/NetworkAgent1/Connections \
+    org.qiftop.NetworkAgent1.Connections SetDesiredIntervalMs u 250
+sleep 1
+busctl --user call org.qiftop.NetworkAgent1 \
+    /org/qiftop/NetworkAgent1/Connections \
+    org.qiftop.NetworkAgent1.Connections GetConnections
 
 # Subscribe to live signals:
 dbus-monitor --session "interface=org.qiftop.NetworkAgent1.Interfaces"
@@ -319,26 +525,26 @@ will return `AccessDenied`; this is the correct production behaviour. Run
 1. Create `src/backend/<platform>/` with implementations of
    `NetworkMonitor` and `ConnectionMonitor`. They must implement
    `start()`, `stop()`, and the new `setPollIntervalMs(int)` (≤0 = pause).
-2. Add a `backend_<platform>` static library in `CMakeLists.txt`, guarded by
-   a `if(CMAKE_SYSTEM_NAME STREQUAL "...")` block.
-3. Link both `qiftop` and `qiftop-agent` against it under the same guard;
-   define a `BACKEND_<PLATFORM>` compile flag and adjust the `#ifdef`s in
-   `src/agent/main.cpp` and `src/main.cpp`.
+2. Add a `backend_<platform>` static library (normally in
+   `src/backend/<platform>/CMakeLists.txt`) and include it from the guarded
+   platform block in the root `CMakeLists.txt`.
+3. Link it into `qiftoplib` under the same guard, expose a
+   `BACKEND_<PLATFORM>` compile definition, and adjust the `#ifdef`s in the
+   GUI/TUI/agent entry points that instantiate concrete in-process monitors.
 4. Do **not** include backend headers from `ui/` or `agent/*Service.{h,cpp}`
    — they only know about the abstract base classes (AGENTS.md §2).
 
 ### 5.4 Change a DBus DTO
 
-**During v0.1 alpha pre-releases:** reshape freely. Append the new
-field at the END of the struct (DBus struct sigs hash the field list
-— reordering breaks subscribers), update the matching `<<` / `>>`
-operators in `src/dbus/Types.cpp` in the SAME declaration order,
-extend `toDto` / `fromDto`, bump `kAgentVersion` in
+Append the new field at the END of the struct (DBus struct sigs hash
+the field list — reordering breaks subscribers), update the matching
+`<<` / `>>` operators in `src/dbus/Types.cpp` in the SAME declaration
+order, extend `toDto` / `fromDto`, bump `kAgentVersion` in
 `InterfacesService.cpp` and add a capability token describing the new
 behaviour. Also update AGENTS.md §4 (signature string + field list +
 capabilities table) in the same commit — the two drift trivially if
-you split them across commits, and the next contract review will
-waste cycles re-discovering it.
+you split them across commits, and the next contract review will waste
+cycles re-discovering it.
 
 Clamp every newly-added wire-sourced enum on the receive path in
 `fromDto`: `(d.x <= quint8(Enum::Max)) ? static_cast<Enum>(d.x) :
@@ -346,9 +552,9 @@ Enum::SafeDefault`. Don't `static_cast` directly — a buggy or
 future-extended sender will produce UB on the receiver otherwise.
 Add a clamp test in `tests/test_dbus_types.cpp`.
 
-**Post-v0.1-stable:** breaking change. Bump the interface name to
-`NetworkAgent2`, keep `NetworkAgent1` alive for one release. See
-AGENTS.md §8.
+Any breaking change after the stable DBus contract must bump the interface
+name to `NetworkAgent2` and keep `NetworkAgent1` alive for one release.
+See AGENTS.md §8.
 
 ### 5.5 Adding tests
 
@@ -370,7 +576,7 @@ Unit tests live under `tests/` and are built by default
      compiled in (e.g. `Settings.cpp` for the migration test), list it
      as an extra source — easier than introducing a static lib just for
      tests.
-  3. `cmake --build build && (cd build && ctest --output-on-failure)`.
+  3. `cmake --build build && ctest --test-dir build --output-on-failure`.
 
 * **TDD it whenever practical.** For the cgroup classifier work
   (steps 3 + Tier-1 fixtures + nspawn), the rhythm was: write the
@@ -390,12 +596,11 @@ Unit tests live under `tests/` and are built by default
   uses `%1` + zero-padding to keep IDs distinct yet exactly 64
   chars).
 
-* **What's worth testing here:** pure helpers — the heuristics in
-  `src/util/ConnectionHeuristics.h`, `Settings` migration on the
-  `QSettings` ini path, `Exporter` formatting, anything in `util/`
-  with no Qt-widget dependency. Don't try to spin up `MainWindow`;
-  the model+delegate stack is hard to fixture and most regressions
-  surface in the headless pure-logic layer anyway.
+* **What's worth testing here:** pure helpers — heuristics, aggregators,
+  `Settings` migration on the `QSettings` ini path, `Exporter` formatting,
+  anything in `util/` with no Qt-widget dependency. Widget regressions that
+  need the real object graph belong in `test_mainwindow_smoke`, which links
+  `qiftop_ui` and runs offscreen with fake monitors.
 
 * **Hermetic QSettings:** for any test touching `Settings`, redirect
   the ini path into a `QTemporaryDir` before constructing it. See
@@ -406,19 +611,34 @@ Unit tests live under `tests/` and are built by default
   QSettings::setDefaultFormat(QSettings::IniFormat);
   QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir);
   ```
-  Also call `QStandardPaths::setTestModeEnabled(true)` in
-  `initTestCase()` so any `QStandardPaths::writableLocation()` lookups
-  go to a sandboxed cache dir.
+  `QStandardPaths::setTestModeEnabled(true)` is fine for tests that do not
+  manually set XDG variables. Do **not** use it in tests that override
+  `XDG_CONFIG_HOME` (for example `test_autostart`) — Qt redirects generic
+  config lookups to its own sandbox and defeats the manual override.
 
 * **Qt link gotcha:** anything that includes `<QHostAddress>` (e.g.
   `ConnectionHeuristics.h`) needs `Qt6::Network` even if the test
   itself never instantiates a socket — `QHostAddress` lives in
   QtNetwork. `qiftop_add_test()` already links it.
 
-* **Integration tests** (need a live agent) — same pattern but spawn
-  `qiftop-agent --session --config <tmpdir>/agent.conf` on a private
-  session bus and tear down by recorded PID. None exist yet; add under
-  `tests/integration/` with its own `add_subdirectory()` guard.
+* **Integration tests:** `QIFTOP_BUILD_INTEGRATION_TESTS=ON` (default) adds
+  `test_agent_integration`, which spawns the built `qiftop-agent --session`
+  and drives the live DBus contract. Run the whole suite the CI way:
+  ```bash
+  QT_QPA_PLATFORM=offscreen dbus-run-session -- \
+      ctest --test-dir build --output-on-failure --no-tests=error
+  ```
+  To run one test:
+  ```bash
+  ctest --test-dir build -R test_filter --output-on-failure
+  ```
+
+* **Tier-2 attribution integration:** `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION=ON`
+  adds `qiftop-attribution-probe` plus `attribution_*` CTest entries labelled
+  `attribution-integration`. They require root/CAP_NET_ADMIN/CAP_SYS_ADMIN and
+  a container runtime, so use the driver scripts documented under
+  `tests/integration/attribution/` rather than enabling them in a normal dev
+  build.
 
 * **Sanitizers (`-DQIFTOP_TESTS_SANITIZE=…`)** — opt-in per build dir,
   applied **only to test targets** so production binaries stay clean.
@@ -555,20 +775,21 @@ Only expected when the agent runs as a non-root user (e.g. during dev with
 `--session`). The systemd unit grants `CAP_NET_ADMIN`; in production this
 should not appear.
 
-### Stale .deb after `cpack`
+### Stale package after `cpack`
 
 The auto-package `add_custom_command(POST_BUILD)` is wired to the
 `qiftop-agent` target only — client-only edits (e.g. anything in
 `src/ui/`) build & link the new `qiftop` binary but **do not** trigger
-a `.deb` regen, so `dpkg -i build/qiftop_*_amd64.deb` keeps
-installing the *previous* client. Symptom: edits seem to have no
-effect at runtime even though the build succeeded.
+a package regen, so reinstalling `build/qiftop_*_amd64.deb` can keep
+installing the *previous* client. Symptom: edits seem to have no effect
+at runtime even though the build succeeded.
 
 Two fixes:
 
 ```bash
 # Force a repackage by hand:
-(cd build && cpack -G DEB && sudo dpkg -i qiftop_*_amd64.deb)
+(cd build && cpack -G DEB)
+sudo apt install ./build/libqiftop0_*.deb ./build/qiftop_*.deb
 
 # Or touch the agent so the POST_BUILD hook fires:
 touch src/agent/main.cpp && cmake --build build -j$(nproc)
@@ -700,7 +921,7 @@ Before opening / merging:
 - [ ] `cmake --build build -j$(nproc)` succeeds clean (no warnings beyond
       existing ones).
 - [ ] If you touched anything under `dist/` or `CMakeLists.txt`'s install
-      rules, rebuild and inspect both `.deb`s with `dpkg-deb -c`.
+      rules, rebuild and inspect affected `.deb`/`.rpm` component packages.
 - [ ] If you added a DBus method, removed one, or changed a signature:
       * AGENTS.md §4 table updated.
       * `NetworkAgent` interface name bumped if it was breaking.
@@ -708,7 +929,7 @@ Before opening / merging:
       * `dist/conf/agent.conf` has a top-comment block for it.
       * `loadIdleConfig()` (or successor) reads it with a sensible default.
 - [ ] If you made a major change or refactor:
-      * AGENTS.md changelog line appended.
+      * AGENTS.md updated where its architecture/contract/convention text changed.
       * HACKING.md updated where any recipe/debug tip is now wrong or new.
 - [ ] No `pkill`/`killall` in scripts — always literal `kill <PID>`.
 - [ ] No `cat`/`head`/`tail`/`find`/`ls` in CI scripts when a Qt/CMake
@@ -730,21 +951,29 @@ CI is wired up in `.github/workflows/`:
   back to a `runs-on:` entry as soon as that's available. Builds with
   Ninja, runs `ctest` under `dbus-run-session` with
   `QT_QPA_PLATFORM=offscreen`.
-* **`release.yml`** — triggered on `v*` tag push. Builds .debs on a
-  clean ubuntu-24.04 runner, verifies the tag matches
-  `project(qiftop VERSION ...)`, computes SHA256SUMS, and publishes a
-  GitHub Release with both .debs + checksums attached. Release notes
-  are auto-generated by GitHub (diff vs. the previous tag), with
-  category grouping configured in `.github/release.yml`. Tags
-  containing `-` (e.g. `v0.2-rc1`) are marked as prerelease.
+* **`release.yml`** — triggered on `v*` tag push. Builds `.deb`s on
+  ubuntu-24.04 and `.rpm`s in a fedora:44 container, verifies the tag
+  matches `project(qiftop VERSION ...)`, computes SHA256SUMS, and publishes
+  a GitHub Release with all component packages attached. Release notes are
+  auto-generated by GitHub (diff vs. the previous tag), with category grouping
+  configured in `.github/release.yml`. Tags containing `-` (e.g. `v0.2-rc1`)
+  are marked as prerelease.
+* **`pages.yml`** — triggered by `release: published` or manually. Downloads
+  all release `.deb`/`.rpm` assets, runs `dist/repo/build-pages.sh`, and
+  deploys signed apt + dnf repos to GitHub Pages. Releases created by
+  `GITHUB_TOKEN` do not fire `release: published`, so after a tag-driven
+  release run it manually once:
+  ```bash
+  gh workflow run pages.yml
+  ```
 
 To cut a release:
 
 ```bash
-# 1. Bump project version (single source of truth — both .debs and
-#    CPACK_PACKAGE_VERSION derive from it).
+# 1. Bump project version (single source of truth — packages and
+#    runtime --version derive from it).
 vim CMakeLists.txt                       # project(qiftop VERSION X.Y ...)
-vim AGENTS.md                            # append a changelog entry
+vim AGENTS.md                            # update any changed contract/convention docs
 vim HACKING.md                           # bump Last-reviewed line
 
 # 2. Commit + tag + push.
@@ -755,31 +984,46 @@ git push origin master vX.Y
 
 The `release.yml` workflow will refuse to publish if `CMakeLists.txt`'s
 `project()` VERSION doesn't match the tag base (`vX.Y-rc1` → `X.Y`).
-That's deliberate — keeps the .deb version, the GitHub release tag,
-and `qiftop --version` consistent.
+That's deliberate — keeps the package versions, the GitHub release tag, and
+`qiftop --version` consistent.
 
 ### Manual fallback
 
 If GitHub Actions is unavailable, the same steps locally:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DQIFTOP_AUTO_PACKAGE=OFF
+cmake --build build --parallel
 (cd build && cpack -G DEB)
 ```
 
-Smoke-install on a clean container:
+Build RPMs with the Fedora container recipe in §2, then combine checksums:
 
 ```bash
-sudo apt install ./build/qiftop-agent_X.Y_amd64.deb \
-                  ./build/qiftop_X.Y_amd64.deb
-sudo systemctl status qiftop-agent
-qiftop --verbose
+(cd build && sha256sum *.deb > SHA256SUMS.deb)
+(cd build-rpm && sha256sum *.rpm > SHA256SUMS.rpm)
+cat build/SHA256SUMS.deb build-rpm/SHA256SUMS.rpm > SHA256SUMS
 ```
 
-Then upload the `.deb`s + a `sha256sum *.deb > SHA256SUMS` manually
-via the GitHub Releases UI.
+Smoke-install on a clean Ubuntu container (same shape as CI):
+
+```bash
+docker run --rm -v "$PWD/build:/work" -w /work ubuntu:24.04 bash -euxc '
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq ./libqiftop0_*.deb ./qiftop-agent_*.deb ./qiftop_*.deb ./nqiftop_*.deb
+  QT_QPA_PLATFORM=offscreen qiftop --version
+  qiftop-agent --version
+  nqiftop --version
+  getent group netdev
+'
+```
+
+Then upload the `.deb`s, `.rpm`s, and `SHA256SUMS` manually via the GitHub
+Releases UI, and run `gh workflow run pages.yml` to refresh the apt/dnf repos.
 
 ---
 
-_Last reviewed: 2026-06-07._
+_Last reviewed: 2026-06-10._
