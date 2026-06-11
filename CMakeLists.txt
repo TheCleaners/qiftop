@@ -337,10 +337,19 @@ function(qiftop_install_manpage SRC SECTION COMPONENT)
     if(GZIP_TOOL)
         get_filename_component(_name "${SRC}" NAME)
         set(_src "${CMAKE_CURRENT_SOURCE_DIR}/${SRC}")
-        set(_gz "${CMAKE_BINARY_DIR}/man/${_name}.gz")
+        set(_staged "${CMAKE_BINARY_DIR}/man/${_name}")
+        set(_gz "${_staged}.gz")
         file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/man")
+        # Sync the .TH "qiftop X.Y.Z" version field to the project version so
+        # the man-page footer can never drift from the release (the committed
+        # value is just a fallback). Done at configure time on a staged copy,
+        # which is then gzipped — the source file is untouched.
+        file(READ "${_src}" _content)
+        string(REGEX REPLACE "qiftop [0-9]+\\.[0-9]+(\\.[0-9]+)?"
+               "qiftop ${PROJECT_VERSION}" _content "${_content}")
+        file(WRITE "${_staged}" "${_content}")
         execute_process(
-            COMMAND ${GZIP_TOOL} -9 -n -c "${_src}"
+            COMMAND ${GZIP_TOOL} -9 -n -c "${_staged}"
             OUTPUT_FILE "${_gz}"
             RESULT_VARIABLE _gzrc)
         if(NOT _gzrc EQUAL 0)
