@@ -69,6 +69,8 @@ private:
     void  handleInfoKey(int key);              // key routing while Help/About open
     void  handleDetailKey(int key);            // key routing while a row Detail is open
     void  openDetail();                        // open the Detail overlay for the cursor row
+    void  exportCurrentView();                 // write the active view to a CSV file
+    void  flashMessage(const QString &msg);    // transient footer status (cleared on a timer)
     void  applyAggregatorSettings();           // push flags into the aggregator
     void  loadSettings();                      // restore view/sort/toggles/theme
     void  saveSettings() const;                // persist them (QSettings)
@@ -132,6 +134,11 @@ private:
     // re-read the mutated live rows and move the cursor row out from under us).
     QList<aggregate::InterfaceAggregator::Row>  m_frozenIfaceRows;
     QList<aggregate::ConnectionAggregator::Row> m_frozenConnRows;
+
+    // Transient one-line status (e.g. "Exported 42 flows to ..."), shown in
+    // the footer and cleared after a few seconds by m_flashTimer.
+    QString  m_flashMsg;
+    QTimer  *m_flashTimer = nullptr;
 
     // Filter (Connections view): a live ConnectionFilter mini-language query.
     bool                  m_filterEditing = false;

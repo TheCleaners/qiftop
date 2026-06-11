@@ -2,8 +2,12 @@
 
 #include "aggregate/ConnectionAggregator.h"
 #include "aggregate/InterfaceAggregator.h"
+#include "util/Exportable.h"
+#include "util/Exporter.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
 #include <QSettings>
 #include <QSysInfo>
 #include <QtGlobal>
@@ -19,8 +23,77 @@ namespace qiftop::tui {
 
 namespace {
 constexpr int kRedrawThrottleMs = 33; // ~30 fps cap
+constexpr int kFlashMs          = 4000; // transient status visible duration
 constexpr auto kRepoUrl = "https://github.com/TheCleaners/qiftop";
+
+QString endpointText(const Endpoint &e)
+{
+    const QString host = e.address.toString();
+    return e.isIPv6() ? QStringLiteral("[%1]:%2").arg(host).arg(e.port)
+                      : QStringLiteral("%1:%2").arg(host).arg(e.port);
 }
+
+// Exportable adapter over a snapshot of connection aggregator rows. Numeric
+// columns return real numbers so the CSV is analysable; util::exporter::toCsv
+// guards against spreadsheet formula injection in text fields.
+class ConnRowsExportable : public Exportable {
+public:
+    explicit ConnRowsExportable(QList<aggregate::ConnectionAggregator::Row> rows)
+        : m_rows(std::move(rows)) {}
+    QStringList exportHeaders() const override
+    {
+        return {QStringLiteral("proto"), QStringLiteral("local"),
+                QStringLiteral("remote"), QStringLiteral("iface"),
+                QStringLiteral("rx_rate"), QStringLiteral("tx_rate"),
+                QStringLiteral("rx_bytes"), QStringLiteral("tx_bytes"),
+                QStringLiteral("comm"), QStringLiteral("pid"),
+                QStringLiteral("uid"), QStringLiteral("container_runtime"),
+                QStringLiteral("container")};
+    }
+    int exportRowCount() const override { return int(m_rows.size()); }
+    QVariantList exportRow(int row) const override
+    {
+        const auto &r = m_rows.at(row);
+        const Connection &c = r.current;
+        const QString container = c.container.valid()
+            ? (c.container.name.isEmpty() ? c.container.id : c.container.name)
+            : QString();
+        return {l4ProtoToString(c.proto), endpointText(c.local), endpointText(c.remote),
+                c.iface, r.rxRaw, r.txRaw,
+                static_cast<qulonglong>(c.rxBytes), static_cast<qulonglong>(c.txBytes),
+                c.process.valid() ? c.process.comm : QString(),
+                c.process.valid() ? c.process.pid : 0,
+                c.process.valid() ? static_cast<qint64>(c.process.uid) : 0,
+                c.container.runtime, container};
+    }
+private:
+    QList<aggregate::ConnectionAggregator::Row> m_rows;
+};
+
+// Exportable adapter over a snapshot of interface aggregator rows.
+class IfaceRowsExportable : public Exportable {
+public:
+    explicit IfaceRowsExportable(QList<aggregate::InterfaceAggregator::Row> rows)
+        : m_rows(std::move(rows)) {}
+    QStringList exportHeaders() const override
+    {
+        return {QStringLiteral("iface"), QStringLiteral("up"),
+                QStringLiteral("rx_rate"), QStringLiteral("tx_rate"),
+                QStringLiteral("rx_bytes"), QStringLiteral("tx_bytes")};
+    }
+    int exportRowCount() const override { return int(m_rows.size()); }
+    QVariantList exportRow(int row) const override
+    {
+        const auto &r = m_rows.at(row);
+        return {r.current.name, r.current.isUp ? 1 : 0, r.rxRate, r.txRate,
+                static_cast<qulonglong>(r.current.rxBytes),
+                static_cast<qulonglong>(r.current.txBytes)};
+    }
+private:
+    QList<aggregate::InterfaceAggregator::Row> m_rows;
+};
+}
+
 
 TuiApp::TuiApp(Screen *screen,
                aggregate::InterfaceAggregator  *ifaceAgg,
@@ -76,6 +149,14 @@ TuiApp::TuiApp(Screen *screen,
     m_redrawTimer = new QTimer(this);
     m_redrawTimer->setSingleShot(true);
     connect(m_redrawTimer, &QTimer::timeout, this, &TuiApp::doRedraw);
+
+    // Transient footer status (export confirmations etc.), auto-cleared.
+    m_flashTimer = new QTimer(this);
+    m_flashTimer->setSingleShot(true);
+    connect(m_flashTimer, &QTimer::timeout, this, [this] {
+        m_flashMsg.clear();
+        requestRedraw();
+    });
 
     // Smoothing tick: advance the display tween toward the EMA target between
     // polls (mirrors the GUI). The aggregator emits rowsUpdated -> redraw.
@@ -182,6 +263,10 @@ void TuiApp::handleKey(int key)
             m_frozenConnRows.clear();
             m_smoothTimer->start();
         }
+        break;
+    case 'w':
+    case 'W':
+        exportCurrentView();
         break;
     case '/':
         m_filterEditing = true;
@@ -458,6 +543,9 @@ Frame TuiApp::buildFrame()
         f.footer = m_filterError.isEmpty()
             ? QStringLiteral(" /%1\u2588   (Enter apply · Esc cancel)").arg(m_filterDraft)
             : QStringLiteral(" /%1\u2588   ! %2").arg(m_filterDraft, m_filterError);
+    } else if (!m_flashMsg.isEmpty()) {
+        // Transient status (e.g. export confirmation) takes the footer line.
+        f.footer = QStringLiteral(" %1").arg(m_flashMsg);
     } else if (!m_filterText.isEmpty()) {
         // Active filter: "filter:" chip + the expression, then edit/clear keys.
         f.footerHints = {
@@ -477,6 +565,7 @@ Frame TuiApp::buildFrame()
             {QStringLiteral("g"),     QStringLiteral("group")},
             {QStringLiteral("/"),     QStringLiteral("filter")},
             {QStringLiteral("p"),     QStringLiteral("pause")},
+            {QStringLiteral("w"),     QStringLiteral("export")},
             {QStringLiteral("S"),     QStringLiteral("settings")},
             {QStringLiteral("?"),     QStringLiteral("help")},
         };
@@ -549,6 +638,7 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("/"),            QStringLiteral("Filter connections (mini-language; Esc clears)")),
             row(QStringLiteral("g"),            QStringLiteral("Group connections by interface / process / container")),
             row(QStringLiteral("p"),            QStringLiteral("Pause / resume live updates")),
+            row(QStringLiteral("w"),            QStringLiteral("Write/export the current view to a CSV file")),
             row(QStringLiteral("z"),            QStringLiteral("Cycle the colour theme")),
             row(QStringLiteral("S / F2"),       QStringLiteral("Settings (gauge, DNS, smoothing…)")),
             row(QStringLiteral("? / F1"),       QStringLiteral("This help")),
@@ -646,6 +736,42 @@ void TuiApp::openDetail()
     m_detailView = m_view;
     m_overlay    = Overlay::Detail;
     requestRedraw();
+}
+
+void TuiApp::flashMessage(const QString &msg)
+{
+    m_flashMsg = msg;
+    m_flashTimer->start(kFlashMs);
+    requestRedraw();
+}
+
+void TuiApp::exportCurrentView()
+{
+    // Snapshot the active view's rows (frozen copy when paused) and serialise
+    // to CSV via the shared libqiftop exporter, into a timestamped file in the
+    // current working directory. A transient footer message reports the result.
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    QString name, err;
+    QByteArray data;
+    int count = 0;
+
+    if (m_view == View::Interfaces) {
+        IfaceRowsExportable ex(m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows());
+        count = ex.exportRowCount();
+        data  = util::exporter::toCsv(ex);
+        name  = QStringLiteral("qiftop-interfaces-%1.csv").arg(stamp);
+    } else {
+        ConnRowsExportable ex(m_paused ? m_frozenConnRows : m_connAgg->rows());
+        count = ex.exportRowCount();
+        data  = util::exporter::toCsv(ex);
+        name  = QStringLiteral("qiftop-connections-%1.csv").arg(stamp);
+    }
+
+    const QString path = QDir::current().absoluteFilePath(name);
+    if (util::exporter::save(path, data, &err))
+        flashMessage(QStringLiteral("Exported %1 rows to %2").arg(count).arg(path));
+    else
+        flashMessage(QStringLiteral("Export failed: %1").arg(err));
 }
 
 void TuiApp::handleDetailKey(int key)
