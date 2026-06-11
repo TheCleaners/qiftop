@@ -3,6 +3,12 @@
 # package names: qiftop, qiftop-agent, qiftop-libs, qiftop-devel, nqiftop,
 # and qiftop-monitoring-plugin. Keep every %files list in sync with CMake
 # install() path changes; COPR builds an SRPM from this spec plus Source0.
+#
+# Verified in a fedora:44 container: rpmbuild -ba builds the SRPM + all six
+# subpackages (no unpackaged/missing-file errors), dnf installs them, and every
+# artifact lands (binaries, libqiftop.so, freedesktop .desktop + AppStream
+# metainfo + icons, systemd unit, shell completions, netdev group). rpmlint is
+# clean apart from spelling false-positives (ncurses/Nagios/libqiftop/perfdata).
 
 Name:           qiftop
 Version:        0.2.3
