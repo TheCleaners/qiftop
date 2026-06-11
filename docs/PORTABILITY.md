@@ -311,37 +311,38 @@ requirements:
   `nl_langinfo(CODESET)` and fall back to `C.UTF-8`/`en_US.UTF-8` if it isn't
   UTF-8 (see `Screen::init`). This fix also helps marginal Linux locales.
 
-### 7.4a ncurses input + a Qt event loop (the 100% CPU spin)
+### 7.4a TUI input model: read raw bytes, not `wgetch()`
 
-nqiftop drives ncurses input from the Qt event loop via a
-`QSocketNotifier(STDIN_FILENO, Read)` whose callback drains `wgetch()` (under
-`nodelay`) until `ERR`. Two hazards live here:
+nqiftop drives input from the Qt event loop via a
+`QSocketNotifier(STDIN_FILENO, Read)`. The original design drained ncurses
+`wgetch()` (under `nodelay`) in the callback, which turned out to be fragile
+across curses implementations and is now **replaced by reading raw bytes
+directly** (`read(STDIN_FILENO, …)`), decoding keys ourselves in
+`Screen::pollKey` from a byte buffer (`Screen::feedInput`). ncurses is used for
+OUTPUT only. The two reasons this matters:
 
-* **EOF spins the notifier at 100% CPU (all platforms).** `wgetch()` returns
-  `ERR` for BOTH "no input pending" and EOF, so a closed/redirected stdin
-  (pipe/pty hangup, or `</dev/null`) stays *readable* forever while yielding no
-  key — the level-triggered notifier re-fires without end and the TUI can never
-  be quit by a keystroke. The guard (`src/tui/main.cpp`): if a wakeup produces
-  zero keys, treat `POLLHUP/POLLERR/POLLNVAL` as immediate hangup, and also
-  count consecutive key-less wakeups (a real spin trips the threshold in
-  microseconds; `/dev/null` is always `POLLIN` with no `POLLHUP`, so the
-  counter is what catches it). On EOF, disable the notifier and quit — an
-  interactive TUI whose input closed should exit, like top/htop. Verified: a
-  normal idle tty never wakes the notifier, so this never false-fires.
-* **FreeBSD interactive key input is currently broken (OPEN ISSUE).** On
-  FreeBSD (ncursesw) over a pty, typed keys are *not* consumed/returned by
-  `wgetch()` in this model — the byte echoes (raw mode not effective for our
-  read path) and the resulting key-less-wakeup spin is now caught by the guard
-  above, so the TUI exits instead of pegging the CPU. NetBSD (base curses) and
-  Linux (ncursesw) work correctly with the identical code, so this is a
-  FreeBSD-ncurses/`QSocketNotifier` interaction, not a generic bug. Likely
-  fix directions to investigate: use `raw()` rather than `cbreak()`; or stop
-  routing input through `wgetch()` entirely and instead `read()` raw bytes from
-  fd 0 in the notifier and feed them to the existing escape-sequence decoder
-  in `Screen::pollKey` (which already assembles sequences by hand). Until then,
-  FreeBSD is build- and capture-validated but the TUI is not interactively
-  usable there; the Qt Widgets GUI (separate Qt event loop, no ncurses) is
-  unaffected.
+* **`wgetch()` + an external event loop spins at 100% CPU on EOF (all
+  platforms).** `wgetch()` returns `ERR` for BOTH "no input pending" and EOF,
+  so a closed/redirected stdin (pipe/pty hangup, or `</dev/null`) stays
+  *readable* forever while yielding no key — the level-triggered notifier
+  re-fires endlessly and the TUI can never be quit by a keystroke. With a raw
+  `read()`, EOF is unambiguous (`n == 0`): disable the notifier and quit (an
+  interactive TUI whose input closed should exit, like top/htop). No POLLHUP
+  heuristics or wakeup counting needed.
+* **FreeBSD ncursesw simply does not return typed keys via `wgetch()` in this
+  model** — the notifier fires, but `wgetch()` yields `ERR` and never consumes
+  the byte (which then echoes once the tty is restored), so the TUI was
+  unusable on FreeBSD and span the CPU. NetBSD (base curses) and Linux
+  (ncursesw) worked with the same code; reading raw bytes ourselves sidesteps
+  the difference entirely and FreeBSD is now fully interactive.
+
+The terminal still needs `cbreak()` + `noecho()` (done in `Screen::init`) so
+the kernel delivers bytes immediately and unechoed; `Screen::pollKey` hand-
+assembles CSI/SS3 escape sequences (arrows, Home/End, PgUp/PgDn) from the
+buffer, returning the same `KEY_*` codes the rest of the app expects. A partial
+sequence split across `read()` bursts is held in the buffer until the rest
+arrives. Verified interactive (tab switch, navigation, quit) and EOF-clean on
+Linux, NetBSD, and FreeBSD.
 
 ### 7.5 Peer credentials — `getpeereid(3)` not `SO_PEERCRED`
 

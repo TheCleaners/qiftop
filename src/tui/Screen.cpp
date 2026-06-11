@@ -192,40 +192,56 @@ int Screen::bodyHeight() const
     return h > 0 ? h : 0;
 }
 
+void Screen::feedInput(const char *data, int len)
+{
+    if (data && len > 0)
+        m_inbuf.append(data, len);
+}
+
 int Screen::pollKey()
 {
-    if (!m_active)
+    if (m_inbuf.isEmpty())
         return ERR;
-    const int ch = wgetch(stdscr);
-    // Under nodelay, ncurses does NOT assemble cursor/function-key escape
-    // sequences — it returns the raw bytes (ESC '[' 'A' …). Since our input is
-    // drained in a burst (QSocketNotifier fires when STDIN is readable and we
-    // loop until ERR), the continuation bytes are already buffered, so we can
-    // assemble them here. A lone ESC (next read == ERR) is returned as 27.
-    if (ch != 27)
-        return ch;
-    const int b1 = wgetch(stdscr);
-    if (b1 == ERR)
-        return 27;                 // real Escape key
-    if (b1 != '[' && b1 != 'O') {
-        // ESC + something else (e.g. Alt-key) — not a sequence we map; surface
-        // the ESC and let the next pollKey() return the trailing byte.
-        ungetch(b1);
+
+    const auto u = [&](int i) { return static_cast<unsigned char>(m_inbuf[i]); };
+    const unsigned char c = u(0);
+
+    // Non-escape byte: return it as-is (handleKey deals with raw bytes like
+    // 'q', Tab=9, Enter=10/13, Backspace=8/127).
+    if (c != 27) {
+        m_inbuf.remove(0, 1);
+        return c;
+    }
+
+    // ESC: could be a lone Escape key or the start of a CSI/SS3 sequence.
+    // Because we decode from a buffer filled per read() burst, a complete
+    // sequence normally arrives together; if only ESC is buffered, treat it as
+    // the Escape key (matches the previous wgetch behaviour).
+    if (m_inbuf.size() == 1) {
+        m_inbuf.remove(0, 1);
         return 27;
     }
-    const int b2 = wgetch(stdscr);
+    const unsigned char b1 = u(1);
+    if (b1 != '[' && b1 != 'O') {
+        // ESC + some other byte (e.g. Alt-key): surface ESC, keep the rest.
+        m_inbuf.remove(0, 1);
+        return 27;
+    }
+    if (m_inbuf.size() < 3)
+        return ERR;                    // incomplete CSI/SS3; wait for more bytes
+    const unsigned char b2 = u(2);
     switch (b2) {
-    case 'A': return KEY_UP;
-    case 'B': return KEY_DOWN;
-    case 'C': return KEY_RIGHT;
-    case 'D': return KEY_LEFT;
-    case 'H': return KEY_HOME;
-    case 'F': return KEY_END;
-    case '5': wgetch(stdscr); return KEY_PPAGE; // ESC [ 5 ~
-    case '6': wgetch(stdscr); return KEY_NPAGE; // ESC [ 6 ~
-    case '1': wgetch(stdscr); return KEY_HOME;  // ESC [ 1 ~
-    case '4': wgetch(stdscr); return KEY_END;   // ESC [ 4 ~
-    default:  return ERR;                       // unknown sequence; drop
+    case 'A': m_inbuf.remove(0, 3); return KEY_UP;
+    case 'B': m_inbuf.remove(0, 3); return KEY_DOWN;
+    case 'C': m_inbuf.remove(0, 3); return KEY_RIGHT;
+    case 'D': m_inbuf.remove(0, 3); return KEY_LEFT;
+    case 'H': m_inbuf.remove(0, 3); return KEY_HOME;
+    case 'F': m_inbuf.remove(0, 3); return KEY_END;
+    case '5': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_PPAGE; // ESC [ 5 ~
+    case '6': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_NPAGE; // ESC [ 6 ~
+    case '1': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_HOME;  // ESC [ 1 ~
+    case '4': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_END;   // ESC [ 4 ~
+    default:  m_inbuf.remove(0, 3); return ERR;                                           // unknown; drop
     }
 }
 

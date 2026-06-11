@@ -16,10 +16,10 @@
 #include <QTimer>
 
 #include <csignal>
+#include <cerrno>
 #include <memory>
 
 #include <fcntl.h>
-#include <poll.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -231,41 +231,32 @@ int main(int argc, char *argv[])
         connMon->setDesiredIntervalMs(ms);
     });
 
-    // Guards against a stdin that is perpetually "readable" but yields no key
-    // (EOF on a pipe/pty → POLLHUP; EOF on /dev/null or a regular file →
-    // read() returns 0 with only POLLIN). Either way the level-triggered
-    // notifier would spin at 100% CPU and the TUI could never be quit by a
-    // keystroke. A normal idle stdin does NOT wake the notifier at all, so any
-    // run of key-less wakeups means stdin is broken/closed; an interactive TUI
-    // should then exit (matches top/htop).
-    int emptyStdinWakeups = 0;
+    // Input: read raw bytes from stdin ourselves and let Screen decode keys,
+    // rather than draining ncurses wgetch() from the notifier. wgetch() under
+    // an external event loop is fragile — it returns ERR for both "no input"
+    // and EOF (so a closed/redirected stdin spins the level-triggered notifier
+    // at 100% CPU), and on FreeBSD ncursesw it fails to consume bytes at all.
+    // A direct read() is portable and gives an unambiguous EOF (n == 0): an
+    // interactive TUI whose input has closed should exit (top/htop behaviour).
     QSocketNotifier stdinNotifier(STDIN_FILENO, QSocketNotifier::Read);
     QObject::connect(
         &stdinNotifier, &QSocketNotifier::activated, &app,
-        [&screen, &tui, &stdinNotifier, &emptyStdinWakeups] {
-            int ch;
-            int produced = 0;
-            while ((ch = screen.pollKey()) != ERR) {
-                tui.handleKey(ch);
-                ++produced;
-            }
-            if (produced > 0) {
-                emptyStdinWakeups = 0;
+        [&screen, &tui, &stdinNotifier] {
+            char buf[256];
+            const ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
+            if (n > 0) {
+                screen.feedInput(buf, static_cast<int>(n));
+                int ch;
+                while ((ch = screen.pollKey()) != ERR)
+                    tui.handleKey(ch);
                 return;
             }
-            struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
-            const bool hup = ::poll(&pfd, 1, 0) > 0
-                             && (pfd.revents & (POLLHUP | POLLERR | POLLNVAL));
-            // POLLHUP is immediate; the counter catches /dev/null-style EOF
-            // (always POLLIN, read()==0) which has no hangup flag. A spin
-            // fires thousands of times a second, so a small threshold trips
-            // in microseconds; legitimate lone key-less wakeups (a partial or
-            // unmapped escape sequence) never recur back-to-back because the
-            // fd is drained, so the counter resets on the next real key.
-            if (hup || ++emptyStdinWakeups >= 8) {
-                stdinNotifier.setEnabled(false);
-                QCoreApplication::quit();
-            }
+            if (n < 0 && (errno == EINTR || errno == EAGAIN))
+                return;            // transient; wait for the next wakeup
+            // n == 0 (EOF) or a hard error: stdin is gone — stop the notifier
+            // so it can't re-fire on the dead fd, and exit.
+            stdinNotifier.setEnabled(false);
+            QCoreApplication::quit();
         });
 
     // --- signal-safe terminal restore + resize ---

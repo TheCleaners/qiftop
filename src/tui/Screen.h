@@ -4,6 +4,7 @@
 // rest of the app is curses-agnostic (a notcurses backend could replace this
 // class). It owns the terminal lifecycle (init/shutdown) and paints a Frame.
 
+#include <QByteArray>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -72,7 +73,14 @@ public:
     // column header, footer).
     [[nodiscard]] int  bodyHeight() const;
 
-    [[nodiscard]] int  pollKey();      // wgetch (nodelay); ERR (-1) if none
+    // Input is read as raw bytes from stdin by the caller (main.cpp's
+    // QSocketNotifier) and handed here via feedInput(); pollKey() then decodes
+    // one key at a time from the buffer. This deliberately bypasses ncurses
+    // wgetch() for input — wgetch + an external event loop is fragile across
+    // curses implementations (it spins on EOF and, on FreeBSD ncursesw, fails
+    // to consume bytes entirely). ncurses is used for OUTPUT only.
+    void feedInput(const char *data, int len);
+    [[nodiscard]] int  pollKey();      // decode next key from buffer; ERR if none
 
     void render(const Frame &f);
 
@@ -94,6 +102,7 @@ private:
     bool  m_hasColor = false;
     bool  m_color256 = false;
     Theme m_theme    = builtinThemes().first();
+    QByteArray m_inbuf;                // raw bytes pending key decode
 };
 
 } // namespace qiftop::tui
