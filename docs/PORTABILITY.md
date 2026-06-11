@@ -27,7 +27,7 @@
 | `backend/dbus/` | Client-side DBus proxy monitors | 🟡 Portable wherever Qt DBus and a suitable bus are available. |
 | `backend/PlatformInfo` | Local address / uid-name / group helpers with `Q_OS_*` guards | 🟡 Compiles with fallbacks; richer data on Unix/Linux. |
 | `backend/linux/` | libnl-3, libnetfilter_conntrack, sock_diag, cgroup and netns attribution | 🔴 Linux-only. |
-| `backend/bsd/` | getifaddrs(3) AF_LINK per-interface counters + libpcap/BPF per-flow capture (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS) | 🟡 Interface stats + per-flow rates work on NetBSD 11; no process/container attribution. |
+| `backend/bsd/` | getifaddrs(3) AF_LINK per-interface counters + libpcap/BPF per-flow capture + per-OS sysctl process attribution (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS) | 🟡 Interface + per-flow + process attribution work on NetBSD 11 and FreeBSD 14; no container/jail attribution. |
 | `agent/` | DBus daemon wrapping the abstract monitors/resolver | 🟡 Service logic is mostly Qt Core/DBus; production data sources and install model are Linux. |
 | `dist/systemd/`, `dist/dbus/`, `dist/debian/`, RPM/Pages repo rules | systemd, system DBus policy, Debian/Fedora packaging | 🔴 Linux-distro-specific. |
 
@@ -81,19 +81,19 @@ would need.
 | Container attribution | Jails via `jail_get(2)`; OCI runtime attribution is platform-specific | ⬜ Future (jails not yet wired). |
 | Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed | ⬜ Agent is Linux-only today; BSD runs the in-process backend (capture needs root for `/dev/bpf`). |
 
-What works today (NetBSD 11, `pkgsrc` qt6-qtbase + base curses + base libpcap):
-`libqiftop.so`, the `qiftop` GUI, the `nqiftop` TUI, and the `check_qiftop`
-monitoring plugin all build and run. The Interfaces view shows live
-per-interface rates, totals, MTU, and oper-state from `getifaddrs(3)`; the
-Connections view shows live per-flow TCP/UDP rates, totals, SYN-observed
-direction, and **per-flow process attribution** (comm/pid/uid, with
-group-by-process) captured via libpcap/BPF + a pure-sysctl socket→PID join
-(run with elevated privileges for `/dev/bpf` access). The `backend/bsd` code
-is shared across the whole BSD family — only the sysctl struct layouts in the
-process resolver are currently NetBSD-specific (other BSDs build with
-attribution stubbed). Remaining gaps: container/jail attribution and a
-privileged agent. The `qiftop-agent` remains Linux-only; on BSD the
-in-process backend is the natural, DBus-free path.
+What works today (validated on NetBSD 11 and FreeBSD 14): `libqiftop.so`, the
+`qiftop` GUI, the `nqiftop` TUI, and the `check_qiftop` monitoring plugin all
+build and run. The Interfaces view shows live per-interface rates, totals, MTU,
+and oper-state from `getifaddrs(3)`; the Connections view shows live per-flow
+TCP/UDP rates, totals, SYN-observed direction, and **per-flow process
+attribution** (comm/pid/uid, with group-by-process) captured via libpcap/BPF
+plus a pure-sysctl socket→PID resolver (run with elevated privileges for
+`/dev/bpf` access). The `backend/bsd` code is shared across the whole BSD
+family; only the process-attribution sysctl layer is per-OS (NetBSD and
+FreeBSD implemented; OpenBSD/DragonFly build with attribution stubbed).
+Remaining gaps: container/jail attribution and a privileged agent. The
+`qiftop-agent` remains Linux-only; on BSD the in-process backend is the
+natural, DBus-free path.
 
 Verdict: interface, per-flow, **and** process attribution are working on BSD;
 the next lifts are container/jail attribution and an optional privileged-agent
@@ -229,11 +229,11 @@ backend interfaces.
 
 * Full macOS / Windows support.
 * **BSD container/jail attribution** — interface, per-flow (libpcap/BPF), and
-  per-process attribution all work on NetBSD, but flows carry no container/jail
-  scope yet (`jail_get(2)` is unwired). BSD support is a byproduct of the
-  portability experiment, not a shipped/packaged target yet. The process
-  resolver's sysctl struct layouts are currently NetBSD-specific; FreeBSD/
-  OpenBSD build with attribution stubbed.
+  per-process attribution all work on NetBSD and FreeBSD, but flows carry no
+  container/jail scope yet (`jail_get(2)` is unwired). BSD support is a
+  byproduct of the portability experiment, not a shipped/packaged target yet.
+  Process attribution is implemented for NetBSD and FreeBSD; OpenBSD/DragonFly
+  build with it stubbed.
 * A non-DBus production transport.
 * A macOS Network Extension / notarized collector.
 * A Windows packet driver integration.
@@ -383,6 +383,16 @@ on `pcap_get_selectable_fd` so capture is event-driven, not polled. Gotchas:
   SYN was observed (capture started mid-connection). This logic is
   platform-neutral and is the prime candidate to offer as a Linux pcap capture
   path too.
+* **Use `pcap_create` + `pcap_set_immediate_mode(p, 1)` + `pcap_activate`, NOT
+  `pcap_open_live`.** On the BSDs, BPF buffers captured packets and only makes
+  the `pcap_get_selectable_fd()` readable once the buffer fills or the read
+  timeout expires. Driving pcap from an event loop (`QSocketNotifier` on the
+  selectable fd) therefore sees NO packets on FreeBSD until a buffer fills —
+  effectively never for light flows, so the Connections view stays empty.
+  Immediate mode delivers each packet as it arrives, which is what makes the
+  notifier fire; `pcap_open_live` can't request it. (NetBSD's BPF + the read
+  timeout happened to flush often enough to mostly work, but immediate mode is
+  the correct, portable choice for all BSDs/macOS.)
 * **Bounded caches.** Cap the flow table (we use 16384; drop *new* flows at
   the cap so existing rates stay correct, never clear) and the emitted
   snapshot (top-N by bytes, 4096) per AGENTS §8a rule 8. Prune by a last-seen
@@ -390,49 +400,65 @@ on `pcap_get_selectable_fd` so capture is event-driven, not polled. Gotchas:
 * Capture needs read access to `/dev/bpf*` — root on the BSDs. Degrade to a
   one-shot `accountingUnavailable` signal when no handle opens.
 
-### 7.7 Process attribution — the pure-sysctl socket→PID join
+### 7.7 Process attribution — per-OS socket→PID (sysctl, no kvm)
 
-NetBSD maps sockets to PIDs **without kvm** — exactly what `sockstat(1)` does
-(read its source: `usr.bin/sockstat/sockstat.c`). Three sysctls, joined:
+Both BSDs map sockets to PIDs **without kvm**, but the mechanism differs per
+OS, so `BsdSocketResolver::refresh()` is `#if defined(__NetBSD__)` /
+`#elif defined(__FreeBSD__)` / `#else` (stub). Both build an exact 4-tuple map
+plus a local 2-tuple fallback (listeners / unconnected UDP, mirroring the Linux
+sock_diag 2-tuple path), keyed identically to the capture worker via
+`BsdFlowKey.h`. Reading other processes' sockets/fds needs privilege; qiftop's
+capture already runs as root, so the resolver sees everything.
 
+**NetBSD** — the `sockstat(1)` join (`usr.bin/sockstat/sockstat.c`):
 1. `KERN_FILE2` / `KERN_FILE_BYPID` → `struct kinfo_file[]`: for each
-   `DTYPE_SOCKET` fd, `ki_fdata` is the `struct socket *` kernel pointer and
-   `ki_pid` is the owner. Use **BYPID** (not BYFILE) — BYFILE does not
-   populate `ki_pid` per descriptor.
+   `DTYPE_SOCKET` fd, `ki_fdata` is the `struct socket *` and `ki_pid` the
+   owner. Use **BYPID** (BYFILE doesn't populate `ki_pid`).
 2. `net.inet.{tcp,udp}.pcblist` / `net.inet6.{tcp6,udp6}.pcblist` →
-   `struct kinfo_pcb[]`: `ki_sockaddr` is the same `struct socket *` pointer
-   (the join key), `ki_src`/`ki_dst` are the local/foreign sockaddrs.
-3. `KERN_PROC2` / `KERN_PROC_ALL` → `struct kinfo_proc2[]`: `p_pid` → `p_comm`
-   + `p_ruid`.
+   `struct kinfo_pcb[]`: `ki_sockaddr` is the same `struct socket *` (join key),
+   `ki_src`/`ki_dst` the sockaddrs.
+3. `KERN_PROC2` / `KERN_PROC_ALL` → `kinfo_proc2`: `p_pid` → `p_comm` + `p_ruid`.
+   Join `pcb.ki_sockaddr == file.ki_fdata`.
+   * The MIB needs trailing args appended after `sysctlnametomib`: for
+     `pcblist`, `{ PCB_ALL, 0, sizeof(struct kinfo_pcb), INT_MAX }` (`PCB_ALL`
+     is `0`, in `<sys/socket.h>`). A bare
+     `sysctlbyname("net.inet.tcp.pcblist", …)` returns `EINVAL` — the symptom
+     of the missing trailing elements.
 
-Join `pcb.ki_sockaddr == file.ki_fdata` to get pid, then pid → comm/uid. Build
-both an exact 4-tuple map and a local 2-tuple fallback (for listeners /
-unconnected UDP, mirroring the Linux sock_diag 2-tuple path). See
-`BsdSocketResolver`. **Two traps that cost real time:**
+**FreeBSD** — do **NOT** use the `xinpcb`/`pcblist` join: `struct xinpcb` and
+`struct xsocket` are NOT ABI-stable and drift between the running kernel and
+the installed headers (observed on a FreeBSD 14 image: kernel `xinpcb` 744 B
+vs header 400 B, `xsocket` 400 vs 240 — every field read garbage). Instead use
+the length-prefixed, offset-stable `kinfo_file` path that `libprocstat`/
+`sockstat` use:
+1. `KERN_PROC` / `KERN_PROC_PROC` → `struct kinfo_proc[]` (stride by
+   `ki_structsize`): `ki_pid` → `ki_comm` + `ki_ruid`.
+2. Per pid, `KERN_PROC` / `KERN_PROC_FILEDESC` → `struct kinfo_file[]` (stride
+   by `kf_structsize`): for `KF_TYPE_SOCKET` fds with `kf_sock_domain` AF_INET/
+   INET6 and `kf_sock_protocol` TCP/UDP, `kf_sa_local` / `kf_sa_peer` already
+   carry the 5-tuple — no socket-pointer join needed, and we know the pid from
+   the per-pid query. `kf_structsize` self-describes the record, so a newer
+   kernel stays parseable with older headers (the whole point of `kinfo_file`).
+   Note the older header field names are `kf_sock_domain`/`kf_sock_type`/
+   `kf_sock_protocol` (newer trees add `…0` suffixed variants).
 
-* **The MIB needs trailing args appended after `sysctlnametomib`.** For
-  `pcblist`: append `{ PCB_ALL, 0 /*all pids*/, sizeof(struct kinfo_pcb),
-  INT_MAX /*count*/ }`. For `KERN_FILE2`/`KERN_PROC2`: the op
-  (`KERN_FILE_BYPID` / `KERN_PROC_ALL`), an arg, `sizeof(elem)`, and a count.
-  A bare `sysctlbyname("net.inet.tcp.pcblist", ...)` returns `EINVAL` — that's
-  the symptom of the missing trailing elements. `PCB_ALL` is `0`, defined in
-  `<sys/socket.h>`.
-* **A sysctl size-probe (`oldp == NULL`) returns 0, not `-1`/`ENOMEM`.** If
-  your fetch loop breaks on the first `rc == 0`, you get a correctly-*sized*
-  but **zero-filled** buffer and silently attribute nothing. You must keep
-  iterating after the probe: allocate, then fetch, and only stop once you've
-  read into a non-null buffer (and still handle `ENOMEM` to grow if the table
-  changed). This mirrors sockstat's `sysctl_sucker`; see `suckMib`.
-* `_KMEMUSER` is a red herring here: `kinfo_pcb`/`kinfo_file` sizes are the
-  same with or without it on NetBSD 11. sockstat defines it only for the
-  `DTYPE_*` enum and some socketvar fields.
-* The resolver sysctls work **non-root**; only the pcap capture needs root.
-  Refresh once per snapshot tick — it's cheap and there is no per-flow cost.
-* These struct layouts are **NetBSD-specific** (FreeBSD's `xinpcb` /
-  `xsocket`, OpenBSD's variants differ). Keep the resolver `#if
-  defined(__NetBSD__)`-guarded with a stub for the other BSDs so the backend
-  still builds (capture works, flows are just unattributed) until someone adds
-  the per-OS layout.
+**Two traps shared by both (both fixed in `suckMib`):**
+
+* **A sysctl size-probe (`oldp == NULL`) returns 0, not `-1`/`ENOMEM`.** A fetch
+  loop that breaks on the first `rc == 0` yields a correctly-*sized* but
+  **zero-filled** buffer and silently attributes nothing.
+* **A 0-byte result must terminate the grow loop.** `KERN_PROC_FILEDESC` for a
+  process with no open files (kernel threads, pid 0) returns `sz == 0`; if the
+  loop only stops once it has read into a non-null buffer, `buf.resize(0)`
+  leaves the buffer empty and it **spins forever**. Break when
+  `rc == 0 && (haveBuffer || sz == 0)`. (NetBSD's queries always returned data,
+  so this only surfaced on FreeBSD's per-pid filedesc walk.)
+
+The resolver sysctls themselves work non-root; only the pcap capture needs
+root. Refresh once per snapshot tick — cheap, no per-flow cost (FreeBSD's
+per-pid filedesc walk is O(processes) sysctls but fine at a 1 s cadence, same
+as `sockstat`). OpenBSD/DragonFly will need their own branch (different
+`kinfo_*` layouts); until then they build with attribution stubbed.
 
 ### 7.8 DBus is optional on BSD
 

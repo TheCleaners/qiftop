@@ -3,37 +3,35 @@
 
 #include "util/Logging.h"
 
-#if defined(__NetBSD__)
+#if defined(__NetBSD__) || defined(__FreeBSD__)
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
-#include <sys/file.h>
 
 #include <netinet/in.h>
 
-#include <climits>
-#include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <vector>
 
 #include <QtEndian>
+
+#if defined(__NetBSD__)
+#include <sys/file.h>      // DTYPE_SOCKET
+// kinfo_pcb is in <sys/socket.h>; kinfo_file/KERN_FILE2 in <sys/sysctl.h>.
+#elif defined(__FreeBSD__)
+#include <sys/user.h>      // kinfo_proc, kinfo_file, KF_TYPE_SOCKET
 #endif
 
 namespace qiftop::backend::bsd {
 
-#if defined(__NetBSD__)
-
 namespace {
 
 // Fetch a variable-size sysctl array, growing the buffer until it fits.
-// `name`/`namelen` is the fully-built MIB including the trailing
-// (op, arg, elemsize, count) elements the KERN_*2 / pcblist nodes require.
-//
-// Note: a sysctl size-probe (oldp == NULL) returns 0 and reports the needed
-// size in `sz` — it does NOT fail with ENOMEM. So we must keep iterating
-// after the probe (allocate, then fetch), and only stop once we've actually
-// read into a non-null buffer. Mirrors sockstat's sysctl_sucker.
+// A size-probe (oldp == NULL) returns 0 and reports the needed size in `sz`
+// (NOT ENOMEM), so we must keep iterating after the probe and only stop once
+// we've read into a non-null buffer. Mirrors sockstat's sysctl_sucker.
 std::vector<char> suckMib(int *name, u_int namelen)
 {
     std::vector<char> buf;
@@ -46,9 +44,13 @@ std::vector<char> suckMib(int *name, u_int namelen)
                 << "bsd-resolver: sysctl failed:" << strerror(errno);
             return {};
         }
-        if (rc == 0 && old != nullptr)
-            break;               // fetched real data
-        buf.resize(sz);          // size probe (rc==0, old==NULL) or ENOMEM grow
+        // Done when we've read into a real buffer, OR the size probe reports
+        // nothing to fetch (sz == 0). The latter guard is essential: without
+        // it a 0-byte result (e.g. KERN_PROC_FILEDESC for a process with no
+        // open files) leaves buf empty → old stays nullptr → infinite loop.
+        if (rc == 0 && (old != nullptr || sz == 0))
+            break;
+        buf.resize(sz);
     }
     buf.resize(sz);
     return buf;
@@ -73,6 +75,31 @@ Endpoint endpointFromSockaddr(const sockaddr *sa)
     return ep;
 }
 
+} // namespace
+} // namespace qiftop::backend::bsd
+#endif // __NetBSD__ || __FreeBSD__
+
+namespace qiftop::backend::bsd {
+
+// Shared lookup: exact 4-tuple first, then the local 2-tuple fallback. On
+// platforms without a resolver implementation both maps are empty, so this
+// safely returns an invalid ProcessInfo.
+ProcessInfo BsdSocketResolver::lookup(L4Proto proto, const Endpoint &local,
+                                      const Endpoint &remote) const
+{
+    if (auto it = m_exact.constFind(flowKeyExact(proto, local, remote));
+        it != m_exact.constEnd())
+        return it.value();
+    if (auto it = m_local.constFind(flowKeyLocal(proto, local));
+        it != m_local.constEnd())
+        return it.value();
+    return {};
+}
+
+#if defined(__NetBSD__)
+
+namespace {
+
 // pid -> (comm, uid) via KERN_PROC2 / KERN_PROC_ALL.
 QHash<qint32, ProcessInfo> buildPidInfo()
 {
@@ -92,8 +119,7 @@ QHash<qint32, ProcessInfo> buildPidInfo()
     return out;
 }
 
-// socket kernel pointer -> owning pid via KERN_FILE2 / KERN_FILE_BYPID
-// (BYPID populates ki_pid per descriptor, which BYFILE does not).
+// socket kernel pointer -> owning pid via KERN_FILE2 / KERN_FILE_BYPID.
 QHash<quint64, qint32> buildSocketPid()
 {
     QHash<quint64, qint32> out;
@@ -133,12 +159,12 @@ void BsdSocketResolver::refresh()
         int name[CTL_MAXNAME];
         size_t depth = CTL_MAXNAME;
         if (sysctlnametomib(pl.name, name, &depth) != 0)
-            continue; // node absent (e.g. IPv6 disabled)
+            continue;
         u_int namelen = static_cast<u_int>(depth);
         name[namelen++] = PCB_ALL;
-        name[namelen++] = 0;                          // all pids
+        name[namelen++] = 0;
         name[namelen++] = sizeof(struct kinfo_pcb);
-        name[namelen++] = INT_MAX;                    // all entries
+        name[namelen++] = INT_MAX;
 
         const std::vector<char> buf = suckMib(name, namelen);
         const size_t n = buf.size() / sizeof(struct kinfo_pcb);
@@ -169,25 +195,95 @@ void BsdSocketResolver::refresh()
     }
 }
 
-ProcessInfo BsdSocketResolver::lookup(L4Proto proto, const Endpoint &local,
-                                      const Endpoint &remote) const
+#elif defined(__FreeBSD__)
+
+// FreeBSD socket -> process attribution via the ABI-stable kinfo_file path
+// (what libprocstat / sockstat(1) use). Unlike NetBSD there is no socket-ptr
+// join: KERN_PROC_FILEDESC returns kinfo_file records that already carry the
+// socket's local/peer sockaddrs (kf_sa_local/kf_sa_peer) for KF_TYPE_SOCKET
+// fds, and we know the owning pid because the query is per-pid. We avoid
+// xinpcb/pcblist entirely — those structs are NOT ABI-stable and drift between
+// kernel and installed headers (observed on FreeBSD 14: kernel xinpcb 744 B vs
+// header 400 B), whereas kinfo_file is length-prefixed (kf_structsize) and
+// offset-stable by design.
+//
+// Reading another process's fds requires privilege; qiftop's capture already
+// runs as root (for /dev/bpf), so the resolver sees every process.
+
+void BsdSocketResolver::refresh()
 {
-    if (auto it = m_exact.constFind(flowKeyExact(proto, local, remote));
-        it != m_exact.constEnd())
-        return it.value();
-    if (auto it = m_local.constFind(flowKeyLocal(proto, local));
-        it != m_local.constEnd())
-        return it.value();
-    return {};
+    m_exact.clear();
+    m_local.clear();
+
+    // 1. pid -> (comm, uid) from KERN_PROC_PROC (kinfo_proc, ki_structsize stride).
+    QHash<qint32, ProcessInfo> pidInfo;
+    {
+        int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC};
+        const std::vector<char> buf = suckMib(mib, 3);
+        const char *p = buf.data();
+        const char *end = p + buf.size();
+        while (p + static_cast<long>(sizeof(int)) <= end) {
+            const auto *kp = reinterpret_cast<const struct kinfo_proc *>(p);
+            const int sz = kp->ki_structsize;
+            if (sz <= 0)
+                break;
+            ProcessInfo info;
+            info.pid  = static_cast<qint32>(kp->ki_pid);
+            info.uid  = static_cast<quint32>(kp->ki_ruid);
+            info.comm = QString::fromUtf8(kp->ki_comm);
+            pidInfo.insert(info.pid, info);
+            p += sz;
+        }
+    }
+
+    // 2. Per pid: KERN_PROC_FILEDESC -> kinfo_file (kf_structsize stride). For
+    //    each connected INET/INET6 TCP/UDP socket, stamp its 5-tuple.
+    for (auto it = pidInfo.constBegin(); it != pidInfo.constEnd(); ++it) {
+        const qint32 pid = it.key();
+        int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_FILEDESC, pid};
+        const std::vector<char> buf = suckMib(mib, 4);
+        if (buf.empty())
+            continue;
+        const char *p = buf.data();
+        const char *end = p + buf.size();
+        while (p + static_cast<long>(sizeof(int)) <= end) {
+            const auto *kf = reinterpret_cast<const struct kinfo_file *>(p);
+            const int sz = kf->kf_structsize;
+            if (sz <= 0)
+                break;
+            const char *next = p + sz;
+            p = next;
+
+            if (kf->kf_type != KF_TYPE_SOCKET)
+                continue;
+            const int dom = kf->kf_sock_domain;
+            if (dom != AF_INET && dom != AF_INET6)
+                continue;
+            L4Proto proto;
+            if (kf->kf_sock_protocol == IPPROTO_TCP)      proto = L4Proto::Tcp;
+            else if (kf->kf_sock_protocol == IPPROTO_UDP) proto = L4Proto::Udp;
+            else                                          continue;
+
+            const Endpoint local  = endpointFromSockaddr(
+                reinterpret_cast<const sockaddr *>(&kf->kf_sa_local));
+            const Endpoint remote = endpointFromSockaddr(
+                reinterpret_cast<const sockaddr *>(&kf->kf_sa_peer));
+            if (local.address.isNull())
+                continue;
+
+            const ProcessInfo &info = it.value();
+            if (!remote.address.isNull() && remote.port != 0)
+                m_exact.insert(flowKeyExact(proto, local, remote), info);
+            const QString lk = flowKeyLocal(proto, local);
+            if (!m_local.contains(lk))
+                m_local.insert(lk, info);
+        }
+    }
 }
 
-#else // !__NetBSD__
+#else // other BSDs: attribution not implemented (capture still works)
 
 void BsdSocketResolver::refresh() {}
-ProcessInfo BsdSocketResolver::lookup(L4Proto, const Endpoint &, const Endpoint &) const
-{
-    return {};
-}
 
 #endif
 

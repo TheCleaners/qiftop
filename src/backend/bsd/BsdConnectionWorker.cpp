@@ -127,11 +127,28 @@ void BsdConnectionWorker::openCaptures()
         seen.insert(name);
 
         char errbuf[PCAP_ERRBUF_SIZE] = {};
-        pcap_t *p = pcap_open_live(ifa->ifa_name, kSnapLen, /*promisc=*/0,
-                                   kCaptureTimeout, errbuf);
+        // Use pcap_create + pcap_activate (not pcap_open_live) so we can set
+        // IMMEDIATE MODE: on the BSDs, BPF buffers captured packets and only
+        // makes the selectable fd readable once the buffer fills or the read
+        // timeout expires. Driving pcap from an event loop via
+        // pcap_get_selectable_fd + QSocketNotifier therefore sees NO packets
+        // on FreeBSD until a buffer fills (effectively never for light flows).
+        // Immediate mode delivers each packet as it arrives, which is what
+        // makes the notifier fire. (pcap_open_live cannot request it.)
+        pcap_t *p = pcap_create(ifa->ifa_name, errbuf);
         if (!p) {
             qCInfo(lcVerbose).noquote()
-                << "bsd-capture: skip" << name << ":" << errbuf;
+                << "bsd-capture: create failed for" << name << ":" << errbuf;
+            continue;
+        }
+        pcap_set_snaplen(p, kSnapLen);
+        pcap_set_promisc(p, 0);
+        pcap_set_timeout(p, kCaptureTimeout);
+        pcap_set_immediate_mode(p, 1);
+        if (const int rc = pcap_activate(p); rc < 0) {
+            qCInfo(lcVerbose).noquote()
+                << "bsd-capture: skip" << name << ":" << pcap_geterr(p);
+            pcap_close(p);
             continue;
         }
         pcap_setnonblock(p, 1, errbuf);
