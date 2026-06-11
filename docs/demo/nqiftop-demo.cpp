@@ -10,8 +10,9 @@
 //   * process / container attribution: invented comms, pids and container ids.
 // A scripted key tour (driven internally via TuiApp::handleKey, so capture is
 // deterministic and needs no xdotool) shows the headline features: the
-// row-spanning gauge, grouping by process / container, the aptitude-style
-// detail tree, the settings panel and live theme cycling.
+// row-spanning gauge, grouping by process / container, the modal aptitude-style
+// detail inspector (Enter opens, j/k browse adjacent rows, any key closes),
+// the settings panel and live theme cycling.
 
 #include <QCoreApplication>
 #include <QList>
@@ -167,9 +168,11 @@ int main(int argc, char *argv[])
     const QList<Step> tour = {
         {2600, 'g'},                 // group by interface
         {1500, 'g'},                 // group by process
-        {1800, 'j'}, {500, 'j'}, {500, 'j'},   // move cursor onto a flow
-        {1200, '\n'},                // expand its detail tree
-        {2600, '\n'},                // collapse
+        {1800, 'j'}, {500, 'j'},     // move cursor onto a flow
+        {1200, '\n'},                // open the modal detail inspector
+        {1600, 'j'}, {1400, 'j'},    // browse next rows' details (modal re-targets)
+        {1500, 'k'},                 // browse back up
+        {1600, '\n'},                // close the detail overlay
         {1200, 'g'},                 // group by container
         {2400, 'S'},                 // open Settings
         {1200, 'j'}, {500, 'j'},     // move to "Bandwidth gauge"
@@ -177,8 +180,9 @@ int main(int argc, char *argv[])
         {1200, 'z'},                 // cycle theme (light)
         {1600, 'z'},                 // cycle theme (colorblind)
         {1600, '1'},                 // Interfaces tab
-        {1500, '\n'},                // expand an interface
-        {2600, '2'},                 // back to Connections
+        {1500, '\n'},                // inspect an interface (detail overlay)
+        {2200, '\n'},                // close
+        {1200, '2'},                 // back to Connections
         {1200, 'g'},                 // ungroup (back to flat)
         {2200, 'z'},                 // back toward dark
         {1600, 'q'},                 // quit
