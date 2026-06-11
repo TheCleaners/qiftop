@@ -8,6 +8,44 @@
 
 namespace qiftop::aggregate {
 
+namespace {
+
+class RowUpdateRuns {
+public:
+    template <typename Send>
+    void add(int row, Send send)
+    {
+        if (m_first < 0) {
+            m_first = row;
+            m_last = row;
+            return;
+        }
+        if (row == m_last + 1) {
+            m_last = row;
+            return;
+        }
+        send(m_first, m_last);
+        m_first = row;
+        m_last = row;
+    }
+
+    template <typename Send>
+    void flush(Send send)
+    {
+        if (m_first < 0)
+            return;
+        send(m_first, m_last);
+        m_first = -1;
+        m_last = -1;
+    }
+
+private:
+    int m_first = -1;
+    int m_last = -1;
+};
+
+} // namespace
+
 ConnectionAggregator::ConnectionAggregator(QObject *parent)
     : QObject(parent)
 {
@@ -310,6 +348,7 @@ void ConnectionAggregator::updateConnections(QList<Connection> connections)
 
     // --- update existing rows / mark survivors as stale ---
     const qint64 windowCutoff = nowMs - m_windowMs;
+    RowUpdateRuns updatedRows;
     for (qsizetype i = 0; i < m_rows.size(); ++i) {
         Row &r = m_rows[i];
         const QString k = r.current.key();
@@ -365,7 +404,9 @@ void ConnectionAggregator::updateConnections(QList<Connection> connections)
             r.current    = c;
             r.lastSeenMs = nowMs;
             r.stale      = false;
-            emit rowsUpdated(int(i), int(i));
+            updatedRows.add(int(i), [this](int first, int last) {
+                emit rowsUpdated(first, last);
+            });
         } else if (!r.stale) {
             r.stale  = true;
             r.rxRate = 0.0;
@@ -376,9 +417,14 @@ void ConnectionAggregator::updateConnections(QList<Connection> connections)
             r.txTarget = 0.0;
             r.rxAnimDurMs = 0;
             r.txAnimDurMs = 0;
-            emit rowsUpdated(int(i), int(i));
+            updatedRows.add(int(i), [this](int first, int last) {
+                emit rowsUpdated(first, last);
+            });
         }
     }
+    updatedRows.flush([this](int first, int last) {
+        emit rowsUpdated(first, last);
+    });
 
     // --- prune rows that have been stale longer than the retention window ---
     for (qsizetype i = m_rows.size() - 1; i >= 0; --i) {
@@ -427,6 +473,7 @@ void ConnectionAggregator::advanceSmoothing()
     if (m_rateSmoothingMs <= 0 || m_rows.isEmpty())
         return;
     const qint64 nowMs = m_elapsed.elapsed();
+    RowUpdateRuns updatedRows;
     for (qsizetype i = 0; i < m_rows.size(); ++i) {
         Row &r = m_rows[i];
         if (r.stale) continue;
@@ -450,8 +497,13 @@ void ConnectionAggregator::advanceSmoothing()
         step(r.rxRate, r.rxAnimFrom, r.rxAnimStartMs, r.rxAnimDurMs, r.rxTarget);
         step(r.txRate, r.txAnimFrom, r.txAnimStartMs, r.txAnimDurMs, r.txTarget);
         if (moved)
-            emit rowsUpdated(int(i), int(i));
+            updatedRows.add(int(i), [this](int first, int last) {
+                emit rowsUpdated(first, last);
+            });
     }
+    updatedRows.flush([this](int first, int last) {
+        emit rowsUpdated(first, last);
+    });
 }
 
 void ConnectionAggregator::onResolved(QHostAddress addr, QString /*hostname*/)
@@ -459,11 +511,17 @@ void ConnectionAggregator::onResolved(QHostAddress addr, QString /*hostname*/)
     if (!m_resolveEnabled || m_rows.isEmpty())
         return;
 
+    RowUpdateRuns updatedRows;
     for (qsizetype i = 0; i < m_rows.size(); ++i) {
         const Connection &c = m_rows[i].current;
         if (c.local.address == addr || c.remote.address == addr)
-            emit rowsUpdated(int(i), int(i));
+            updatedRows.add(int(i), [this](int first, int last) {
+                emit rowsUpdated(first, last);
+            });
     }
+    updatedRows.flush([this](int first, int last) {
+        emit rowsUpdated(first, last);
+    });
 }
 
 } // namespace qiftop::aggregate

@@ -85,6 +85,12 @@ qiftop_add_test(test_connection_aggregator
     ${CMAKE_SOURCE_DIR}/src/aggregate/ConnectionAggregator.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
     ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp)
+qiftop_add_test(test_aggregator_signals
+    test_aggregator_signals.cpp
+    ${CMAKE_SOURCE_DIR}/src/aggregate/ConnectionAggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/aggregate/InterfaceAggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
+    ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp)
 qiftop_add_test(test_tui_format
     test_tui_format.cpp
     ${CMAKE_SOURCE_DIR}/src/aggregate/ConnectionAggregator.cpp
