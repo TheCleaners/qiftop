@@ -19,7 +19,7 @@ the machine it was recorded on.
 | File | Role |
 |------|------|
 | `qiftop-demo.cpp` | A gated executable (`-DQIFTOP_BUILD_DEMO=ON`) that builds the **real** `MainWindow` with the in-memory test fakes (`tests/fakes/FakeMonitors.h`) and feeds it a curated synthetic dataset, animating the gauges + rates. Pretends to talk to a full-capability agent so the v0.2 process / container columns un-gate. |
-| `nqiftop-demo.cpp` | Terminal sibling: same gate, wires the **real** `Screen` + `TuiApp` (the ncurses front-end) to the fakes and runs a scripted key tour internally via `TuiApp::handleKey` (group by process/container, expand a detail tree, open Settings, cycle themes, expand an interface). Deterministic — needs no `xdotool` for input. |
+| `nqiftop-demo.cpp` | Terminal sibling: same gate, wires the **real** `Screen` + `TuiApp` (the ncurses front-end) to the fakes and runs a scripted key tour internally via `TuiApp::handleKey` (group by process/container, open the modal detail inspector and browse adjacent rows, open Settings, cycle themes, inspect an interface). Deterministic — needs no `xdotool` for input. |
 | `openbox/` | A minimal dark Openbox theme (`qiftop-dark`, orange accent) + `rc.xml` that maximizes the main window and centres dialogs, so the headless capture gets a real, on-brand title bar. |
 | `capture-still.sh` | Brings up `Xvfb` + Openbox, runs the demo, grabs one frame → PNG. |
 | `capture-gif.sh` | Same, but drives a scripted GUI tour with `xdotool` (open the View dropdown → group by container → by process → open Preferences → tour the side-nav + Colours page) and records it with `ffmpeg`, then palette-optimises to a GIF. |
