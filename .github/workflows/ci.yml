@@ -218,6 +218,7 @@ jobs:
             '
 
 
+  packaging-qa:
     name: Packaging QA (.deb lint + smoke install)
     runs-on: ubuntu-24.04
     needs: build-and-test
