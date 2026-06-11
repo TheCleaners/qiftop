@@ -2,6 +2,9 @@
 
 #include <clocale>
 #include <cmath>
+#include <cwchar>
+#include <langinfo.h>
+#include <string>
 
 // ncurses last: it defines lower-case macros (erase, move, refresh, timeout…)
 // that would clash with Qt/STL identifiers if included before them.
@@ -45,10 +48,33 @@ long ncursesAttr(int bits)
     return a;
 }
 
+void putLine(int y, const QString &s);
+
+// Convert a QString to a wchar_t string. On Linux/BSD wchar_t is 4 bytes, so
+// QString::toWCharArray emits one UCS-4 code point per character — exactly
+// what the wide curses API wants.
+std::wstring toWide(const QString &s)
+{
+    std::wstring w(s.size() + 1, L'\0');
+    const int n = s.toWCharArray(w.data());
+    w.resize(n < 0 ? 0 : n);
+    return w;
+}
+
+// Write `s` at (y, x) through the WIDE curses API. The narrow addstr() path
+// pushes raw UTF-8 bytes, which only renders correctly where the curses lib
+// does multibyte→cell decoding (Linux ncurses). BSD base curses places each
+// byte in its own cell, garbling box-drawing and other multibyte glyphs.
+// add_wch/addwstr is portable across ncurses and BSD curses.
+void putAt(int y, int x, const QString &s)
+{
+    const std::wstring w = toWide(s);
+    mvaddwstr(y, x, w.c_str());
+}
+
 void putLine(int y, const QString &s)
 {
-    const QByteArray utf8 = s.toUtf8();
-    mvaddstr(y, 0, utf8.constData());
+    putAt(y, 0, s);
 }
 
 } // namespace
@@ -59,7 +85,20 @@ void Screen::init()
 {
     if (m_active)
         return;
+    // Wide-character curses output requires a UTF-8 LC_CTYPE. Honour the
+    // user's environment first; if that yields a non-UTF-8 codeset (e.g. a
+    // bare "C"/POSIX locale over SSH), fall back to a known UTF-8 locale so
+    // box-drawing and other multibyte glyphs still render. Without this the
+    // wide API would fail to encode non-ASCII and the frames garble.
     std::setlocale(LC_ALL, "");
+    if (const char *cs = nl_langinfo(CODESET); !cs || std::string(cs) != "UTF-8") {
+        for (const char *loc : {"C.UTF-8", "en_US.UTF-8", "POSIX.UTF-8"}) {
+            if (std::setlocale(LC_ALL, loc)) {
+                std::setlocale(LC_CTYPE, loc);
+                break;
+            }
+        }
+    }
     initscr();
     cbreak();
     noecho();
@@ -207,7 +246,7 @@ void Screen::render(const Frame &f)
     // part of the "UI" (a coloured title bar + menu bar) distinct from content.
     const auto fillLine = [&](int y, Role role) {
         attrset(attrFor(role));
-        mvaddstr(y, 0, QString(width, QLatin1Char(' ')).toUtf8().constData());
+        putAt(y, 0, QString(width, QLatin1Char(' ')));
     };
 
     // --- line 0: title / tab bar (UI chrome) ---
@@ -218,14 +257,14 @@ void Screen::render(const Frame &f)
             const QString label = QStringLiteral(" %1 ").arg(f.tabs[i]);
             // Active tab pops; inactive tabs blend into the title bar.
             attrset(attrFor(i == f.activeTab ? Role::TabActive : Role::TitleBar));
-            mvaddstr(0, x, label.toUtf8().constData());
+            putAt(0, x, label);
             x += label.size() + 1;
         }
         const QString src = f.sourceLabel;
         const int sx = width - src.size() - 1;
         if (sx > x) {
             attrset(attrFor(Role::TitleBar));
-            mvaddstr(0, sx, src.toUtf8().constData());
+            putAt(0, sx, src);
         }
         attrset(A_NORMAL);
     }
@@ -242,7 +281,7 @@ void Screen::render(const Frame &f)
             if (x + h.key.size() + 1 >= width)
                 break;
             attrset(attrFor(Role::MenuKey));
-            mvaddstr(1, x, h.key.toUtf8().constData());
+            putAt(1, x, h.key);
             x += h.key.size();
             QString lbl = h.desc.isEmpty() ? QStringLiteral(" ")
                                            : QStringLiteral(" %1").arg(h.desc);
@@ -251,13 +290,13 @@ void Screen::render(const Frame &f)
             if (x + lbl.size() > width)
                 lbl = lbl.left(width - x);
             attrset(attrFor(Role::Footer));
-            mvaddstr(1, x, lbl.toUtf8().constData());
+            putAt(1, x, lbl);
             x += lbl.size();
         }
         attrset(A_NORMAL);
     } else {
         attrset(attrFor(Role::Footer));
-        mvaddstr(1, 0, fitCell(f.footer, width, false).toUtf8().constData());
+        putAt(1, 0, fitCell(f.footer, width, false));
         attrset(A_NORMAL);
     }
 
@@ -389,7 +428,7 @@ void Screen::renderModal(const ModalPanel &s) const
     const auto borderRow = [&](int y, QChar fill) {
         QString line(boxW, fill);
         attrset(border);
-        mvaddstr(y, x0, line.toUtf8().constData());
+        putAt(y, x0, line);
         attrset(A_NORMAL);
     };
     const auto put = [&](int y, const QString &text, long a, bool center) {
@@ -405,11 +444,11 @@ void Screen::renderModal(const ModalPanel &s) const
             body = inner + QString(pad, QLatin1Char(' '));
         }
         attrset(border);
-        mvaddstr(y, x0, "\u2502"); // │ left border
+        mvaddwstr(y, x0, L"\u2502"); // │ left border
         attrset(a);
-        mvaddstr(y, x0 + 1, body.toUtf8().constData());
+        putAt(y, x0 + 1, body);
         attrset(border);
-        mvaddstr(y, x0 + 1 + innerW, "\u2502"); // │ right border
+        mvaddwstr(y, x0 + 1 + innerW, L"\u2502"); // │ right border
         attrset(A_NORMAL);
     };
 
@@ -426,7 +465,7 @@ void Screen::renderModal(const ModalPanel &s) const
         top += QString(dashes - left, QChar(0x2500));
         top += QStringLiteral("\u2510"); // ┐
         attrset(border);
-        mvaddstr(y, x0, top.toUtf8().constData());
+        putAt(y, x0, top);
         attrset(A_NORMAL);
     }
     ++y;
@@ -471,8 +510,8 @@ void Screen::renderModal(const ModalPanel &s) const
     borderRow(y, QChar(0x2500));
     // Redraw bottom corners over the filled line.
     attrset(border);
-    mvaddstr(y, x0, "\u2514");                 // └
-    mvaddstr(y, x0 + boxW - 1, "\u2518");      // ┘
+    mvaddwstr(y, x0, L"\u2514");                 // └
+    mvaddwstr(y, x0 + boxW - 1, L"\u2518");      // ┘
     attrset(A_NORMAL);
 }
 
