@@ -229,6 +229,14 @@ jobs:
               libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
               ncurses-devel \
               dbus-daemon systemd shadow-utils
+            # Start from a clean build dir. A prior failed run can leave a
+            # root-owned build-rpm/ (created by this root container) that
+            # actions/checkout — running as the non-root runner user — cannot
+            # remove on a reused workspace; its stale CMakeCache.txt (baked with
+            # the /src path) then breaks "cmake -S . -B build-rpm". Removing it
+            # here (as root, inside the container) is a no-op on a fresh
+            # checkout and fixes the reused-workspace case.
+            rm -rf build-rpm
             cmake -S . -B build-rpm -G Ninja \
               -DCMAKE_BUILD_TYPE=${{ steps.ver.outputs.build_type }} \
               -DCPACK_STRIP_FILES=${{ steps.ver.outputs.strip_files }} \
