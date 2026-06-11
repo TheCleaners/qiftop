@@ -27,7 +27,7 @@
 | `backend/dbus/` | Client-side DBus proxy monitors | 🟡 Portable wherever Qt DBus and a suitable bus are available. |
 | `backend/PlatformInfo` | Local address / uid-name / group helpers with `Q_OS_*` guards | 🟡 Compiles with fallbacks; richer data on Unix/Linux. |
 | `backend/linux/` | libnl-3, libnetfilter_conntrack, sock_diag, cgroup and netns attribution | 🔴 Linux-only. |
-| `backend/bsd/` | getifaddrs(3) AF_LINK per-interface counters + libpcap/BPF per-flow capture + per-OS sysctl process attribution (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS) | 🟡 Interface + per-flow + process attribution work on NetBSD 11 and FreeBSD 14; no container/jail attribution. |
+| `backend/bsd/` | getifaddrs(3) AF_LINK per-interface counters + libpcap/BPF per-flow capture + per-OS sysctl process attribution + FreeBSD jail attribution (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS) | 🟡 Interface + per-flow + process attribution work on NetBSD 11 and FreeBSD 14/15; FreeBSD flows from jails are tagged as containers. |
 | `agent/` | DBus daemon wrapping the abstract monitors/resolver | 🟡 Service logic is mostly Qt Core/DBus; production data sources and install model are Linux. |
 | `dist/systemd/`, `dist/dbus/`, `dist/debian/`, RPM/Pages repo rules | systemd, system DBus policy, Debian/Fedora packaging | 🔴 Linux-distro-specific. |
 
@@ -78,26 +78,27 @@ would need.
 | Local addresses | `getifaddrs()` | ✅ Folded into the interface snapshot (AF_INET/AF_INET6 CIDRs). |
 | Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` | ✅ Read by `BsdConnectionWorker` for direction inference. |
 | Socket → PID | `KERN_FILE2` ⋈ `net.inet.*.pcblist` ⋈ `KERN_PROC2` (the sockstat join; pure sysctl, no kvm) | ✅ Implemented in `backend/bsd` (`BsdSocketResolver`); flows carry comm/pid/uid on NetBSD. |
-| Container attribution | Jails via `jail_get(2)`; OCI runtime attribution is platform-specific | ⬜ Future (jails not yet wired). |
+| Container attribution | Jails via `kinfo_proc.ki_jid` + `jail_get(2)` (name); OCI runtime attribution is platform-specific | ✅ FreeBSD: jailed flows tagged `ContainerInfo{runtime="jail", id=jid, name}`. |
 | Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed | ⬜ Agent is Linux-only today; BSD runs the in-process backend (capture needs root for `/dev/bpf`). |
 
-What works today (validated on NetBSD 11 and FreeBSD 14): `libqiftop.so`, the
+What works today (validated on NetBSD 11 and FreeBSD 14/15): `libqiftop.so`, the
 `qiftop` GUI, the `nqiftop` TUI, and the `check_qiftop` monitoring plugin all
 build and run. The Interfaces view shows live per-interface rates, totals, MTU,
 and oper-state from `getifaddrs(3)`; the Connections view shows live per-flow
 TCP/UDP rates, totals, SYN-observed direction, and **per-flow process
 attribution** (comm/pid/uid, with group-by-process) captured via libpcap/BPF
 plus a pure-sysctl socket→PID resolver (run with elevated privileges for
-`/dev/bpf` access). The `backend/bsd` code is shared across the whole BSD
-family; only the process-attribution sysctl layer is per-OS (NetBSD and
-FreeBSD implemented; OpenBSD/DragonFly build with attribution stubbed).
-Remaining gaps: container/jail attribution and a privileged agent. The
-`qiftop-agent` remains Linux-only; on BSD the in-process backend is the
-natural, DBus-free path.
+`/dev/bpf` access). On FreeBSD, flows owned by a **jailed** process are tagged
+as containers (`runtime="jail"`), so group-by-container and the `runtime:jail`
+filter work. The `backend/bsd` code is shared across the whole BSD family; only
+the process/jail-attribution sysctl layer is per-OS (NetBSD and FreeBSD
+implemented; OpenBSD/DragonFly build with attribution stubbed). Remaining gap:
+a privileged agent. The `qiftop-agent` remains Linux-only; on BSD the
+in-process backend is the natural, DBus-free path.
 
-Verdict: interface, per-flow, **and** process attribution are working on BSD;
-the next lifts are container/jail attribution and an optional privileged-agent
-/ non-DBus transport.
+Verdict: interface, per-flow, process, **and** FreeBSD jail attribution are
+working on BSD; the next lifts are an optional privileged-agent / non-DBus
+transport and OpenBSD/DragonFly attribution.
 
 ### 2.3 macOS / Darwin
 
@@ -228,12 +229,11 @@ backend interfaces.
 ## 6. What's not planned for 0.2.x
 
 * Full macOS / Windows support.
-* **BSD container/jail attribution** — interface, per-flow (libpcap/BPF), and
-  per-process attribution all work on NetBSD and FreeBSD, but flows carry no
-  container/jail scope yet (`jail_get(2)` is unwired). BSD support is a
-  byproduct of the portability experiment, not a shipped/packaged target yet.
-  Process attribution is implemented for NetBSD and FreeBSD; OpenBSD/DragonFly
-  build with it stubbed.
+* **BSD beyond NetBSD/FreeBSD** — interface, per-flow (libpcap/BPF), process,
+  and FreeBSD jail attribution all work on NetBSD and FreeBSD, but BSD support
+  is a byproduct of the portability experiment, not a shipped/packaged target
+  yet. Process attribution is implemented for NetBSD and FreeBSD (FreeBSD also
+  tags jails as containers); OpenBSD/DragonFly build with attribution stubbed.
 * A non-DBus production transport.
 * A macOS Network Extension / notarized collector.
 * A Windows packet driver integration.
@@ -441,6 +441,13 @@ the length-prefixed, offset-stable `kinfo_file` path that `libprocstat`/
    kernel stays parseable with older headers (the whole point of `kinfo_file`).
    Note the older header field names are `kf_sock_domain`/`kf_sock_type`/
    `kf_sock_protocol` (newer trees add `…0` suffixed variants).
+3. Jail (container) attribution: `kinfo_proc.ki_jid` gives each process's jail
+   id; `jail_get(2)` (walked with a `lastjid` in-param, like `jls`) maps jid →
+   name. A jailed process's flows are tagged
+   `ContainerInfo{runtime="jail", id=jid, name}`, which lights up
+   group-by-container and the `runtime:jail` / `container:` filters. The shared
+   resolver returns a combined `Attribution{process, container}` so NetBSD
+   (no container model) and FreeBSD use one code path.
 
 **Two traps shared by both (both fixed in `suckMib`):**
 

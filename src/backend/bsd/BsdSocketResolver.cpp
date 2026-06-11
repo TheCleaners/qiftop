@@ -22,6 +22,8 @@
 // kinfo_pcb is in <sys/socket.h>; kinfo_file/KERN_FILE2 in <sys/sysctl.h>.
 #elif defined(__FreeBSD__)
 #include <sys/user.h>      // kinfo_proc, kinfo_file, KF_TYPE_SOCKET
+#include <sys/jail.h>      // jail_get (jid → name)
+#include <sys/uio.h>       // struct iovec
 #endif
 
 namespace qiftop::backend::bsd {
@@ -83,9 +85,10 @@ namespace qiftop::backend::bsd {
 
 // Shared lookup: exact 4-tuple first, then the local 2-tuple fallback. On
 // platforms without a resolver implementation both maps are empty, so this
-// safely returns an invalid ProcessInfo.
-ProcessInfo BsdSocketResolver::lookup(L4Proto proto, const Endpoint &local,
-                                      const Endpoint &remote) const
+// safely returns a default (invalid) Attribution.
+BsdSocketResolver::Attribution
+BsdSocketResolver::lookup(L4Proto proto, const Endpoint &local,
+                          const Endpoint &remote) const
 {
     if (auto it = m_exact.constFind(flowKeyExact(proto, local, remote));
         it != m_exact.constEnd())
@@ -185,12 +188,12 @@ void BsdSocketResolver::refresh()
             if (local.address.isNull())
                 continue;
 
-            const ProcessInfo &info = infoIt.value();
+            const Attribution attr{infoIt.value(), ContainerInfo{}};
             if (!remote.address.isNull() && remote.port != 0)
-                m_exact.insert(flowKeyExact(pl.proto, local, remote), info);
+                m_exact.insert(flowKeyExact(pl.proto, local, remote), attr);
             const QString lk = flowKeyLocal(pl.proto, local);
             if (!m_local.contains(lk))
-                m_local.insert(lk, info);
+                m_local.insert(lk, attr);
         }
     }
 }
@@ -215,8 +218,34 @@ void BsdSocketResolver::refresh()
     m_exact.clear();
     m_local.clear();
 
-    // 1. pid -> (comm, uid) from KERN_PROC_PROC (kinfo_proc, ki_structsize stride).
-    QHash<qint32, ProcessInfo> pidInfo;
+    // 0. Enumerate jails (jid → name) so jailed processes can be tagged with a
+    //    ContainerInfo{runtime="jail"}. jail_get with a "lastjid" in-param walks
+    //    the jail list (this is how jls(8) enumerates).
+    QHash<int, QString> jailNames;
+    {
+        int lastjid = 0;
+        for (;;) {
+            char namebuf[256] = {0};
+            struct iovec iov[4];
+            iov[0].iov_base = const_cast<char *>("lastjid");
+            iov[0].iov_len  = sizeof("lastjid");
+            iov[1].iov_base = &lastjid;
+            iov[1].iov_len  = sizeof(lastjid);
+            iov[2].iov_base = const_cast<char *>("name");
+            iov[2].iov_len  = sizeof("name");
+            iov[3].iov_base = namebuf;
+            iov[3].iov_len  = sizeof(namebuf);
+            const int jid = jail_get(iov, 4, 0);
+            if (jid < 0)
+                break;
+            jailNames.insert(jid, QString::fromUtf8(namebuf));
+            lastjid = jid;
+        }
+    }
+
+    // 1. pid -> Attribution (comm/uid, + jail container) from KERN_PROC_PROC
+    //    (kinfo_proc, ki_structsize stride).
+    QHash<qint32, Attribution> pidAttr;
     {
         int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC};
         const std::vector<char> buf = suckMib(mib, 3);
@@ -227,18 +256,23 @@ void BsdSocketResolver::refresh()
             const int sz = kp->ki_structsize;
             if (sz <= 0)
                 break;
-            ProcessInfo info;
-            info.pid  = static_cast<qint32>(kp->ki_pid);
-            info.uid  = static_cast<quint32>(kp->ki_ruid);
-            info.comm = QString::fromUtf8(kp->ki_comm);
-            pidInfo.insert(info.pid, info);
+            Attribution a;
+            a.process.pid  = static_cast<qint32>(kp->ki_pid);
+            a.process.uid  = static_cast<quint32>(kp->ki_ruid);
+            a.process.comm = QString::fromUtf8(kp->ki_comm);
+            if (kp->ki_jid > 0) {                 // process is in a jail
+                a.container.runtime = QStringLiteral("jail");
+                a.container.id      = QString::number(kp->ki_jid);
+                a.container.name    = jailNames.value(kp->ki_jid);
+            }
+            pidAttr.insert(a.process.pid, a);
             p += sz;
         }
     }
 
     // 2. Per pid: KERN_PROC_FILEDESC -> kinfo_file (kf_structsize stride). For
     //    each connected INET/INET6 TCP/UDP socket, stamp its 5-tuple.
-    for (auto it = pidInfo.constBegin(); it != pidInfo.constEnd(); ++it) {
+    for (auto it = pidAttr.constBegin(); it != pidAttr.constEnd(); ++it) {
         const qint32 pid = it.key();
         int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_FILEDESC, pid};
         const std::vector<char> buf = suckMib(mib, 4);
@@ -271,12 +305,12 @@ void BsdSocketResolver::refresh()
             if (local.address.isNull())
                 continue;
 
-            const ProcessInfo &info = it.value();
+            const Attribution &attr = it.value();
             if (!remote.address.isNull() && remote.port != 0)
-                m_exact.insert(flowKeyExact(proto, local, remote), info);
+                m_exact.insert(flowKeyExact(proto, local, remote), attr);
             const QString lk = flowKeyLocal(proto, local);
             if (!m_local.contains(lk))
-                m_local.insert(lk, info);
+                m_local.insert(lk, attr);
         }
     }
 }

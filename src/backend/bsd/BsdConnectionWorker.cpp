@@ -418,7 +418,9 @@ void BsdConnectionWorker::emitSnapshot()
             ? a.observedDir
             : qiftop::heuristics::inferDirection(
                   c, m_localAddrs, m_loopbackAddrs, m_ephLow, m_ephHigh);
-        c.process   = m_resolver.lookup(c.proto, c.local, c.remote);
+        const auto attr = m_resolver.lookup(c.proto, c.local, c.remote);
+        c.process   = attr.process;
+        c.container = attr.container;
         out.append(std::move(c));
         ++it;
     }
