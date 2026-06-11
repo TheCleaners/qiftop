@@ -1,0 +1,42 @@
+# Maintainer: qiftop maintainers <noreply@example.com>
+# A split-package layout (qiftop / qiftop-agent / nqiftop / libqiftop) is
+# possible later; for v0.2.4 this intentionally ships all install components
+# in one straightforward package.
+pkgname=qiftop
+pkgver=0.2.3
+pkgrel=1
+pkgdesc='Qt6 iftop-style network monitor with GUI, TUI, DBus agent and library'
+arch=('x86_64')
+url='https://github.com/TheCleaners/qiftop'
+license=('GPL2')
+depends=('qt6-base' 'libnl' 'libnetfilter_conntrack' 'ncurses')
+makedepends=('cmake' 'ninja' 'pkgconf')
+optdepends=(
+  'nftables: enable the qiftop-agent conntrack shim for IPv6 flow visibility'
+  'dbus: system-bus activation for qiftop-agent'
+)
+backup=('etc/qiftop/agent.conf')
+install=qiftop.install
+source=("$pkgname-$pkgver.tar.gz::https://github.com/TheCleaners/qiftop/archive/refs/tags/v$pkgver.tar.gz")
+# Fill this with the release tarball checksum when publishing the AUR update.
+sha256sums=('SKIP')
+
+build() {
+  cmake -S "$srcdir/$pkgname-$pkgver" -B "$srcdir/build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DQIFTOP_BUILD_TESTS=OFF
+  ninja -C "$srcdir/build"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install "$srcdir/build"
+
+  # Upstream currently installs the systemd unit to /lib/systemd/system for
+  # Debian-derived distros. Arch packages must ship units under /usr/lib.
+  if [[ -d "$pkgdir/lib/systemd/system" ]]; then
+    install -dm755 "$pkgdir/usr/lib/systemd/system"
+    mv "$pkgdir"/lib/systemd/system/* "$pkgdir/usr/lib/systemd/system/"
+    rmdir "$pkgdir/lib/systemd/system" "$pkgdir/lib/systemd" "$pkgdir/lib" 2>/dev/null || true
+  fi
+}

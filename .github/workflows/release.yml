@@ -71,7 +71,7 @@ jobs:
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
             libncurses-dev \
-            file fakeroot lintian desktop-file-utils
+            file fakeroot lintian desktop-file-utils appstream
 
       - name: Configure
         # project() VERSION in CMakeLists.txt is the single source of truth
@@ -120,8 +120,11 @@ jobs:
           cpack -G DEB -V
           ls -la *.deb
 
-      - name: desktop-file-validate
-        run: desktop-file-validate dist/desktop/qiftop.desktop
+      - name: Validate desktop entries + AppStream metainfo
+        run: |
+          desktop-file-validate dist/desktop/io.github.thecleaners.qiftop.desktop
+          desktop-file-validate dist/desktop/io.github.thecleaners.qiftop.nqiftop.desktop
+          appstreamcli validate --no-net dist/desktop/io.github.thecleaners.qiftop.metainfo.xml
 
       - name: lintian
         working-directory: build

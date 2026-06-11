@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=nqiftop (terminal)
+GenericName=Terminal Network Monitor
+Comment=Terminal interface for real-time network traffic monitoring
+Exec=nqiftop
+TryExec=nqiftop
+Icon=io.github.thecleaners.qiftop
+Terminal=true
+Categories=Network;Monitor;
+Keywords=network;traffic;iftop;monitor;bandwidth;interface;connection;terminal;tui;ncurses;
+StartupNotify=false

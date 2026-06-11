@@ -1,0 +1,13 @@
+#compdef nqiftop
+
+_arguments -s \
+  '(-h --help)'{-h,--help}'[display help]' \
+  '--help-all[display help including Qt-specific options]' \
+  '(-v --version)'{-v,--version}'[display version]' \
+  '--session[talk to the agent on the session bus]' \
+  '--no-agent[skip the agent and capture in-process]' \
+  '--verbose[print diagnostics to stderr]' \
+  '(-i --interval)'{-i,--interval}'[poll interval in milliseconds]:milliseconds:' \
+  '--theme[colour theme]:theme:(dark light colorblind mono)' \
+  '--view[initial tab]:tab:(interfaces connections)' \
+  '--group[group connections]:mode:(off none flat interface iface if process proc container ctr)'

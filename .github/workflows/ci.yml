@@ -193,7 +193,7 @@ jobs:
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
             libncurses-dev \
-            file fakeroot lintian desktop-file-utils
+            file fakeroot lintian desktop-file-utils appstream
 
       - name: Configure + build
         run: |
@@ -227,10 +227,14 @@ jobs:
           cpack -G DEB
           ls -la *.deb
 
-      - name: desktop-file-validate
-        # The .desktop file is the user-facing menu entry; broken syntax
-        # means a hidden launcher on every Linux desktop. Fail hard.
-        run: desktop-file-validate dist/desktop/qiftop.desktop
+      - name: Validate desktop entries + AppStream metainfo
+        # The .desktop files are the user-facing menu entries and the metainfo
+        # drives software-center visibility; broken syntax means a hidden
+        # launcher or an app invisible in GNOME Software / Discover. Fail hard.
+        run: |
+          desktop-file-validate dist/desktop/io.github.thecleaners.qiftop.desktop
+          desktop-file-validate dist/desktop/io.github.thecleaners.qiftop.nqiftop.desktop
+          appstreamcli validate --no-net dist/desktop/io.github.thecleaners.qiftop.metainfo.xml
 
       - name: lintian
         working-directory: build

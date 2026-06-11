@@ -1,0 +1,9 @@
+#compdef qiftop-agent
+
+_arguments -s \
+  '(-h --help)'{-h,--help}'[display help]' \
+  '--help-all[display help including Qt-specific options]' \
+  '(-v --version)'{-v,--version}'[display version]' \
+  '--verbose[enable verbose tracing on stderr]' \
+  '--session[use the session bus instead of the system bus]' \
+  '(-c --config)'{-c,--config}'[path to agent.conf]:path:_files'

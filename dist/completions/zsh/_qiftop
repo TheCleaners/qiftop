@@ -1,0 +1,10 @@
+#compdef qiftop
+
+_arguments -s \
+  '(-h --help)'{-h,--help}'[display help]' \
+  '--help-all[display help including Qt-specific options]' \
+  '(-v --version)'{-v,--version}'[display version]' \
+  '--verbose[print diagnostic information to stderr]' \
+  '--no-agent[skip the system-bus agent and use the in-process backend]' \
+  '(-i --interface)'{-i,--interface}'[restrict Connections view to an interface]:interface:' \
+  '--tray[start with only the system tray icon visible]'

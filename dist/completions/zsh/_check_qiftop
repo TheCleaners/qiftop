@@ -1,0 +1,11 @@
+#compdef check_qiftop
+
+_arguments -s \
+  '--warning[warning threshold byte rate]:threshold:' \
+  '--critical[critical threshold byte rate]:threshold:' \
+  '--metric[metric to evaluate]:metric:(rate_in rx_rate rate_rx rx in rate_out tx_rate rate_tx tx out rate_total total_rate rate total)' \
+  '--iface[check one interface by name]:interface:' \
+  '--filter[connection filter expression]:filter:' \
+  '--session[use the session bus]' \
+  '--timeout[timeout in seconds]:seconds:' \
+  '--interval-ms[poll interval in milliseconds]:milliseconds:'

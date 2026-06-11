@@ -1,0 +1,23 @@
+# bash completion for check_qiftop
+
+_check_qiftop()
+{
+    local cur prev words cword
+    _init_completion || return
+
+    case "$prev" in
+        --metric)
+            COMPREPLY=( $(compgen -W 'rate_in rx_rate rate_rx rx in rate_out tx_rate rate_tx tx out rate_total total_rate rate total' -- "$cur") )
+            return
+            ;;
+        --warning|--critical|--iface|--filter|--timeout|--interval-ms)
+            COMPREPLY=()
+            return
+            ;;
+    esac
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W '--warning --critical --metric --iface --filter --session --timeout --interval-ms' -- "$cur") )
+    fi
+}
+complete -F _check_qiftop check_qiftop

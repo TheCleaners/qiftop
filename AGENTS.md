@@ -88,7 +88,7 @@ dist/
 ├── conf/agent.conf           # ships to /etc/qiftop/agent.conf (Debian conffile)
 ├── dbus/                     # bus policy + system-service activation file
 ├── debian/                   # postinst, postrm, conffiles
-├── desktop/qiftop.desktop, qiftop.svg
+├── desktop/io.github.thecleaners.qiftop.{desktop,metainfo.xml,svg} + nqiftop.desktop + raster icons
 └── systemd/qiftop-agent.service
 ```
 
