@@ -138,6 +138,50 @@ private slots:
         QVERIFY(key != localKey);
     }
 
+    void dumpChunkMarksDuplicateLocalKeyAmbiguous()
+    {
+        using namespace qiftop::backend::sockdiag;
+        const quint32 local = qToBigEndian(quint32(0x0A000005)); // 10.0.0.5
+        const quint32 peer1 = qToBigEndian(quint32(0xCB007107)); // 203.0.113.7
+        const quint32 peer2 = qToBigEndian(quint32(0xCB007108)); // 203.0.113.8
+
+        QByteArray buf;
+        inet_diag_msg first{};
+        first.idiag_family    = AF_INET;
+        first.idiag_inode     = 1111;
+        first.id.idiag_src[0] = local;
+        first.id.idiag_dst[0] = peer1;
+        first.id.idiag_sport  = qToBigEndian(quint16(5353));
+        first.id.idiag_dport  = qToBigEndian(quint16(40000));
+        appendNlMsg(buf, SOCK_DIAG_BY_FAMILY, &first, sizeof(first));
+
+        inet_diag_msg second = first;
+        second.idiag_inode     = 2222;
+        second.id.idiag_dst[0] = peer2;
+        second.id.idiag_dport  = qToBigEndian(quint16(40001));
+        appendNlMsg(buf, SOCK_DIAG_BY_FAMILY, &second, sizeof(second));
+
+        QHash<QByteArray, quint64> out;
+        QCOMPARE(parseDumpChunk(buf.constData(), buf.size(), IPPROTO_UDP, out),
+                 DumpChunkResult::NeedMore);
+
+        const auto localKey = makeLocalKey(
+            IPPROTO_UDP, QHostAddress(QStringLiteral("10.0.0.5")), 5353);
+        QVERIFY(out.contains(localKey));
+        QCOMPARE(out.value(localKey), kAmbiguousLocalInode);
+
+        const auto full1 = makeFlowKey(
+            IPPROTO_UDP,
+            QHostAddress(QStringLiteral("10.0.0.5")), 5353,
+            QHostAddress(QStringLiteral("203.0.113.7")), 40000);
+        const auto full2 = makeFlowKey(
+            IPPROTO_UDP,
+            QHostAddress(QStringLiteral("10.0.0.5")), 5353,
+            QHostAddress(QStringLiteral("203.0.113.8")), 40001);
+        QCOMPARE(out.value(full1, 0), quint64(1111));
+        QCOMPARE(out.value(full2, 0), quint64(2222));
+    }
+
     void dumpChunkDoneAndAck()
     {
         using namespace qiftop::backend::sockdiag;

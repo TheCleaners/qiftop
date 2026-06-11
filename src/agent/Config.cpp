@@ -88,8 +88,9 @@ IdleManager::Config loadIdleConfig(const QString &path)
                                     QStringLiteral("idle/timeout_secs"),
                                     cfg.idleTimeoutMs);
     cfg.hintTtlMs        = clampCfg("idle/hint_ttl_secs (ms)",
-                                    int(qBound<qint64>(0, ini.value(QStringLiteral("idle/hint_ttl_secs"),
-                                              qint64(cfg.hintTtlMs) / 1000).toLongLong(), kMaxSec) * 1000),
+                                    secsToMs("idle/hint_ttl_secs",
+                                             QStringLiteral("idle/hint_ttl_secs"),
+                                             cfg.hintTtlMs),
                                     kMinMs, kMaxWin, cfg.hintTtlMs);
 
     // schedule = active_window_secs:slow1_ms,slow1_window_secs:slow2_ms,slow2_window_secs:0

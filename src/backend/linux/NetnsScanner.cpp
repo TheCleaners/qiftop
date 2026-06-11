@@ -256,15 +256,26 @@ private:
 
             // 2c) Merge: only flow tuples whose socket inode resolves
             //     to a pid in this netns are useful (otherwise the
-            //     inode is the kernel's, no owner).
+            //     inode is the kernel's, no owner). Local-only keys are
+            //     merged ambiguity-aware across netns too: overlapping
+            //     container address spaces can otherwise last-writer-win
+            //     the same addr:port to an arbitrary container pid.
             for (auto it = nsKeyToInode.constBegin();
                  it != nsKeyToInode.constEnd(); ++it)
             {
                 // M9: bound the merged map (256 netns × per-ns dumps
                 // could otherwise multiply past any sane size).
-                if (outKey.size() >= sockdiag::kMaxSocketEntries) {
+                if (outKey.size() >= sockdiag::kMaxSocketEntries
+                    && !outKey.contains(it.key())) {
                     warnMapCapOnce();
-                    break;
+                    continue;
+                }
+                if (sockdiag::isLocalKey(it.key())) {
+                    if (sockdiag::isAmbiguousLocalInode(it.value())
+                        || nsInodeToPid.contains(it.value())) {
+                        sockdiag::insertLocalKey(outKey, it.key(), it.value());
+                    }
+                    continue;
                 }
                 if (nsInodeToPid.contains(it.value())) {
                     outKey.insert(it.key(), it.value());
@@ -458,7 +469,27 @@ qint32 NetnsScanner::resolvePid(const Connection &flow)
     {
         std::lock_guard lk(m_mu);
         auto itSock = m_keyToInode.constFind(key);
+        if (itSock == m_keyToInode.constEnd() && proto == IPPROTO_UDP) {
+            const auto itLocal = m_keyToInode.constFind(
+                sockdiag::makeLocalKey(proto, flow.local.address, flow.local.port));
+            const bool v6 = flow.local.address.protocol() == QAbstractSocket::IPv6Protocol;
+            const QHostAddress anyAddr(v6 ? QHostAddress::AnyIPv6 : QHostAddress::AnyIPv4);
+            const auto itWildcard = m_keyToInode.constFind(
+                sockdiag::makeLocalKey(proto, anyAddr, flow.local.port));
+
+            if (itLocal != m_keyToInode.constEnd()) {
+                if (itWildcard != m_keyToInode.constEnd()
+                    && (sockdiag::isAmbiguousLocalInode(*itWildcard)
+                        || *itWildcard != *itLocal)) {
+                    return 0;
+                }
+                itSock = itLocal;
+            } else {
+                itSock = itWildcard;
+            }
+        }
         if (itSock == m_keyToInode.constEnd()) return 0;
+        if (sockdiag::isAmbiguousLocalInode(*itSock)) return 0;
         auto itPid = m_inodeToPid.constFind(*itSock);
         if (itPid == m_inodeToPid.constEnd()) return 0;
         pid       = itPid->pid;

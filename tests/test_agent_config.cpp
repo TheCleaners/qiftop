@@ -6,6 +6,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextStream>
+#include <QRegularExpression>
 
 #include "agent/Config.h"
 #include "agent/IdleManager.h"
@@ -145,6 +146,20 @@ schedule=2147484:2000,2147484:5000,2147484:0
         QCOMPARE(cfg.activeWindowMs, defaults.activeWindowMs);
         QCOMPARE(cfg.slow1WindowMs,  defaults.slow1WindowMs);
         QCOMPARE(cfg.slow2WindowMs,  defaults.slow2WindowMs);
+    }
+
+    void hintTtlOutOfRangeWarnsAndFallsBack()
+    {
+        QTemporaryDir dir; QVERIFY(dir.isValid());
+        const QString path = writeConf(dir, R"([idle]
+hint_ttl_secs=2147484
+)");
+        const qiftop::agent::IdleManager::Config defaults;
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "agent: config key idle/hint_ttl_secs value 2147484 seconds out of range .* using 10")));
+        const auto cfg = qiftop::agent::loadIdleConfig(path);
+        QCOMPARE(cfg.hintTtlMs, defaults.hintTtlMs);
     }
 
     // --- process-details disclosure policy --------------------------------

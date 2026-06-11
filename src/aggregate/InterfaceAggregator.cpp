@@ -4,6 +4,17 @@
 
 namespace qiftop::aggregate {
 
+namespace {
+
+double byteRate(quint64 current, quint64 previous, double deltaSecs)
+{
+    return current >= previous
+        ? static_cast<double>(current - previous) / deltaSecs
+        : 0.0;
+}
+
+} // namespace
+
 InterfaceAggregator::InterfaceAggregator(QObject *parent)
     : QObject(parent)
 {
@@ -41,8 +52,8 @@ void InterfaceAggregator::updateStats(QList<InterfaceStats> stats)
             Row row;
             row.current = s;
             if (auto it = m_prev.constFind(s.name); it != m_prev.constEnd()) {
-                row.rxRate = static_cast<double>(s.rxBytes - it->rxBytes) / deltaSecs;
-                row.txRate = static_cast<double>(s.txBytes - it->txBytes) / deltaSecs;
+                row.rxRate = byteRate(s.rxBytes, it->rxBytes, deltaSecs);
+                row.txRate = byteRate(s.txBytes, it->txBytes, deltaSecs);
             }
             m_rows.append(std::move(row));
         }
@@ -52,8 +63,8 @@ void InterfaceAggregator::updateStats(QList<InterfaceStats> stats)
             const InterfaceStats &s = stats[i];
             Row &row = m_rows[i];
             if (auto it = m_prev.constFind(s.name); it != m_prev.constEnd()) {
-                row.rxRate = static_cast<double>(s.rxBytes - it->rxBytes) / deltaSecs;
-                row.txRate = static_cast<double>(s.txBytes - it->txBytes) / deltaSecs;
+                row.rxRate = byteRate(s.rxBytes, it->rxBytes, deltaSecs);
+                row.txRate = byteRate(s.txBytes, it->txBytes, deltaSecs);
             }
             row.current = s;
         }

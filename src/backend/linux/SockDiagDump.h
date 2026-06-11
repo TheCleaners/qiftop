@@ -26,6 +26,7 @@ namespace qiftop::backend::sockdiag {
 // first kMaxSocketEntries sockets and the tick completes in bounded
 // time/memory. Generous: a busy host has a few thousand sockets.
 inline constexpr int kMaxSocketEntries = 65536;
+inline constexpr quint64 kAmbiguousLocalInode = 0;
 
 // Compose the 4-tuple lookup key used across the resolver layer. proto
 // is the IANA L4 number (TCP=6, UDP=17). The byte order and field
@@ -84,6 +85,31 @@ inline constexpr int kMaxSocketEntries = 65536;
     return k;
 }
 
+[[nodiscard]] inline bool isLocalKey(const QByteArray &key)
+{
+    return !key.isEmpty() && key.at(0) == '\x01';
+}
+
+[[nodiscard]] inline bool isAmbiguousLocalInode(quint64 inode)
+{
+    return inode == kAmbiguousLocalInode;
+}
+
+inline void insertLocalKey(QHash<QByteArray, quint64> &outMap,
+                           const QByteArray           &localKey,
+                           quint64                     inode)
+{
+    auto it = outMap.find(localKey);
+    if (it == outMap.end()) {
+        if (outMap.size() < kMaxSocketEntries)
+            outMap.insert(localKey, inode);
+        return;
+    }
+    if (it.value() != inode) {
+        it.value() = kAmbiguousLocalInode;
+    }
+}
+
 // Open + bind a NETLINK_SOCK_DIAG socket in the calling thread's
 // CURRENT network namespace. Returns the fd on success, -1 on failure
 // (with a single qCWarning). Caller closes via ::close. Must be opened
@@ -130,7 +156,10 @@ inline QHostAddress addrFromDiag(quint8 family, const __be32 buf[4])
 } // namespace detail
 
 // Walk the netlink messages in `buf[0..n)`, inserting flow-key → inode
-// entries into outMap (capped at kMaxSocketEntries — see above). On
+// entries into outMap (capped at kMaxSocketEntries — see above). Local
+// 2-tuple entries are ambiguity-aware: a key seen for multiple distinct
+// socket inodes is stored as kAmbiguousLocalInode and must not attribute.
+// On
 // Failed, *nlErrno (when non-null) receives the positive errno carried
 // by a well-formed NLMSG_ERROR, or 0 for a malformed/truncated message.
 //
@@ -169,18 +198,20 @@ inline DumpChunkResult parseDumpChunk(const char *buf, qsizetype n,
         const auto *m = static_cast<const inet_diag_msg*>(
             NLMSG_DATA(const_cast<nlmsghdr*>(nh)));
         if (m->idiag_inode == 0) continue;
-        if (outMap.size() >= kMaxSocketEntries) continue;   // M9 cap
         const auto local  = detail::addrFromDiag(m->idiag_family, m->id.idiag_src);
         const auto remote = detail::addrFromDiag(m->idiag_family, m->id.idiag_dst);
         const quint16 lport = qFromBigEndian(m->id.idiag_sport);
         const quint16 rport = qFromBigEndian(m->id.idiag_dport);
         const quint64 inode = m->idiag_inode;
-        outMap.insert(makeFlowKey(proto, local, lport, remote, rport), inode);
+        const auto flowKey = makeFlowKey(proto, local, lport, remote, rport);
+        if (outMap.size() >= kMaxSocketEntries && !outMap.contains(flowKey)) continue;   // M9 cap
+        outMap.insert(flowKey, inode);
         // Also index by local-only key so unconnected UDP sockets / listeners
         // (whose remote is 0.0.0.0:0) can be matched to a live flow by its
-        // local end. Inserted unconditionally — cheap, and the full 4-tuple
-        // lookup is still tried first on the resolve side.
-        outMap.insert(makeLocalKey(proto, local, lport), inode);
+        // local end. Multiple distinct inodes for the same local endpoint are
+        // ambiguous (SO_REUSEPORT / wildcard+specific binds), so mark them and
+        // let the resolver return pid=0 rather than a last-writer-wins pid.
+        insertLocalKey(outMap, makeLocalKey(proto, local, lport), inode);
     }
     return DumpChunkResult::NeedMore;
 }
