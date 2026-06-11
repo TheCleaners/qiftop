@@ -23,6 +23,7 @@ add_library(backend_bsd STATIC
     BsdNetworkMonitor.cpp
     BsdConnectionWorker.cpp
     BsdConnectionMonitor.cpp
+    BsdSocketResolver.cpp
 )
 
 target_include_directories(backend_bsd

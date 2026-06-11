@@ -1,4 +1,6 @@
 #include "BsdConnectionWorker.h"
+#include "BsdFlowKey.h"
+#include "BsdSocketResolver.h"
 #include "util/ConnectionHeuristics.h"
 
 #include <algorithm>
@@ -53,14 +55,6 @@ bool endpointGreater(const Endpoint &a, const Endpoint &b)
     if (a.port != b.port)
         return a.port > b.port;
     return a.address.toString() > b.address.toString();
-}
-
-QString flowKey(L4Proto proto, const Endpoint &local, const Endpoint &remote)
-{
-    return QStringLiteral("%1|%2.%3|%4.%5")
-        .arg(static_cast<int>(proto))
-        .arg(local.address.toString()).arg(local.port)
-        .arg(remote.address.toString()).arg(remote.port);
 }
 
 } // namespace
@@ -344,7 +338,7 @@ void BsdConnectionWorker::handlePacket(const CaptureHandle &h, const quint8 *dat
         else                           { local = dst; remote = src; isTx = false; }
     }
 
-    const QString key = flowKey(proto, local, remote);
+    const QString key = flowKeyExact(proto, local, remote);
     auto it = m_flows.find(key);
     if (it == m_flows.end()) {
         // Bounded cache: at the cap, stop tracking NEW flows (existing ones
@@ -379,6 +373,7 @@ void BsdConnectionWorker::handlePacket(const CaptureHandle &h, const quint8 *dat
 void BsdConnectionWorker::emitSnapshot()
 {
     refreshLocalState();
+    m_resolver.refresh(); // rebuild socket→process map for this tick
 
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     QList<Connection> out;
@@ -406,6 +401,7 @@ void BsdConnectionWorker::emitSnapshot()
             ? a.observedDir
             : qiftop::heuristics::inferDirection(
                   c, m_localAddrs, m_loopbackAddrs, m_ephLow, m_ephHigh);
+        c.process   = m_resolver.lookup(c.proto, c.local, c.remote);
         out.append(std::move(c));
         ++it;
     }

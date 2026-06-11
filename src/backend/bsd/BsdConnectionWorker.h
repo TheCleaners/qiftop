@@ -7,6 +7,7 @@
 #include <QTimer>
 
 #include "backend/Connection.h"
+#include "BsdSocketResolver.h"
 
 struct pcap;
 typedef struct pcap pcap_t;
@@ -93,6 +94,7 @@ private:
     QTimer              *m_timer   = nullptr;
     bool                 m_warned  = false;
     bool                 m_flowCapWarned = false;
+    BsdSocketResolver    m_resolver;
 };
 
 } // namespace qiftop::backend::bsd
