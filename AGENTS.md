@@ -211,8 +211,16 @@ Per-field notes:
   `link-errors`.
 * `pid` / `uid` / `comm` — Best-effort process attribution for a flow.
   `pid == 0` means unattributed (no resolver wired, or the flow's
-  socket couldn't be located via SOCK_DIAG within the cache window).
-  `comm` is the kernel-truncated 15-byte basename. Expensive fields
+  socket couldn't be located via SOCK_DIAG within the cache window —
+  or the flow is genuinely forwarded, e.g. a VM-bridge / k8s-pod-netns
+  flow with no host socket). `SockDiagResolver` indexes each socket by
+  BOTH its full 4-tuple AND a local-only 2-tuple (proto + local
+  addr/port); `resolvePid` tries 4-tuple → exact local 2-tuple →
+  wildcard (`0.0.0.0`/`::`) local 2-tuple. The local fallback is what
+  attributes unconnected UDP sockets and TCP listeners, whose
+  `idiag_dst` is `0.0.0.0:0` and so can never match a live flow's real
+  remote by the 4-tuple alone. `comm` is the kernel-truncated 15-byte
+  basename. Expensive fields
   (`exe`, `cmdline`, `cwd`) are deliberately NOT shipped on the wire —
   fetched on demand via `GetProcessDetails(pid)` per the "default-cheap
   pipeline" design principle. Capability: `process-attribution-wire`.
