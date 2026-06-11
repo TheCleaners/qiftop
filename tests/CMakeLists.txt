@@ -189,11 +189,32 @@ qiftop_add_test(test_group_proxy
     ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp)
 target_link_libraries(test_group_proxy PRIVATE Qt6::Widgets)
 
+# In-process agent-service tests driven by the fakes (no real DBus bus):
+# ConnectionsService snapshot cap + attribution + direction, InterfacesService
+# caching, all fed via FakeNetwork/ConnectionMonitor.
+qiftop_add_test(test_services
+    test_services.cpp
+    fakes/FakeMonitors.h
+    ${CMAKE_SOURCE_DIR}/src/agent/ConnectionsService.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/InterfacesService.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/Attribution.cpp
+    ${CMAKE_SOURCE_DIR}/src/agent/IdleManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/ConnectionMonitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/NetworkMonitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/Types.cpp
+    ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp
+    ${CMAKE_SOURCE_DIR}/src/util/Logging.cpp)
+target_link_libraries(test_services PRIVATE Qt6::DBus)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_test(test_sockdiag_parse
         test_sockdiag_parse.cpp)
     qiftop_add_test(test_cgroup_parse
         test_cgroup_parse.cpp)
+
+    qiftop_add_test(test_conntrack_orient
+        test_conntrack_orient.cpp)
 
     qiftop_add_test(test_cgroup_real_fixtures
         test_cgroup_real_fixtures.cpp)
