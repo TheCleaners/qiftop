@@ -176,6 +176,48 @@ jobs:
           mkdir -p "$HOME"
           dbus-run-session -- ctest --output-on-failure --no-tests=error
 
+  alpine-build-and-test:
+    # Alpine/musl portability lane. actions/checkout uses the runner's
+    # glibc-linked Node, which can't exec inside a musl container, so we
+    # check out on the ubuntu host and drive the build+test through
+    # `docker run alpine` (mirrors the build-rpm job's host-then-container
+    # pattern). The source is COPIED out of the bind mount into a
+    # container-local dir before configuring: building inside the mount makes
+    # `cmake --build` canonicalise the mount back to the host path and abort
+    # with a CMakeCache dir mismatch (the same trap fixed in the RPM job).
+    name: Build & test (alpine/musl, ${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build + test in alpine container
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -e BT=${{ matrix.build_type }} \
+            alpine:latest sh -euxc '
+              apk add --no-cache \
+                qt6-qtbase-dev qt6-qtbase-private-dev \
+                libnl3-dev libnetfilter_conntrack-dev ncurses-dev \
+                cmake samurai g++ pkgconf dbus
+              # Copy the source out of the read-only bind mount so the build
+              # dir is container-local (avoids the bind-mount path duality).
+              # rm any stray build/ (a clean CI checkout has none; this guards
+              # local runs / reused trees from a cache baked with another path).
+              cp -a /src /work && cd /work && rm -rf build
+              cmake -S . -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE="$BT" \
+                -DQIFTOP_BUILD_TESTS=ON \
+                -DQIFTOP_AUTO_PACKAGE=OFF
+              cmake --build build --parallel
+              export QT_QPA_PLATFORM=offscreen HOME=/tmp/home
+              mkdir -p "$HOME"
+              dbus-run-session -- ctest --test-dir build --output-on-failure --no-tests=error
+            '
+
+
   packaging-qa:
     name: Packaging QA (.deb lint + smoke install)
     runs-on: ubuntu-24.04
@@ -193,7 +235,7 @@ jobs:
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
             libncurses-dev \
-            file fakeroot lintian desktop-file-utils
+            file fakeroot lintian desktop-file-utils appstream
 
       - name: Configure + build
         run: |
@@ -227,10 +269,14 @@ jobs:
           cpack -G DEB
           ls -la *.deb
 
-      - name: desktop-file-validate
-        # The .desktop file is the user-facing menu entry; broken syntax
-        # means a hidden launcher on every Linux desktop. Fail hard.
-        run: desktop-file-validate dist/desktop/qiftop.desktop
+      - name: Validate desktop entries + AppStream metainfo
+        # The .desktop files are the user-facing menu entries and the metainfo
+        # drives software-center visibility; broken syntax means a hidden
+        # launcher or an app invisible in GNOME Software / Discover. Fail hard.
+        run: |
+          desktop-file-validate dist/desktop/io.github.thecleaners.qiftop.desktop
+          desktop-file-validate dist/desktop/io.github.thecleaners.qiftop.nqiftop.desktop
+          appstreamcli validate --no-net dist/desktop/io.github.thecleaners.qiftop.metainfo.xml
 
       - name: lintian
         working-directory: build

@@ -116,7 +116,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationVersion(QStringLiteral(QIFTOP_VERSION));
     // Picks up dist/desktop/qiftop.svg from the hicolor theme once installed;
     // falls through silently when running from the build tree.
-    QGuiApplication::setDesktopFileName(QStringLiteral("qiftop"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("io.github.thecleaners.qiftop"));
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("qiftop")));
 
     QCommandLineParser parser;

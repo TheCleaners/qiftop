@@ -1,0 +1,50 @@
+#!/sbin/openrc-run
+# OpenRC service for qiftop-agent on Alpine (and other OpenRC systems).
+#
+# qiftop-agent is normally D-Bus–activated on demand: the first client touch of
+# the system-bus name org.qiftop.NetworkAgent1 makes dbus-daemon spawn the
+# agent via the Exec= line of its .service activation file. That path works on
+# OpenRC, but — unlike the systemd unit — it cannot run the ExecStartPre that
+# loads the nftables conntrack shim, so IPv6 flow accounting can be incomplete.
+#
+# Enabling THIS service is the recommended setup: it loads the conntrack shim
+# on start, runs the agent persistently under supervise-daemon (auto-restart),
+# and tears the shim down on stop. While it owns the bus name, dbus activation
+# is a no-op (the name is already held), so the two mechanisms don't collide.
+#
+#   rc-update add qiftop-agent
+#   rc-service qiftop-agent start
+
+name="qiftop-agent"
+description="qiftop privileged network statistics agent"
+
+command="/usr/bin/qiftop-agent"
+command_args="${qiftop_agent_args:-}"
+supervisor="supervise-daemon"
+pidfile="/run/qiftop-agent.pid"
+# Restart on crash (analogue of the systemd unit's Restart=on-failure).
+respawn_delay=2
+respawn_max=0
+
+depend() {
+	need dbus
+	after net firewall
+}
+
+start_pre() {
+	# Load the inert "inet qiftop" conntrack shim so the kernel tracks both
+	# IPv4 and IPv6 flows (mirrors the systemd unit's ExecStartPre). Best
+	# effort — a missing nft or shim must not block the agent from starting.
+	if command -v nft >/dev/null 2>&1 && \
+	   [ -f /usr/share/qiftop/qiftop-conntrack.nft ]; then
+		nft -f /usr/share/qiftop/qiftop-conntrack.nft 2>/dev/null || \
+			ewarn "qiftop: could not load the conntrack shim; IPv6 flow visibility may be reduced"
+	fi
+}
+
+stop_post() {
+	# Remove the shim we installed in start_pre (mirrors ExecStopPost).
+	if command -v nft >/dev/null 2>&1; then
+		nft delete table inet qiftop 2>/dev/null || true
+	fi
+}

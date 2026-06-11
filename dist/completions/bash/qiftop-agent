@@ -1,0 +1,19 @@
+# bash completion for qiftop-agent
+
+_qiftop_agent()
+{
+    local cur prev words cword
+    _init_completion || return
+
+    case "$prev" in
+        -c|--config)
+            _filedir
+            return
+            ;;
+    esac
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W '-h --help --help-all -v --version --verbose --session -c --config' -- "$cur") )
+    fi
+}
+complete -F _qiftop_agent qiftop-agent

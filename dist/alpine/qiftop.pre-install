@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# The DBus policy gates qiftop-agent access to root and netdev members.
+# Alpine's alpine-baselayout normally provides netdev; create it best-effort
+# for minimal images or derivatives where it is missing.
+if ! getent group netdev >/dev/null 2>&1; then
+	if command -v addgroup >/dev/null 2>&1; then
+		addgroup -S netdev >/dev/null 2>&1 || true
+	fi
+fi
+
+exit 0

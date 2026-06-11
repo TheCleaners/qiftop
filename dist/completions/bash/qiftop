@@ -1,0 +1,19 @@
+# bash completion for qiftop
+
+_qiftop()
+{
+    local cur prev words cword
+    _init_completion || return
+
+    case "$prev" in
+        -i|--interface)
+            COMPREPLY=()
+            return
+            ;;
+    esac
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W '-h --help --help-all -v --version --verbose --no-agent -i --interface --tray' -- "$cur") )
+    fi
+}
+complete -F _qiftop qiftop

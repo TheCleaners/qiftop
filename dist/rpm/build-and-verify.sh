@@ -55,8 +55,8 @@ echo -n "systemd unit:            "; ls /usr/lib/systemd/system/qiftop-agent.ser
 echo -n "dbus policy:             "; ls /usr/share/dbus-1/system.d/org.qiftop.NetworkAgent1.conf 2>/dev/null || echo MISSING
 echo -n "dbus activation:         "; ls /usr/share/dbus-1/system-services/org.qiftop.NetworkAgent1.service 2>/dev/null || echo MISSING
 echo -n "nft shim:                "; ls /usr/share/qiftop/qiftop-conntrack.nft 2>/dev/null || echo MISSING
-echo -n "desktop file:            "; ls /usr/share/applications/qiftop.desktop 2>/dev/null || echo MISSING
-echo -n "icon:                    "; ls /usr/share/icons/hicolor/scalable/apps/qiftop.svg 2>/dev/null || echo MISSING
+echo -n "desktop file:            "; ls /usr/share/applications/io.github.thecleaners.qiftop.desktop 2>/dev/null || echo MISSING
+echo -n "icon:                    "; ls /usr/share/icons/hicolor/scalable/apps/io.github.thecleaners.qiftop.svg 2>/dev/null || echo MISSING
 echo "config (should be noreplace):"; rpm -qc qiftop-agent | sed 's/^/    /'
 echo -n "config %config flag:     "; rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' qiftop-agent | grep agent.conf || echo "not flagged"
 echo

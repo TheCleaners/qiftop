@@ -4,6 +4,43 @@ All notable changes to qiftop are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-06-11
+
+The "rounded-out distribution" release: desktop-environment integration,
+shell completions, and broader-distro packaging — all packaging recipes
+container-verified, plus first-class Alpine/musl support.
+
+### Added
+- **Freedesktop integration** under the reverse-DNS app-id
+  `io.github.thecleaners.qiftop`: an **AppStream metainfo** file (visibility in
+  GNOME Software / KDE Discover), a dedicated **nqiftop terminal launcher**
+  (`.desktop`, `Terminal=true`), and **rasterized hicolor PNG icons**
+  (16–256 px) alongside the scalable SVG. (The agent's D-Bus name
+  `org.qiftop.NetworkAgent1` is a separate namespace and is unchanged.)
+- **Shell completions** (bash / zsh / fish) for `qiftop`, `nqiftop`,
+  `qiftop-agent`, and `check_qiftop`, packaged per component.
+- **Broader-distribution packaging recipes**, each verified end-to-end in a
+  container: an Arch **`PKGBUILD`** (`dist/aur/`, built with `makepkg`), a
+  Fedora **COPR `.spec`** (`dist/copr/`, built with `rpmbuild`), and an Alpine
+  **`APKBUILD`** (`dist/alpine/`, built with `abuild`).
+- **First-class Alpine/musl support**: an **OpenRC service**
+  (`dist/alpine/qiftop-agent.openrc`) that loads the nftables conntrack shim
+  and supervises the agent (the OpenRC analogue of the systemd unit), and a
+  CI **Alpine/musl build+test lane**. The full suite passes on musl.
+
+### Changed
+- The GUI window now advertises `setDesktopFileName(io.github.thecleaners.qiftop)`
+  so Wayland associates it with the launcher.
+
+### Fixed
+- Hardened two GUI filter smoke tests (`QTRY_*` instead of fixed waits) so they
+  are robust under the offscreen QPA across glibc and musl.
+
+### Packaging / CI
+- Package directories are staged 0755 regardless of the builder's umask.
+- CI validates both desktop entries and the AppStream metainfo
+  (`desktop-file-validate` + `appstreamcli`).
+
 ## [0.2.3] - 2026-06-10
 
 The "test depth + integration reach" release: more of the capture path is now
@@ -284,6 +321,7 @@ privileged DBus daemon).
 - CI also ran packaging QA (`lintian`, `desktop-file-validate`, and a Docker
   smoke install).
 
+[0.2.4]: https://github.com/TheCleaners/qiftop/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/TheCleaners/qiftop/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/TheCleaners/qiftop/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/TheCleaners/qiftop/compare/v0.2...v0.2.1

@@ -1,0 +1,31 @@
+# bash completion for nqiftop
+
+_nqiftop()
+{
+    local cur prev words cword
+    _init_completion || return
+
+    case "$prev" in
+        -i|--interval)
+            COMPREPLY=()
+            return
+            ;;
+        --theme)
+            COMPREPLY=( $(compgen -W 'dark light colorblind mono' -- "$cur") )
+            return
+            ;;
+        --view)
+            COMPREPLY=( $(compgen -W 'interfaces connections' -- "$cur") )
+            return
+            ;;
+        --group)
+            COMPREPLY=( $(compgen -W 'off none flat interface iface if process proc container ctr' -- "$cur") )
+            return
+            ;;
+    esac
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W '-h --help --help-all -v --version --session --no-agent --verbose -i --interval --theme --view --group' -- "$cur") )
+    fi
+}
+complete -F _nqiftop nqiftop

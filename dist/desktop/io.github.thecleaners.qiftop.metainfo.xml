@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.thecleaners.qiftop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
+
+  <name>qiftop</name>
+  <summary>Real-time network traffic monitor</summary>
+  <developer id="io.github.thecleaners">
+    <name>The Cleaners</name>
+  </developer>
+
+  <description>
+    <p>qiftop is a Qt desktop application for monitoring network traffic in real time. It shows per-interface counters and per-connection flows in an iftop-like view designed for graphical desktops.</p>
+    <p>The graphical client pairs with qiftop-agent, a privileged D-Bus service that collects kernel network accounting while keeping the UI unprivileged. When available, the agent provides live connection data, interface statistics, and optional process and container attribution.</p>
+    <p>Filtering, sorting, rate smoothing, DNS names, and grouped views help identify bandwidth use by interface, process, container, protocol, address, and direction.</p>
+  </description>
+
+  <launchable type="desktop-id">io.github.thecleaners.qiftop.desktop</launchable>
+  <categories>
+    <category>Network</category>
+    <category>Monitor</category>
+  </categories>
+  <keywords>
+    <keyword>network</keyword>
+    <keyword>traffic</keyword>
+    <keyword>iftop</keyword>
+    <keyword>monitor</keyword>
+    <keyword>bandwidth</keyword>
+    <keyword>interface</keyword>
+    <keyword>connection</keyword>
+    <keyword>container</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/TheCleaners/qiftop</url>
+  <url type="bugtracker">https://github.com/TheCleaners/qiftop/issues</url>
+  <content_rating type="oars-1.1"/>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>qiftop showing grouped live traffic and preferences</caption>
+      <image type="source">https://github.com/TheCleaners/qiftop/releases/download/v0.2-rc1/demo.gif</image>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.2.3" date="2026-06-10">
+      <description>
+        <p>Distribution polish release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

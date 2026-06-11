@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(qiftop VERSION 0.2.3 LANGUAGES CXX)
+project(qiftop VERSION 0.2.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -371,13 +371,58 @@ install(FILES LICENSE README.md
         DESTINATION ${CMAKE_INSTALL_DOCDIR}
         COMPONENT qiftop)
 
-# Desktop entry + scalable icon (hicolor theme)
-install(FILES dist/desktop/qiftop.desktop
+# Desktop entry + AppStream metainfo + icons (freedesktop reverse-DNS app-id
+# io.github.thecleaners.qiftop — distinct from the agent's D-Bus name
+# org.qiftop.NetworkAgent1, which is the wire contract and unchanged).
+install(FILES dist/desktop/io.github.thecleaners.qiftop.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
         COMPONENT qiftop)
-install(FILES dist/desktop/qiftop.svg
+install(FILES dist/desktop/io.github.thecleaners.qiftop.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo
+        COMPONENT qiftop)
+# Scalable + rasterized hicolor icons (some environments don't render SVG app
+# icons; ship PNGs at the standard sizes too).
+install(FILES dist/desktop/io.github.thecleaners.qiftop.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
         COMPONENT qiftop)
+foreach(_sz 16 24 32 48 64 128 256)
+    install(FILES dist/desktop/icons/${_sz}x${_sz}/io.github.thecleaners.qiftop.png
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${_sz}x${_sz}/apps
+            COMPONENT qiftop)
+endforeach()
+if(TARGET nqiftop)
+    install(FILES dist/desktop/io.github.thecleaners.qiftop.nqiftop.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+            COMPONENT nqiftop)
+endif()
+
+# Shell completions (bash / zsh / fish), grouped by the binary's component.
+install(FILES dist/completions/bash/qiftop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions COMPONENT qiftop)
+install(FILES dist/completions/zsh/_qiftop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions COMPONENT qiftop)
+install(FILES dist/completions/fish/qiftop.fish
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT qiftop)
+install(FILES dist/completions/bash/qiftop-agent
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions COMPONENT qiftop-agent)
+install(FILES dist/completions/zsh/_qiftop-agent
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions COMPONENT qiftop-agent)
+install(FILES dist/completions/fish/qiftop-agent.fish
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT qiftop-agent)
+install(FILES dist/completions/bash/check_qiftop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions COMPONENT check-qiftop)
+install(FILES dist/completions/zsh/_check_qiftop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions COMPONENT check-qiftop)
+install(FILES dist/completions/fish/check_qiftop.fish
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT check-qiftop)
+if(TARGET nqiftop)
+    install(FILES dist/completions/bash/nqiftop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions COMPONENT nqiftop)
+    install(FILES dist/completions/zsh/_nqiftop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions COMPONENT nqiftop)
+    install(FILES dist/completions/fish/nqiftop.fish
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT nqiftop)
+endif()
 install(FILES LICENSE
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/qiftop-agent
         COMPONENT qiftop-agent)
@@ -605,7 +650,7 @@ set(CPACK_RPM_QIFTOP-AGENT_POST_UNINSTALL_SCRIPT_FILE
 # symlink owned by `filesystem`). The package-specific dirs (/etc/qiftop,
 # /usr/share/qiftop) are deliberately NOT excluded so we keep owning them.
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
-    "/lib;/lib/systemd;/lib/systemd/system;/usr/share/dbus-1;/usr/share/dbus-1/system.d;/usr/share/dbus-1/system-services;/usr/share/applications;/usr/share/icons;/usr/share/icons/hicolor;/usr/share/icons/hicolor/scalable;/usr/share/icons/hicolor/scalable/apps;/usr/lib/cmake;/usr/lib/pkgconfig;/usr/lib64/cmake;/usr/lib64/pkgconfig")
+    "/lib;/lib/systemd;/lib/systemd/system;/usr/share/dbus-1;/usr/share/dbus-1/system.d;/usr/share/dbus-1/system-services;/usr/share/applications;/usr/share/metainfo;/usr/share/icons;/usr/share/icons/hicolor;/usr/share/icons/hicolor/scalable;/usr/share/icons/hicolor/scalable/apps;/usr/share/icons/hicolor/16x16;/usr/share/icons/hicolor/16x16/apps;/usr/share/icons/hicolor/24x24;/usr/share/icons/hicolor/24x24/apps;/usr/share/icons/hicolor/32x32;/usr/share/icons/hicolor/32x32/apps;/usr/share/icons/hicolor/48x48;/usr/share/icons/hicolor/48x48/apps;/usr/share/icons/hicolor/64x64;/usr/share/icons/hicolor/64x64/apps;/usr/share/icons/hicolor/128x128;/usr/share/icons/hicolor/128x128/apps;/usr/share/icons/hicolor/256x256;/usr/share/icons/hicolor/256x256/apps;/usr/share/bash-completion;/usr/share/bash-completion/completions;/usr/share/zsh;/usr/share/zsh/site-functions;/usr/share/fish;/usr/share/fish/vendor_completions.d;/usr/lib/cmake;/usr/lib/pkgconfig;/usr/lib64/cmake;/usr/lib64/pkgconfig")
 
 # Pre-release RPMs keep inline debug info (unstripped), mirroring the
 # unstripped pre-release .deb so user-reported crash backtraces are

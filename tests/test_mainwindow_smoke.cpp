@@ -345,6 +345,9 @@ private slots:
         FakeDnsResolver       dns;
 
         MainWindow w(&settings, &netMon, &connMon, &dns);
+        // Keep the toolbar-hosted filter out of the overflow menu under
+        // offscreen platforms with wider default metrics.
+        w.resize(1400, 900);
         w.show();
         QVERIFY(QTest::qWaitForWindowExposed(&w));
 
@@ -357,8 +360,7 @@ private slots:
         // Connections tab (updateConnIfaceFilterVisibility) — switch
         // there first so keyClicks reach a visible, enabled widget.
         w.selectConnectionsTab();
-        QTest::qWait(20);
-        QVERIFY(edit->isVisible());
+        QTRY_VERIFY(edit->isVisible());
 
         connMon.emitSnapshot({
             mkFlow("eth0", "10.0.0.10", 1001, "1.1.1.1", 443, L4Proto::Tcp),
@@ -1007,22 +1009,27 @@ private slots:
         FakeDnsResolver       dns;
 
         MainWindow w(&settings, &netMon, &connMon, &dns);
+        // Keep the toolbar-hosted filter out of the overflow menu under
+        // offscreen platforms with wider default metrics.
+        w.resize(1400, 900);
         w.show();
         QVERIFY(QTest::qWaitForWindowExposed(&w));
+        w.activateWindow();
+        const bool activated = QTest::qWaitForWindowActive(&w, 500);
+        Q_UNUSED(activated);
         w.selectConnectionsTab();
-        QTest::qWait(20);
 
         auto *edit = w.findChild<QLineEdit*>(QStringLiteral("connFilterEdit"));
         QVERIFY(edit);
+        QTRY_VERIFY(edit->isVisible());
 
         // Esc-clears half: give the bar focus, type, press Esc.
         edit->setFocus();
+        QTRY_VERIFY(edit->hasFocus());
         QTest::keyClicks(edit, QStringLiteral("proto:tcp"));
-        QTest::qWait(20);
-        QCOMPARE(edit->text(), QStringLiteral("proto:tcp"));
+        QTRY_COMPARE(edit->text(), QStringLiteral("proto:tcp"));
         QTest::keyClick(edit, Qt::Key_Escape);
-        QTest::qWait(20);
-        QVERIFY2(edit->text().isEmpty(), "Esc did not clear the filter bar");
+        QTRY_COMPARE(edit->text(), QString());
 
         // Ctrl+F half (best-effort): only assert if the window actually
         // became active under the offscreen platform.
