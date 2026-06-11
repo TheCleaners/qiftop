@@ -235,7 +235,12 @@ jobs:
               -DCPACK_PACKAGE_VERSION=${{ steps.ver.outputs.rpm_version }} \
               -DQIFTOP_BUILD_TESTS=OFF \
               -DQIFTOP_AUTO_PACKAGE=OFF
-            cmake --build build-rpm --target qiftop qiftop-agent nqiftop --parallel
+            # Build everything (tests are off, auto-package is off) rather than
+            # an explicit target list: the enumerated list repeatedly went
+            # stale when new binaries were added (man pages, then check_qiftop),
+            # breaking cpack which couldn't find the unbuilt target. The .deb
+            # job builds all targets the same way.
+            cmake --build build-rpm --parallel
             cd build-rpm && cpack -G RPM -V
             ls -la *.rpm
           '
