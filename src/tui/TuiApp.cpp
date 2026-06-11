@@ -362,6 +362,7 @@ void TuiApp::handleKey(int key)
         m_groupBy = static_cast<GroupBy>((static_cast<int>(m_groupBy) + 1)
                                          % static_cast<int>(GroupBy::Count));
         m_connCursor = 0;
+        m_collapsedGroups.clear(); // group keys differ per mode; start fresh
         break;
     // --- current-line cursor: vim + arrow navigation ---
     case 'k':
@@ -391,18 +392,29 @@ void TuiApp::handleKey(int key)
     case KEY_HOME:
         moveCursor(-(std::numeric_limits<int>::max() / 2));
         break;
-    // --- open the per-row detail inspector (modal overlay) ---
+    // --- open detail / expand-collapse a group ---
     case '\n':
     case '\r':
     case KEY_ENTER:
     case ' ':
+        // On a group header, toggle collapse; on a flow row, open the inspector.
+        if (cursorOnHeader())
+            toggleCollapseAtCursor();
+        else
+            openDetail();
+        break;
     case 'l':
     case KEY_RIGHT:
-        openDetail();
+        // Expand a collapsed group header; otherwise open the detail inspector.
+        if (cursorOnHeader())
+            expandAtCursor();
+        else
+            openDetail();
         break;
     case 'h':
     case KEY_LEFT:
-        break; // reserved (no inline collapse in the live views)
+        collapseAtCursor(); // fold the cursor's group (header or member)
+        break;
     case KEY_RESIZE:
         break; // Screen reads the new size on the next render
     default:
@@ -439,7 +451,7 @@ Frame TuiApp::buildFrame()
             maxRate = std::max(maxRate, cr);
             aggRx += row.rxRate;
             aggTx += row.txRate;
-            m_rowRefs << RowRef{true, interfaceKey(row)};
+            m_rowRefs << RowRef{true, false, interfaceKey(row), QString()};
         }
     } else {
         f.sortCol  = m_connSortCol;
@@ -467,7 +479,7 @@ Frame TuiApp::buildFrame()
                 maxRate = std::max(maxRate, cr);
                 aggRx += row.rxRate;
                 aggTx += row.txRate;
-                m_rowRefs << RowRef{true, connectionKey(row)};
+                m_rowRefs << RowRef{true, false, connectionKey(row), QString()};
             }
         } else {
             // Bucket by group key, preserving first-appearance order (which is
@@ -490,10 +502,15 @@ Frame TuiApp::buildFrame()
                     grb += rows[i].current.rxBytes;
                     gtb += rows[i].current.txBytes;
                 }
-                // Group header row (aggregated; not a selectable target).
+                // Group header row: aggregated, and a landable cursor target so
+                // it can be folded/unfolded. A ▸ (collapsed) / ▾ (expanded)
+                // marker leads the label.
+                const bool collapsed = m_collapsedGroups.contains(k);
                 const QString label = groupLabelFor(m_groupBy, rows[members.first()].current);
+                const QString marker = collapsed ? QStringLiteral("\u25b8")  // ▸
+                                                 : QStringLiteral("\u25be"); // ▾
                 f.rows << QStringList{
-                    QStringLiteral("%1  (%2)").arg(label).arg(members.size()),
+                    QStringLiteral("%1 %2  (%3)").arg(marker, label).arg(members.size()),
                     util::formatByteRate(grx), util::formatByteRate(gtx),
                     util::formatBytes(grb), util::formatBytes(gtb)};
                 f.rowRoles << Role::GroupHeader;
@@ -502,8 +519,10 @@ Frame TuiApp::buildFrame()
                 maxRate = std::max(maxRate, gcr);
                 aggRx += grx;
                 aggTx += gtx;
-                m_rowRefs << RowRef{false, QString()};
-                // Member rows (indented in the flow column).
+                m_rowRefs << RowRef{true, true, QString(), k};
+                // Member rows (indented), unless the group is collapsed.
+                if (collapsed)
+                    continue;
                 for (int i : members) {
                     const auto &row = rows[i];
                     QStringList mc = cellsForConnection(*m_connAgg, row);
@@ -513,7 +532,7 @@ Frame TuiApp::buildFrame()
                     const double cr = combinedRate(row);
                     rates << cr;
                     maxRate = std::max(maxRate, cr);
-                    m_rowRefs << RowRef{true, connectionKey(row)};
+                    m_rowRefs << RowRef{true, false, connectionKey(row), k};
                 }
             }
         }
@@ -547,6 +566,18 @@ Frame TuiApp::buildFrame()
     const int total = static_cast<int>(f.rows.size());
     int &cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
     int &scroll = (m_view == View::Interfaces) ? m_ifaceScroll : m_connScroll;
+    // After a collapse, snap the cursor onto the folded group's header row so
+    // the user stays anchored on it (and can immediately re-expand).
+    if (m_cursorTargetValid) {
+        for (int i = 0; i < m_rowRefs.size(); ++i) {
+            if (m_rowRefs[i].header && m_rowRefs[i].groupKey == m_cursorTargetGroup) {
+                cursor = i;
+                break;
+            }
+        }
+        m_cursorTargetValid = false;
+        m_cursorTargetGroup.clear();
+    }
     if (total <= 0) {
         cursor = 0;
         scroll = 0;
@@ -606,6 +637,9 @@ Frame TuiApp::buildFrame()
             {QStringLiteral("S"),     QStringLiteral("settings")},
             {QStringLiteral("?"),     QStringLiteral("help")},
         };
+        // When grouped, advertise fold/unfold (h/l) right after the group key.
+        if (m_groupBy != GroupBy::None)
+            f.footerHints.insert(6, {QStringLiteral("h/l"), QStringLiteral("fold")});
     }
 
     buildModal(f);
@@ -674,6 +708,7 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("r"),            QStringLiteral("Reverse the sort order")),
             row(QStringLiteral("/"),            QStringLiteral("Filter connections (mini-language; Esc clears)")),
             row(QStringLiteral("g"),            QStringLiteral("Group connections by interface / process / container")),
+            row(QStringLiteral("h/\u2190  l/\u2192"),  QStringLiteral("Collapse / expand the group under the cursor (when grouped)")),
             row(QStringLiteral("p"),            QStringLiteral("Pause / resume live updates")),
             row(QStringLiteral("w"),            QStringLiteral("Write/export the current view to a CSV file")),
             row(QStringLiteral("z"),            QStringLiteral("Cycle the colour theme")),
@@ -772,6 +807,60 @@ void TuiApp::openDetail()
     m_detailKey  = ref.key;
     m_detailView = m_view;
     m_overlay    = Overlay::Detail;
+    requestRedraw();
+}
+
+bool TuiApp::cursorOnHeader() const
+{
+    const int cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
+    return cursor >= 0 && cursor < m_rowRefs.size() && m_rowRefs[cursor].header;
+}
+
+void TuiApp::collapseAtCursor()
+{
+    // Grouping only exists in the Connections view; the "(unattributed)" /
+    // "(no container)" bucket has an EMPTY group key, which is still a valid
+    // collapse target — so gate on the grouping mode, not on a non-empty key.
+    if (m_view != View::Connections || m_groupBy == GroupBy::None)
+        return;
+    const int cursor = m_connCursor;
+    if (cursor < 0 || cursor >= m_rowRefs.size())
+        return;
+    const QString gk = m_rowRefs[cursor].groupKey;
+    if (m_collapsedGroups.contains(gk))
+        return;                               // already collapsed
+    m_collapsedGroups.insert(gk);
+    m_cursorTargetGroup = gk;                  // keep cursor on the folded header
+    m_cursorTargetValid = true;
+    requestRedraw();
+}
+
+void TuiApp::expandAtCursor()
+{
+    if (m_view != View::Connections || m_groupBy == GroupBy::None)
+        return;
+    const int cursor = m_connCursor;
+    if (cursor < 0 || cursor >= m_rowRefs.size() || !m_rowRefs[cursor].header)
+        return;
+    if (m_collapsedGroups.remove(m_rowRefs[cursor].groupKey)) // no-op if expanded
+        requestRedraw();
+}
+
+void TuiApp::toggleCollapseAtCursor()
+{
+    if (m_view != View::Connections || m_groupBy == GroupBy::None)
+        return;
+    const int cursor = m_connCursor;
+    if (cursor < 0 || cursor >= m_rowRefs.size() || !m_rowRefs[cursor].header)
+        return;
+    const QString gk = m_rowRefs[cursor].groupKey;
+    if (m_collapsedGroups.contains(gk)) {
+        m_collapsedGroups.remove(gk);
+    } else {
+        m_collapsedGroups.insert(gk);
+        m_cursorTargetGroup = gk;
+        m_cursorTargetValid = true;
+    }
     requestRedraw();
 }
 
