@@ -19,6 +19,7 @@
 #include <memory>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -230,15 +231,42 @@ int main(int argc, char *argv[])
         connMon->setDesiredIntervalMs(ms);
     });
 
-    const auto drainInput = [&screen, &tui] {
-        int ch;
-        while ((ch = screen.pollKey()) != ERR)
-            tui.handleKey(ch);
-    };
-
+    // Guards against a stdin that is perpetually "readable" but yields no key
+    // (EOF on a pipe/pty → POLLHUP; EOF on /dev/null or a regular file →
+    // read() returns 0 with only POLLIN). Either way the level-triggered
+    // notifier would spin at 100% CPU and the TUI could never be quit by a
+    // keystroke. A normal idle stdin does NOT wake the notifier at all, so any
+    // run of key-less wakeups means stdin is broken/closed; an interactive TUI
+    // should then exit (matches top/htop).
+    int emptyStdinWakeups = 0;
     QSocketNotifier stdinNotifier(STDIN_FILENO, QSocketNotifier::Read);
-    QObject::connect(&stdinNotifier, &QSocketNotifier::activated, &app,
-                     [drainInput] { drainInput(); });
+    QObject::connect(
+        &stdinNotifier, &QSocketNotifier::activated, &app,
+        [&screen, &tui, &stdinNotifier, &emptyStdinWakeups] {
+            int ch;
+            int produced = 0;
+            while ((ch = screen.pollKey()) != ERR) {
+                tui.handleKey(ch);
+                ++produced;
+            }
+            if (produced > 0) {
+                emptyStdinWakeups = 0;
+                return;
+            }
+            struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
+            const bool hup = ::poll(&pfd, 1, 0) > 0
+                             && (pfd.revents & (POLLHUP | POLLERR | POLLNVAL));
+            // POLLHUP is immediate; the counter catches /dev/null-style EOF
+            // (always POLLIN, read()==0) which has no hangup flag. A spin
+            // fires thousands of times a second, so a small threshold trips
+            // in microseconds; legitimate lone key-less wakeups (a partial or
+            // unmapped escape sequence) never recur back-to-back because the
+            // fd is drained, so the counter resets on the next real key.
+            if (hup || ++emptyStdinWakeups >= 8) {
+                stdinNotifier.setEnabled(false);
+                QCoreApplication::quit();
+            }
+        });
 
     // --- signal-safe terminal restore + resize ---
     if (::pipe(g_sigPipe) == 0) {

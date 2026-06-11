@@ -311,6 +311,38 @@ requirements:
   `nl_langinfo(CODESET)` and fall back to `C.UTF-8`/`en_US.UTF-8` if it isn't
   UTF-8 (see `Screen::init`). This fix also helps marginal Linux locales.
 
+### 7.4a ncurses input + a Qt event loop (the 100% CPU spin)
+
+nqiftop drives ncurses input from the Qt event loop via a
+`QSocketNotifier(STDIN_FILENO, Read)` whose callback drains `wgetch()` (under
+`nodelay`) until `ERR`. Two hazards live here:
+
+* **EOF spins the notifier at 100% CPU (all platforms).** `wgetch()` returns
+  `ERR` for BOTH "no input pending" and EOF, so a closed/redirected stdin
+  (pipe/pty hangup, or `</dev/null`) stays *readable* forever while yielding no
+  key — the level-triggered notifier re-fires without end and the TUI can never
+  be quit by a keystroke. The guard (`src/tui/main.cpp`): if a wakeup produces
+  zero keys, treat `POLLHUP/POLLERR/POLLNVAL` as immediate hangup, and also
+  count consecutive key-less wakeups (a real spin trips the threshold in
+  microseconds; `/dev/null` is always `POLLIN` with no `POLLHUP`, so the
+  counter is what catches it). On EOF, disable the notifier and quit — an
+  interactive TUI whose input closed should exit, like top/htop. Verified: a
+  normal idle tty never wakes the notifier, so this never false-fires.
+* **FreeBSD interactive key input is currently broken (OPEN ISSUE).** On
+  FreeBSD (ncursesw) over a pty, typed keys are *not* consumed/returned by
+  `wgetch()` in this model — the byte echoes (raw mode not effective for our
+  read path) and the resulting key-less-wakeup spin is now caught by the guard
+  above, so the TUI exits instead of pegging the CPU. NetBSD (base curses) and
+  Linux (ncursesw) work correctly with the identical code, so this is a
+  FreeBSD-ncurses/`QSocketNotifier` interaction, not a generic bug. Likely
+  fix directions to investigate: use `raw()` rather than `cbreak()`; or stop
+  routing input through `wgetch()` entirely and instead `read()` raw bytes from
+  fd 0 in the notifier and feed them to the existing escape-sequence decoder
+  in `Screen::pollKey` (which already assembles sequences by hand). Until then,
+  FreeBSD is build- and capture-validated but the TUI is not interactively
+  usable there; the Qt Widgets GUI (separate Qt event loop, no ncurses) is
+  unaffected.
+
 ### 7.5 Peer credentials — `getpeereid(3)` not `SO_PEERCRED`
 
 Linux's `SO_PEERCRED` / `struct ucred` does not exist on the BSDs. Use
