@@ -429,6 +429,12 @@ Frame TuiApp::buildFrame()
     f.tabs        = {QStringLiteral("Interfaces"), QStringLiteral("Connections")};
     f.activeTab   = (m_view == View::Interfaces) ? 0 : 1;
     f.columns     = columnsFor(m_view);
+    // When grouped, advertise the grouping mode in the (always-present) first
+    // column header instead of a bare "Flow" — the rows are bucketed by it.
+    // The Column identity used for sorting is unchanged (this only re-labels
+    // the displayed header text).
+    if (m_view == View::Connections && m_groupBy != GroupBy::None && !f.columns.isEmpty())
+        f.columns[0].title = QStringLiteral("Flow \u00b7 by %1").arg(groupByName(m_groupBy));
 
     QList<double> rates;       // combined rate per displayed row (for the gauge)
     double maxRate = 0.0;
