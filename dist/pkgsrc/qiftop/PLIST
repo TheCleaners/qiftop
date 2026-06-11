@@ -2,17 +2,15 @@
 @comment
 @comment SCAFFOLDING — regenerate with `make print-PLIST` once this builds in a
 @comment real pkgsrc tree. Captured from a staged `cmake --install` of the BSD
-@comment client build on NetBSD 11 (prefix /usr/pkg).
+@comment client build on NetBSD 11 (prefix /usr/pkg). The Linux/agent-only
+@comment install rules (D-Bus policy, systemd unit, nftables shim, agent man
+@comment pages + completions) are gated on the agent target in CMakeLists.txt
+@comment and so are correctly absent here.
 @comment
-@comment Two known issues to resolve during verification:
-@comment   1. Man pages are installed pre-gzipped (.gz) by upstream CMake;
-@comment      pkgsrc normally compresses them itself. Either teach CMake to
-@comment      install uncompressed man pages, or keep .gz and adjust here.
-@comment   2. Several entries below are Linux/agent-only vestiges installed by
-@comment      unconditional install(FILES) rules even though qiftop-agent is
-@comment      not built on BSD (the D-Bus policy/service, the nftables shim,
-@comment      the agent man pages + completions). A future CMake refinement
-@comment      should gate those on QIFTOP_PLATFORM==linux; then prune them here.
+@comment Known remaining issue to resolve during verification: man pages are
+@comment installed pre-gzipped (.gz) by upstream CMake, whereas pkgsrc normally
+@comment compresses them itself. Either teach CMake to install uncompressed man
+@comment pages or reconcile the .gz entries with pkgsrc's man handling.
 @comment
 bin/nqiftop
 bin/qiftop
@@ -59,17 +57,6 @@ libexec/qiftop/check_qiftop
 man/man1/check_qiftop.1.gz
 man/man1/nqiftop.1.gz
 man/man1/qiftop.1.gz
-@comment --- Linux/agent vestiges (prune once CMake gates them on platform) ---
-man/man5/qiftop-agent.conf.5.gz
-man/man8/qiftop-agent.8.gz
-share/dbus-1/system-services/org.qiftop.NetworkAgent1.service
-share/dbus-1/system.d/org.qiftop.NetworkAgent1.conf
-share/doc/qiftop-agent/LICENSE
-share/bash-completion/completions/qiftop-agent
-share/fish/vendor_completions.d/qiftop-agent.fish
-share/zsh/site-functions/_qiftop-agent
-share/qiftop/qiftop-conntrack.nft
-@comment --- end vestiges ---
 share/applications/io.github.thecleaners.qiftop.desktop
 share/applications/io.github.thecleaners.qiftop.nqiftop.desktop
 share/bash-completion/completions/check_qiftop

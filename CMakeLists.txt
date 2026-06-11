@@ -413,8 +413,11 @@ function(qiftop_install_manpage SRC SECTION COMPONENT)
 endfunction()
 
 qiftop_install_manpage(dist/man/qiftop.1            1 qiftop)
-qiftop_install_manpage(dist/man/qiftop-agent.8      8 qiftop-agent)
-qiftop_install_manpage(dist/man/qiftop-agent.conf.5 5 qiftop-agent)
+# Agent man pages only when the agent is built (Linux-only today).
+if(TARGET qiftop-agent)
+    qiftop_install_manpage(dist/man/qiftop-agent.8      8 qiftop-agent)
+    qiftop_install_manpage(dist/man/qiftop-agent.conf.5 5 qiftop-agent)
+endif()
 if(TARGET nqiftop)
     qiftop_install_manpage(dist/man/nqiftop.1       1 nqiftop)
 endif()
@@ -456,12 +459,15 @@ install(FILES dist/completions/zsh/_qiftop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions COMPONENT qiftop)
 install(FILES dist/completions/fish/qiftop.fish
         DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT qiftop)
-install(FILES dist/completions/bash/qiftop-agent
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions COMPONENT qiftop-agent)
-install(FILES dist/completions/zsh/_qiftop-agent
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions COMPONENT qiftop-agent)
-install(FILES dist/completions/fish/qiftop-agent.fish
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT qiftop-agent)
+# Agent completions only when the agent is built (Linux-only today).
+if(TARGET qiftop-agent)
+    install(FILES dist/completions/bash/qiftop-agent
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions COMPONENT qiftop-agent)
+    install(FILES dist/completions/zsh/_qiftop-agent
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions COMPONENT qiftop-agent)
+    install(FILES dist/completions/fish/qiftop-agent.fish
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT qiftop-agent)
+endif()
 install(FILES dist/completions/bash/check_qiftop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions COMPONENT check-qiftop)
 install(FILES dist/completions/zsh/_check_qiftop
@@ -476,39 +482,45 @@ if(TARGET nqiftop)
     install(FILES dist/completions/fish/nqiftop.fish
             DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d COMPONENT nqiftop)
 endif()
-install(FILES LICENSE
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/qiftop-agent
-        COMPONENT qiftop-agent)
+# --- Agent-only data files (Linux-only; gated on the agent target) ----------
+# The privileged agent's policy, service, config and helper data. On BSD the
+# agent isn't built, so none of this installs (keeps the BSD/pkgsrc package
+# free of inert Linux-only artifacts).
+if(TARGET qiftop-agent)
+    install(FILES LICENSE
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/qiftop-agent
+            COMPONENT qiftop-agent)
 
-# DBus system bus policy
-install(FILES dist/dbus/org.qiftop.NetworkAgent1.conf
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system.d
-        COMPONENT qiftop-agent)
+    # DBus system bus policy
+    install(FILES dist/dbus/org.qiftop.NetworkAgent1.conf
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system.d
+            COMPONENT qiftop-agent)
 
-# DBus system-bus activation file
-install(FILES dist/dbus/org.qiftop.NetworkAgent1.service
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system-services
-        COMPONENT qiftop-agent)
+    # DBus system-bus activation file
+    install(FILES dist/dbus/org.qiftop.NetworkAgent1.service
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system-services
+            COMPONENT qiftop-agent)
 
-# systemd unit (absolute path — must be picked up by systemd regardless of
-# CMAKE_INSTALL_PREFIX; pkg-config could be used for the systemd-detected
-# location but /lib/systemd/system is correct on every Debian-derived distro).
-install(FILES dist/systemd/qiftop-agent.service
-        DESTINATION /lib/systemd/system
-        COMPONENT qiftop-agent)
+    # systemd unit (absolute path — must be picked up by systemd regardless of
+    # CMAKE_INSTALL_PREFIX; pkg-config could be used for the systemd-detected
+    # location but /lib/systemd/system is correct on every Debian-derived distro).
+    install(FILES dist/systemd/qiftop-agent.service
+            DESTINATION /lib/systemd/system
+            COMPONENT qiftop-agent)
 
-# Default configuration file. Marked as a Debian conffile (see
-# dist/debian/conffiles) so dpkg will preserve user edits across upgrades.
-install(FILES dist/conf/agent.conf
-        DESTINATION /etc/qiftop
-        COMPONENT qiftop-agent)
+    # Default configuration file. Marked as a Debian conffile (see
+    # dist/debian/conffiles) so dpkg will preserve user edits across upgrades.
+    install(FILES dist/conf/agent.conf
+            DESTINATION /etc/qiftop
+            COMPONENT qiftop-agent)
 
-# nftables shim that the agent's systemd unit loads via ExecStartPre to
-# force per-family conntrack on (otherwise IPv6 flows never appear on
-# hosts whose firewall rules don't reference `ct` on the ip6 side).
-install(FILES dist/nftables/qiftop-conntrack.nft
-        DESTINATION share/qiftop
-        COMPONENT qiftop-agent)
+    # nftables shim that the agent's systemd unit loads via ExecStartPre to
+    # force per-family conntrack on (otherwise IPv6 flows never appear on
+    # hosts whose firewall rules don't reference `ct` on the ip6 side).
+    install(FILES dist/nftables/qiftop-conntrack.nft
+            DESTINATION share/qiftop
+            COMPONENT qiftop-agent)
+endif()
 
 # --- CPack: produce one .deb per component ----------------------------------
 set(CPACK_PACKAGE_NAME              "qiftop")

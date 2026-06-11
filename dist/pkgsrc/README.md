@@ -24,17 +24,16 @@ BSD implementation guide and the trial-and-error lessons behind this backend.
    local/wip package).
 2. `make makesum` — regenerate `distinfo` (adds the required BLAKE2s line and
    authoritative hashes from the actually-fetched tarball).
-3. `make` — build. Expect to iterate on two known rough edges:
+3. `make` — build. One known rough edge to expect:
    - **Man-page compression.** Upstream CMake installs pre-gzipped `.gz` man
      pages; pkgsrc normally compresses man pages itself. Either make CMake
      install uncompressed man pages, or keep `.gz` and reconcile with
      `PLIST`/`MANCOMPRESSED`.
-   - **Linux/agent vestiges.** Several `install(FILES)` rules ship Linux-only
-     data (the D-Bus system policy + service, the nftables conntrack shim, the
-     `qiftop-agent` man pages and shell completions) even though the agent is
-     not built on BSD. They are flagged in `PLIST`. The clean fix is a CMake
-     refinement gating those installs on `QIFTOP_PLATFORM == linux`; then prune
-     them from `PLIST`.
+
+   (The Linux/agent-only data files — D-Bus policy, systemd unit, nftables
+   shim, agent man pages and completions — are now gated on the agent target
+   in `CMakeLists.txt` and do not install on BSD, so the `PLIST` is already
+   free of them.)
 4. `make print-PLIST > PLIST` — regenerate the file list from the real install
    once the above are settled.
 5. `make package` / `pkglint` — finalize.
