@@ -18,7 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <set>
+#include <optional>
 #include <vector>
 
 #include <dirent.h>
@@ -40,23 +40,38 @@ namespace {
 constexpr int kRefreshIntervalMs = 5000;   // netns set changes are rare
 constexpr int kMaxNetnsesPerTick = 256;    // sanity cap
 
-// Read /proc/<pid>/ns/net symlink target ("net:[NNNN]") and extract
-// the inode number. Returns nullopt on any failure.
+// Read /proc/<pid>/ns/net's namespace inode. Returns nullopt on any failure.
 std::optional<quint64> readNetnsInode(long pid)
 {
     char path[64];
     std::snprintf(path, sizeof(path), "/proc/%ld/ns/net", pid);
-    std::vector<char> buf(64);
-    for (;;) {
-        const ssize_t n = ::readlink(path, buf.data(), buf.size());
-        if (n < 0) return std::nullopt;
-        if (static_cast<size_t>(n) < buf.size()) {
-            return sockdiag::parseNamespaceLink(
-                QString::fromUtf8(buf.data(), int(n)),
-                QLatin1StringView("net"));
-        }
-        buf.resize(buf.size() * 2);
-    }
+    struct stat st{};
+    if (::stat(path, &st) != 0) return std::nullopt;
+    return quint64(st.st_ino);
+}
+
+struct NetnsPid
+{
+    long    pid = 0;
+    quint64 startTime = 0;
+};
+
+struct NetnsBucket
+{
+    quint64                inode = 0;
+    std::vector<NetnsPid>  pids;
+};
+
+void warnNetnsCapOnce(bool &warned)
+{
+    if (warned) return;
+    qWarning("NetnsScanner: per-tick netns cap of %d hit "
+             "(at least one more netns was skipped). "
+             "Container-side flows in those namespaces "
+             "will report as host until the cap is "
+             "raised in NetnsScanner.cpp.",
+             kMaxNetnsesPerTick);
+    warned = true;
 }
 
 // RAII guard: restores the calling thread's netns to the captured
@@ -137,10 +152,11 @@ private slots:
         if (m_stop && m_stop->load()) return;
         if (m_anchorFd < 0)            return;
 
-        // 1) Walk /proc, collect distinct (netns inode → representative pid).
-        std::vector<std::pair<quint64, long>> netnses;
+        // 1) Walk /proc once, grouping pids by netns inode. The first pid
+        //    in each bucket remains the representative used for setns().
+        std::vector<NetnsBucket> netnses;
         netnses.reserve(8);
-        std::set<quint64> seen;
+        QHash<quint64, qsizetype> bucketByInode;
         DIR *procDir = ::opendir("/proc");
         if (!procDir) return;
         while (auto *de = ::readdir(procDir)) {
@@ -151,8 +167,11 @@ private slots:
             if (endp == nm || *endp != '\0' || pid <= 0) continue;
             const auto ino = readNetnsInode(pid);
             if (!ino || *ino == m_anchorInode) continue;
-            if (!seen.insert(*ino).second) continue;
-            netnses.emplace_back(*ino, pid);
+            const NetnsPid entry{ pid, procsnap::pidStartTime(qint32(pid)).value_or(0) };
+            if (auto it = bucketByInode.constFind(*ino); it != bucketByInode.constEnd()) {
+                netnses[size_t(it.value())].pids.push_back(entry);
+                continue;
+            }
             if (int(netnses.size()) >= kMaxNetnsesPerTick) {
                 // High-density Kubernetes worker nodes routinely run
                 // 100-250 pods per host; the per-tick cap protects the
@@ -162,26 +181,27 @@ private slots:
                 // condition is visible in journalctl instead of
                 // manifesting as "some container flows show up as
                 // (host)" in the UI with no obvious cause.
-                if (!m_warnedNetnsCap) {
-                    qWarning("NetnsScanner: per-tick netns cap of %d hit "
-                             "(at least one more netns was skipped). "
-                             "Container-side flows in those namespaces "
-                             "will report as host until the cap is "
-                             "raised in NetnsScanner.cpp.",
-                             kMaxNetnsesPerTick);
-                    m_warnedNetnsCap = true;
-                }
-                break;
+                warnNetnsCapOnce(m_warnedNetnsCap);
+                continue;
+            }
+            const qsizetype bucketIndex = qsizetype(netnses.size());
+            bucketByInode.insert(*ino, bucketIndex);
+            NetnsBucket bucket;
+            bucket.inode = *ino;
+            bucket.pids.push_back(entry);
+            netnses.push_back(std::move(bucket));
+            if (int(netnses.size()) >= kMaxNetnsesPerTick) {
+                warnNetnsCapOnce(m_warnedNetnsCap);
             }
         }
         ::closedir(procDir);
 
-        // 2) For each non-host netns, dump sock_diag + walk /proc-in-ns.
+        // 2) For each non-host netns, dump sock_diag + scan only its pids.
         QHash<QByteArray, quint64>                          mergedKey;
         QHash<quint64, NetnsScanner::PidStamp>              mergedInode;
         QHash<qint32, quint64>                              mergedPid;
-        for (const auto &[nsIno, repPid] : netnses) {
-            scanOneNetns(nsIno, repPid, mergedKey, mergedInode, mergedPid);
+        for (const auto &ns : netnses) {
+            scanOneNetns(ns, mergedKey, mergedInode, mergedPid);
         }
 
         // 3) Publish atomically.
@@ -196,11 +216,14 @@ private slots:
     }
 
 private:
-    void scanOneNetns(quint64 nsIno, long repPid,
+    void scanOneNetns(const NetnsBucket &ns,
                       QHash<QByteArray, quint64>             &outKey,
                       QHash<quint64, NetnsScanner::PidStamp> &outInode,
                       QHash<qint32, quint64>                 &outPid)
     {
+        if (ns.pids.empty()) return;
+        const quint64 nsIno = ns.inode;
+        const long repPid = ns.pids.front().pid;
         char nsPath[96];
         std::snprintf(nsPath, sizeof(nsPath), "/proc/%ld/ns/net", repPid);
         const int targetFd = ::open(nsPath, O_RDONLY | O_CLOEXEC);
@@ -248,11 +271,10 @@ private:
             (void)sockdiag::dumpSocketsViaFd(nlFd, AF_INET6, IPPROTO_UDP, nsKeyToInode, 4);
             ::close(nlFd);
 
-            // 2b) Walk /proc to find pids whose netns inode == nsIno;
-            //     for those pids, scan /proc/<pid>/fd and build
-            //     inode→pid pairs.
+            // 2b) Scan only the pids already grouped for this netns and
+            //     build inode→pid pairs.
             QHash<quint64, NetnsScanner::PidStamp> nsInodeToPid;
-            buildInodeToPidForNetns(nsIno, nsInodeToPid);
+            buildInodeToPidForNetns(ns, nsInodeToPid);
 
             // 2c) Merge: only flow tuples whose socket inode resolves
             //     to a pid in this netns are useful (otherwise the
@@ -297,36 +319,26 @@ private:
         // guard dtor restores anchor netns; qFatal on failure.
     }
 
-    // Walk /proc; for every pid whose /proc/<pid>/ns/net inode equals
-    // nsIno, scan /proc/<pid>/fd and record socket-inode → (pid, starttime).
+    // For every pid already grouped under ns.inode, scan /proc/<pid>/fd and
+    // record socket-inode → (pid, starttime).
     // NOTE: at this point THIS THREAD is INSIDE the container's netns,
     // but /proc is a mount-namespace concern, NOT a netns concern — we
     // still see the host's full /proc tree because we never changed
     // mount namespaces. That's exactly what we want.
     void buildInodeToPidForNetns(
-        quint64 nsIno,
+        const NetnsBucket &ns,
         QHash<quint64, NetnsScanner::PidStamp> &out)
     {
-        DIR *procDir = ::opendir("/proc");
-        if (!procDir) return;
         std::vector<char> linkBuf(256);
-        while (auto *de = ::readdir(procDir)) {
+        for (const NetnsPid &entry : ns.pids) {
             // M9: same hard cap as the merge step — a socket-fd flood
             // inside one container must not stall/OOM the root agent.
             if (out.size() >= sockdiag::kMaxSocketEntries) {
                 warnMapCapOnce();
                 break;
             }
-            const char *nm = de->d_name;
-            if (nm[0] < '0' || nm[0] > '9') continue;
-            char *endp = nullptr;
-            const long pid = ::strtol(nm, &endp, 10);
-            if (endp == nm || *endp != '\0' || pid <= 0) continue;
-            const auto ino = readNetnsInode(pid);
-            if (!ino || *ino != nsIno) continue;
-
-            const auto st = procsnap::pidStartTime(qint32(pid));
-            const quint64 startTime = st.value_or(0);
+            const long pid = entry.pid;
+            if (pid <= 0) continue;
 
             char fdPath[64];
             std::snprintf(fdPath, sizeof(fdPath), "/proc/%ld/fd", pid);
@@ -346,7 +358,7 @@ private:
                             QString::fromUtf8(linkBuf.data(), int(n));
                         if (auto inode = sockdiag::parseSocketLink(target)) {
                             out.insert(*inode,
-                                       { qint32(pid), startTime });
+                                       { qint32(pid), entry.startTime });
                         }
                         break;
                     }
@@ -355,7 +367,6 @@ private:
             }
             ::closedir(fdDir);
         }
-        ::closedir(procDir);
     }
 
     // M9: warn once per process lifetime when any cross-netns map hits

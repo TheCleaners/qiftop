@@ -33,8 +33,8 @@ class NetnsScannerWorker;
 //
 //   The worker:
 //     1. Snapshots its own anchor netns fd at startup.
-//     2. Every refresh tick: walks /proc/<pid>/ns/net, dedupes inodes,
-//        skips the host inode.
+//     2. Every refresh tick: walks /proc/<pid>/ns/net once, grouping pids
+//        by netns inode, dedupes inodes, skips the host inode.
 //     3. For each non-host inode: opens that netns fd; saves anchor;
 //        setns(target). Wrapped in a scope guard that ALWAYS setns
 //        back to anchor on exit, qFatal()ing the agent on restore
@@ -44,8 +44,8 @@ class NetnsScannerWorker;
 //        netns (netlink sockets are bound to the netns they were
 //        created in for life — you cannot reuse an anchor-netns
 //        netlink fd inside a different netns).
-//     5. Dumps TCPv4/v6, UDPv4/v6. Walks /proc again to map socket
-//        inodes back to pids in that netns.
+//     5. Dumps TCPv4/v6, UDPv4/v6. Scans only the pids already grouped
+//        for that netns to map socket inodes back to pids.
 //     6. Publishes the merged (4-tuple → pid) map atomically.
 //
 //   resolvePid()/enrichPid() run on the agent data thread and only read the
