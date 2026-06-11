@@ -77,25 +77,27 @@ would need.
 | Per-flow counters | libpcap/BPF + userspace 5-tuple flow table (the iftop model). Alternatives: `pfctl -ss`, **libpfctl** (FreeBSD 13+), NetBSD `npf` | ✅ Implemented in `backend/bsd` (`BsdConnectionWorker`); verified on NetBSD 11. |
 | Local addresses | `getifaddrs()` | ✅ Folded into the interface snapshot (AF_INET/AF_INET6 CIDRs). |
 | Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` | ✅ Read by `BsdConnectionWorker` for direction inference. |
-| Socket → PID | `sysctl net.inet.tcp.pcblist` plus `kvm_*` / `procstat` | ⬜ Future (process attribution not wired on BSD). |
-| Container attribution | Jails via `jail_get(2)`; OCI runtime attribution is platform-specific | ⬜ Future. |
+| Socket → PID | `KERN_FILE2` ⋈ `net.inet.*.pcblist` ⋈ `KERN_PROC2` (the sockstat join; pure sysctl, no kvm) | ✅ Implemented in `backend/bsd` (`BsdSocketResolver`); flows carry comm/pid/uid on NetBSD. |
+| Container attribution | Jails via `jail_get(2)`; OCI runtime attribution is platform-specific | ⬜ Future (jails not yet wired). |
 | Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed | ⬜ Agent is Linux-only today; BSD runs the in-process backend (capture needs root for `/dev/bpf`). |
 
 What works today (NetBSD 11, `pkgsrc` qt6-qtbase + base curses + base libpcap):
 `libqiftop.so`, the `qiftop` GUI, the `nqiftop` TUI, and the `check_qiftop`
 monitoring plugin all build and run. The Interfaces view shows live
 per-interface rates, totals, MTU, and oper-state from `getifaddrs(3)`; the
-Connections view shows live per-flow TCP/UDP rates, totals, and inferred
-direction captured via libpcap/BPF (run with elevated privileges for
-`/dev/bpf` access). The `backend/bsd` code is shared across the whole BSD
-family — only future per-flow *attribution* (sockets→PID via
-`net.inet.tcp.pcblist`/`kvm`, jails) and a privileged agent diverge. The
-privileged `qiftop-agent` and its process/container attribution layer remain
-Linux-only; on BSD the in-process backend is the natural, DBus-free path.
+Connections view shows live per-flow TCP/UDP rates, totals, SYN-observed
+direction, and **per-flow process attribution** (comm/pid/uid, with
+group-by-process) captured via libpcap/BPF + a pure-sysctl socket→PID join
+(run with elevated privileges for `/dev/bpf` access). The `backend/bsd` code
+is shared across the whole BSD family — only the sysctl struct layouts in the
+process resolver are currently NetBSD-specific (other BSDs build with
+attribution stubbed). Remaining gaps: container/jail attribution and a
+privileged agent. The `qiftop-agent` remains Linux-only; on BSD the
+in-process backend is the natural, DBus-free path.
 
-Verdict: interface **and** per-flow monitoring are **done** on BSD; the next
-lifts are per-flow process attribution and an optional privileged-agent /
-non-DBus transport.
+Verdict: interface, per-flow, **and** process attribution are working on BSD;
+the next lifts are container/jail attribution and an optional privileged-agent
+/ non-DBus transport.
 
 ### 2.3 macOS / Darwin
 
@@ -226,11 +228,12 @@ backend interfaces.
 ## 6. What's not planned for 0.2.x
 
 * Full macOS / Windows support.
-* **BSD per-flow process/container attribution** — the `backend/bsd` interface
-  and per-flow (libpcap/BPF) monitors exist and work, but flows carry no
-  PID/process/container info on BSD yet (no `net.inet.tcp.pcblist`/`kvm`
-  socket→PID resolver, no jail attribution). BSD support is a byproduct of the
-  portability experiment, not a shipped/packaged target yet.
+* **BSD container/jail attribution** — interface, per-flow (libpcap/BPF), and
+  per-process attribution all work on NetBSD, but flows carry no container/jail
+  scope yet (`jail_get(2)` is unwired). BSD support is a byproduct of the
+  portability experiment, not a shipped/packaged target yet. The process
+  resolver's sysctl struct layouts are currently NetBSD-specific; FreeBSD/
+  OpenBSD build with attribution stubbed.
 * A non-DBus production transport.
 * A macOS Network Extension / notarized collector.
 * A Windows packet driver integration.
