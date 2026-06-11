@@ -1,0 +1,12 @@
+$NetBSD$
+
+# SCAFFOLDING: regenerate this file with `make makesum` in a real pkgsrc
+# tree. pkgsrc requires a BLAKE2s line (first); it is intentionally omitted
+# here because it must be produced by the pkgsrc digest tooling. The SHA512
+# and Size below were computed from the GitHub-generated tag tarball for
+# v0.2.5 as a starting point, but note that GitHub's auto-generated source
+# tarballs are not guaranteed byte-stable over time — always trust
+# `make makesum` output over these values.
+
+SHA512 (qiftop-0.2.5.tar.gz) = 0dc5cabbd138255fd582a49fd34f7ccd2796a8cf4732e54640f57400e298569d1d6d45ff878929d886ab9871a43e9541b734315778b9855d45a47ece1f0eb6a9
+Size (qiftop-0.2.5.tar.gz) = 531627 bytes
