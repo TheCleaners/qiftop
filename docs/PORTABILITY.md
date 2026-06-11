@@ -27,7 +27,7 @@
 | `backend/dbus/` | Client-side DBus proxy monitors | 🟡 Portable wherever Qt DBus and a suitable bus are available. |
 | `backend/PlatformInfo` | Local address / uid-name / group helpers with `Q_OS_*` guards | 🟡 Compiles with fallbacks; richer data on Unix/Linux. |
 | `backend/linux/` | libnl-3, libnetfilter_conntrack, sock_diag, cgroup and netns attribution | 🔴 Linux-only. |
-| `backend/bsd/` | getifaddrs(3) AF_LINK per-interface counters (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS); per-flow capture is a stub | 🟡 Interface stats work today on NetBSD 11; per-flow needs a pf/npf/BPF datapath. |
+| `backend/bsd/` | getifaddrs(3) AF_LINK per-interface counters + libpcap/BPF per-flow capture (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS) | 🟡 Interface stats + per-flow rates work on NetBSD 11; no process/container attribution. |
 | `agent/` | DBus daemon wrapping the abstract monitors/resolver | 🟡 Service logic is mostly Qt Core/DBus; production data sources and install model are Linux. |
 | `dist/systemd/`, `dist/dbus/`, `dist/debian/`, RPM/Pages repo rules | systemd, system DBus policy, Debian/Fedora packaging | 🔴 Linux-distro-specific. |
 
@@ -74,24 +74,28 @@ would need.
 | Need | API | Status |
 |------|-----|--------|
 | Per-interface counters | `getifaddrs()` AF_LINK `struct if_data` (or `sysctl net.link.generic.ifdata.*`) | ✅ Implemented in `backend/bsd` (`BsdNetworkWorker`); verified on NetBSD 11. |
-| Per-flow counters | `pfctl -ss` parse, **libpfctl** (FreeBSD 13+), NetBSD `npf`, or BPF + userspace accounting | 🔴 Stubbed (`BsdConnectionMonitor` emits `accountingUnavailable`). |
+| Per-flow counters | libpcap/BPF + userspace 5-tuple flow table (the iftop model). Alternatives: `pfctl -ss`, **libpfctl** (FreeBSD 13+), NetBSD `npf` | ✅ Implemented in `backend/bsd` (`BsdConnectionWorker`); verified on NetBSD 11. |
 | Local addresses | `getifaddrs()` | ✅ Folded into the interface snapshot (AF_INET/AF_INET6 CIDRs). |
-| Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` | ⬜ Not needed until per-flow direction inference lands. |
-| Socket → PID | `sysctl net.inet.tcp.pcblist` plus `kvm_*` / `procstat` | ⬜ Future (needs per-flow first). |
+| Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` | ✅ Read by `BsdConnectionWorker` for direction inference. |
+| Socket → PID | `sysctl net.inet.tcp.pcblist` plus `kvm_*` / `procstat` | ⬜ Future (process attribution not wired on BSD). |
 | Container attribution | Jails via `jail_get(2)`; OCI runtime attribution is platform-specific | ⬜ Future. |
-| Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed | ⬜ Agent is Linux-only today; BSD runs the in-process backend. |
+| Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed | ⬜ Agent is Linux-only today; BSD runs the in-process backend (capture needs root for `/dev/bpf`). |
 
-What works today (NetBSD 11, `pkgsrc` qt6-qtbase + base curses): `libqiftop.so`,
-the `qiftop` GUI, the `nqiftop` TUI, and the `check_qiftop` monitoring plugin
-all build and run. The Interfaces view shows live per-interface rates, totals,
-MTU, and oper-state from `getifaddrs(3)`; the Connections view is empty (the
-per-flow stub reports accounting unavailable). The `backend/bsd` code is shared
-across the whole BSD family — only the future per-flow datapath (pf on
-FreeBSD/OpenBSD, npf on NetBSD) diverges. The privileged `qiftop-agent` and its
-attribution layer remain Linux-only.
+What works today (NetBSD 11, `pkgsrc` qt6-qtbase + base curses + base libpcap):
+`libqiftop.so`, the `qiftop` GUI, the `nqiftop` TUI, and the `check_qiftop`
+monitoring plugin all build and run. The Interfaces view shows live
+per-interface rates, totals, MTU, and oper-state from `getifaddrs(3)`; the
+Connections view shows live per-flow TCP/UDP rates, totals, and inferred
+direction captured via libpcap/BPF (run with elevated privileges for
+`/dev/bpf` access). The `backend/bsd` code is shared across the whole BSD
+family — only future per-flow *attribution* (sockets→PID via
+`net.inet.tcp.pcblist`/`kvm`, jails) and a privileged agent diverge. The
+privileged `qiftop-agent` and its process/container attribution layer remain
+Linux-only; on BSD the in-process backend is the natural, DBus-free path.
 
-Verdict: interface monitoring is **done**; per-flow accounting is the next
-(moderate) lift, larger still for a DBus-free transport and rich attribution.
+Verdict: interface **and** per-flow monitoring are **done** on BSD; the next
+lifts are per-flow process attribution and an optional privileged-agent /
+non-DBus transport.
 
 ### 2.3 macOS / Darwin
 
@@ -222,15 +226,16 @@ backend interfaces.
 ## 6. What's not planned for 0.2.x
 
 * Full macOS / Windows support.
-* **BSD per-flow accounting** (pf/npf/BPF) — the `backend/bsd` interface
-  monitor exists and works, but the Connections view stays empty on BSD until
-  a per-flow datapath is written. Interface-only BSD support is a byproduct of
-  the portability experiment, not a shipped/packaged target yet.
+* **BSD per-flow process/container attribution** — the `backend/bsd` interface
+  and per-flow (libpcap/BPF) monitors exist and work, but flows carry no
+  PID/process/container info on BSD yet (no `net.inet.tcp.pcblist`/`kvm`
+  socket→PID resolver, no jail attribution). BSD support is a byproduct of the
+  portability experiment, not a shipped/packaged target yet.
 * A non-DBus production transport.
 * A macOS Network Extension / notarized collector.
 * A Windows packet driver integration.
 * A BSD `qiftop-agent` (privileged daemon + attribution); BSD runs the
-  in-process backend only.
+  in-process backend only (capture needs root for `/dev/bpf`).
 * Shipping in-process privileged capture to third-party `libqiftop`
   consumers; installed library consumers are expected to stream from the
   agent via the DBus proxies.

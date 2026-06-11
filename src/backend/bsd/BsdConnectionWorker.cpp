@@ -1,6 +1,8 @@
 #include "BsdConnectionWorker.h"
 #include "util/ConnectionHeuristics.h"
 
+#include <algorithm>
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
@@ -25,6 +27,8 @@ namespace {
 constexpr int    kSnapLen        = 128;   // enough for L2 + IPv6 + TCP headers
 constexpr int    kCaptureTimeout = 100;   // pcap to_ms
 constexpr qint64 kFlowTtlMs      = 30000; // prune flows unseen this long
+constexpr int    kMaxFlows       = 16384; // hard cap on tracked flows
+constexpr int    kSnapshotCap    = 4096;  // top-N by bytes per emitted snapshot
 
 // Read an L4 (TCP/UDP) port pair from the start of the transport header.
 bool readPorts(const quint8 *p, quint32 avail, quint16 *sport, quint16 *dport)
@@ -309,12 +313,17 @@ void BsdConnectionWorker::handlePacket(const CaptureHandle &h, const quint8 *dat
     }
 
     const L4Proto proto = protoFromIp(ipproto);
+    bool pureSyn = false; // TCP SYN without ACK: sender is the initiator
     if (proto == L4Proto::Tcp || proto == L4Proto::Udp) {
         quint16 sp = 0, dp = 0;
         if (l4off < caplen && readPorts(data + l4off, caplen - l4off, &sp, &dp)) {
             src.port = sp;
             dst.port = dp;
         }
+    }
+    if (proto == L4Proto::Tcp && l4off + 14 <= caplen) {
+        const quint8 flags = data[l4off + 13]; // TCP flags byte
+        pureSyn = (flags & 0x02) && !(flags & 0x10); // SYN set, ACK clear
     }
 
     // --- orient: which side is "this host", and is this tx or rx? ---
@@ -338,6 +347,18 @@ void BsdConnectionWorker::handlePacket(const CaptureHandle &h, const quint8 *dat
     const QString key = flowKey(proto, local, remote);
     auto it = m_flows.find(key);
     if (it == m_flows.end()) {
+        // Bounded cache: at the cap, stop tracking NEW flows (existing ones
+        // keep accumulating so their rates stay correct) rather than clearing
+        // the table, which would glitch every active flow's rate. The TTL
+        // prune drains the table back down as flows go idle.
+        if (m_flows.size() >= kMaxFlows) {
+            if (!m_flowCapWarned) {
+                m_flowCapWarned = true;
+                qCWarning(lcVerbose) << "bsd-capture: flow table hit cap"
+                                     << kMaxFlows << "- dropping new flows";
+            }
+            return;
+        }
         FlowAcc acc;
         acc.local = local; acc.remote = remote; acc.proto = proto;
         acc.iface = h.iface; acc.ifIndex = h.ifIndex;
@@ -347,6 +368,12 @@ void BsdConnectionWorker::handlePacket(const CaptureHandle &h, const quint8 *dat
     if (isTx) { acc.txBytes += wireLen; ++acc.txPackets; }
     else      { acc.rxBytes += wireLen; ++acc.rxPackets; }
     acc.lastSeenMs = QDateTime::currentMSecsSinceEpoch();
+
+    // A SYN-without-ACK identifies the initiator: if its source is this host
+    // we opened the connection (outbound); otherwise the peer did (inbound).
+    // Only meaningful when exactly one end is local.
+    if (pureSyn && (ls != ld))
+        acc.observedDir = ls ? Direction::Outbound : Direction::Inbound;
 }
 
 void BsdConnectionWorker::emitSnapshot()
@@ -373,10 +400,31 @@ void BsdConnectionWorker::emitSnapshot()
         c.txPackets = a.txPackets;
         c.iface     = a.iface;
         c.ifIndex   = a.ifIndex;
-        c.direction = qiftop::heuristics::inferDirection(
-            c, m_localAddrs, m_loopbackAddrs, m_ephLow, m_ephHigh);
+        // Prefer the handshake-observed direction; fall back to the
+        // ephemeral-port heuristic for flows where we never saw a SYN.
+        c.direction = (a.observedDir != Direction::Unknown)
+            ? a.observedDir
+            : qiftop::heuristics::inferDirection(
+                  c, m_localAddrs, m_loopbackAddrs, m_ephLow, m_ephHigh);
         out.append(std::move(c));
         ++it;
+    }
+
+    // Reset the cap warning once the table has drained back below the limit,
+    // so a future overflow episode warns again.
+    if (m_flowCapWarned && m_flows.size() < kMaxFlows)
+        m_flowCapWarned = false;
+
+    // Cap the emitted snapshot at the top-N flows by total bytes (matches the
+    // Linux agent's snapshot-cap behaviour) so a busy host doesn't ship a
+    // huge list to the aggregator/UI every tick.
+    if (out.size() > kSnapshotCap) {
+        std::partial_sort(
+            out.begin(), out.begin() + kSnapshotCap, out.end(),
+            [](const Connection &a, const Connection &b) {
+                return (a.rxBytes + a.txBytes) > (b.rxBytes + b.txBytes);
+            });
+        out.resize(kSnapshotCap);
     }
 
     emit connectionsUpdated(out);

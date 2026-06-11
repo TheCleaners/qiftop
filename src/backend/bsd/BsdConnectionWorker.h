@@ -35,6 +35,11 @@ struct FlowAcc {
     QString  iface;
     quint32  ifIndex = 0;
     qint64   lastSeenMs = 0;
+    // Direction observed from the TCP handshake (the SYN sender is the
+    // initiator). More reliable than the ephemeral-port heuristic, which
+    // misfires when peers use different local port ranges. Unknown until a
+    // SYN-without-ACK is seen (e.g. UDP, or capture started mid-connection).
+    Direction observedDir = Direction::Unknown;
 };
 
 // Runs inside the worker thread owned by BsdConnectionMonitor. Sniffs IP
@@ -87,6 +92,7 @@ private:
     quint16              m_ephHigh = 65535;
     QTimer              *m_timer   = nullptr;
     bool                 m_warned  = false;
+    bool                 m_flowCapWarned = false;
 };
 
 } // namespace qiftop::backend::bsd
