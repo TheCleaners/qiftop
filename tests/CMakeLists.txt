@@ -77,6 +77,20 @@ endfunction()
 qiftop_add_test(test_direction        test_direction.cpp)
 qiftop_add_test(test_forwarded        test_forwarded.cpp)
 qiftop_add_test(test_ema              test_ema.cpp)
+qiftop_add_test(test_interface_aggregator
+    test_interface_aggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/aggregate/InterfaceAggregator.cpp)
+qiftop_add_test(test_connection_aggregator
+    test_connection_aggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/aggregate/ConnectionAggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
+    ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp)
+qiftop_add_test(test_tui_format
+    test_tui_format.cpp
+    ${CMAKE_SOURCE_DIR}/src/aggregate/ConnectionAggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
+    ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp)
+qiftop_add_test(test_tui_theme test_tui_theme.cpp)
 qiftop_add_test(test_settings_migration
     test_settings_migration.cpp
     ${CMAKE_SOURCE_DIR}/src/config/Settings.cpp

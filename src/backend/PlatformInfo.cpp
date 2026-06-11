@@ -11,6 +11,7 @@
 #  include <netinet/in.h>
 #  include <sys/socket.h>
 #  include <sys/types.h>
+#  include <grp.h>
 #  include <pwd.h>
 #  include <unistd.h>
 #endif
@@ -130,6 +131,47 @@ QString userNameForUid(uint uid)
 #else
     Q_UNUSED(uid);
     return {};
+#endif
+}
+
+bool userInGroup(uint uid, const QString &groupName)
+{
+#if defined(Q_OS_UNIX)
+    if (groupName.isEmpty())
+        return false;
+
+    // Resolve the user's login name + primary gid.
+    long pwLen = ::sysconf(_SC_GETPW_R_SIZE_MAX);
+    if (pwLen <= 0) pwLen = 16384;
+    QByteArray pwBuf(static_cast<int>(pwLen), Qt::Uninitialized);
+    struct passwd pwd{};
+    struct passwd *pwres = nullptr;
+    if (::getpwuid_r(static_cast<uid_t>(uid), &pwd, pwBuf.data(),
+                     static_cast<size_t>(pwBuf.size()), &pwres) != 0 || !pwres)
+        return false;
+    const QByteArray loginName(pwres->pw_name ? pwres->pw_name : "");
+    const gid_t primaryGid = pwres->pw_gid;
+
+    // Resolve the target group by name.
+    long grLen = ::sysconf(_SC_GETGR_R_SIZE_MAX);
+    if (grLen <= 0) grLen = 16384;
+    QByteArray grBuf(static_cast<int>(grLen), Qt::Uninitialized);
+    struct group grp{};
+    struct group *grres = nullptr;
+    if (::getgrnam_r(groupName.toLocal8Bit().constData(), &grp, grBuf.data(),
+                     static_cast<size_t>(grBuf.size()), &grres) != 0 || !grres)
+        return false;
+
+    if (grres->gr_gid == primaryGid)
+        return true;                          // primary group match
+    for (char **m = grres->gr_mem; m && *m; ++m)
+        if (loginName == *m)
+            return true;                      // supplementary group match
+    return false;
+#else
+    Q_UNUSED(uid);
+    Q_UNUSED(groupName);
+    return false;
 #endif
 }
 

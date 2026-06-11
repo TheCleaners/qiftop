@@ -146,6 +146,44 @@ schedule=2147484:2000,2147484:5000,2147484:0
         QCOMPARE(cfg.slow1WindowMs,  defaults.slow1WindowMs);
         QCOMPARE(cfg.slow2WindowMs,  defaults.slow2WindowMs);
     }
+
+    // --- process-details disclosure policy --------------------------------
+
+    void detailsPolicyDefaultsToOwner()
+    {
+        QTemporaryDir dir;
+        // Missing file → default Owner.
+        auto pol = qiftop::agent::loadProcessDetailsPolicy(
+            dir.filePath(QStringLiteral("nope.conf")));
+        QCOMPARE(pol.mode, qiftop::agent::ProcessDetailsPolicy::Mode::Owner);
+        // File with no [process_details] section → still Owner.
+        const QString p = writeConf(dir, "[poll]\nbase_interval_ms=1000\n");
+        pol = qiftop::agent::loadProcessDetailsPolicy(p);
+        QCOMPARE(pol.mode, qiftop::agent::ProcessDetailsPolicy::Mode::Owner);
+    }
+
+    void detailsPolicyParsesModes()
+    {
+        QTemporaryDir dir;
+        using Mode = qiftop::agent::ProcessDetailsPolicy::Mode;
+        auto perm = qiftop::agent::loadProcessDetailsPolicy(
+            writeConf(dir, "[process_details]\ndisclosure=permissive\n"));
+        QCOMPARE(perm.mode, Mode::Permissive);
+
+        auto restr = qiftop::agent::loadProcessDetailsPolicy(
+            writeConf(dir, "[process_details]\ndisclosure=restricted\n"
+                           "allow_users=alice, bob\nallow_groups=wheel adm\n"));
+        QCOMPARE(restr.mode, Mode::Restricted);
+        QVERIFY(restr.allowUsers.contains(QStringLiteral("alice")));
+        QVERIFY(restr.allowUsers.contains(QStringLiteral("bob")));
+        QVERIFY(restr.allowGroups.contains(QStringLiteral("wheel")));
+        QVERIFY(restr.allowGroups.contains(QStringLiteral("adm")));
+
+        // Unrecognised value falls back to Owner (safe default).
+        auto bogus = qiftop::agent::loadProcessDetailsPolicy(
+            writeConf(dir, "[process_details]\ndisclosure=yolo\n"));
+        QCOMPARE(bogus.mode, Mode::Owner);
+    }
 };
 
 QTEST_MAIN(TestAgentConfig)

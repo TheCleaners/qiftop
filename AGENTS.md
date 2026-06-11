@@ -211,8 +211,16 @@ Per-field notes:
   `link-errors`.
 * `pid` / `uid` / `comm` — Best-effort process attribution for a flow.
   `pid == 0` means unattributed (no resolver wired, or the flow's
-  socket couldn't be located via SOCK_DIAG within the cache window).
-  `comm` is the kernel-truncated 15-byte basename. Expensive fields
+  socket couldn't be located via SOCK_DIAG within the cache window —
+  or the flow is genuinely forwarded, e.g. a VM-bridge / k8s-pod-netns
+  flow with no host socket). `SockDiagResolver` indexes each socket by
+  BOTH its full 4-tuple AND a local-only 2-tuple (proto + local
+  addr/port); `resolvePid` tries 4-tuple → exact local 2-tuple →
+  wildcard (`0.0.0.0`/`::`) local 2-tuple. The local fallback is what
+  attributes unconnected UDP sockets and TCP listeners, whose
+  `idiag_dst` is `0.0.0.0:0` and so can never match a live flow's real
+  remote by the 4-tuple alone. `comm` is the kernel-truncated 15-byte
+  basename. Expensive fields
   (`exe`, `cmdline`, `cwd`) are deliberately NOT shipped on the wire —
   fetched on demand via `GetProcessDetails(pid)` per the "default-cheap
   pipeline" design principle. Capability: `process-attribution-wire`.
@@ -376,17 +384,29 @@ open:
   conntrack table — every flow on the host, including other users'
   source ports and peer IPs. `/proc/net/nf_conntrack` is root-only on
   most distros; the agent must not demote that.
-* **`GetProcessDetails` exposure tradeoff.** The on-demand RPC returns
-  `comm`/`exe`/`cmdline`/`cwd` for any reachable PID. `/proc/<pid>/exe`
-  and `/proc/<pid>/cwd` symlinks are normally mode-0700 (readable
-  only by the process owner and root), and `/proc/<pid>/cmdline` is
-  world-readable but can leak credentials passed on the command line.
-  The root agent reads these and ships them to any netdev-group caller.
-  We accept this as trust-equivalent on top of the existing bulk
-  pid/uid/comm exposure in `GetConnections` — netdev membership is
-  already a "network admin" capability. Distros that want a stricter
-  gate should narrow `GetProcessDetails` in the bus policy file rather
-  than disabling the whole interface.
+* **`GetProcessDetails` exposure tradeoff.** The on-demand RPC always
+  returns the low-sensitivity bulk fields (`pid`/`uid`/`comm`/
+  `startTimeJiffies`, the same already exposed per-flow by
+  `GetConnections`) to any netdev-group caller. The privileged fields —
+  `exe`/`cwd` symlink targets (normally mode-0700, readable only by the
+  process owner and root, followed here only because the agent holds
+  `CAP_SYS_PTRACE` / `CAP_DAC_READ_SEARCH`) and `cmdline` (world-readable
+  but can leak credentials passed on the command line) — are disclosed
+  **only when the D-Bus caller is root or owns the target PID**
+  (`ConnectionsService::callerMaySeeProcessFields`, via
+  `QDBusConnectionInterface::serviceUid`, fail-safe to redaction when the
+  caller uid can't be established). A netdev user inspecting their own
+  processes (and the GUI run as that user) sees everything; a netdev user
+  probing *another* user's PID gets only pid/uid/comm. This keeps the
+  attribution UX intact while not letting netdev membership alone
+  escalate into cross-UID `exe`/`cwd`/`cmdline` disclosure. The gate is
+  **configurable** via `[process_details] disclosure` in
+  `/etc/qiftop/agent.conf` (§5): `owner` (default, the behaviour above),
+  `permissive` (any netdev caller — the pre-0.2.1 behaviour), or
+  `restricted` (root/owner plus an `allow_users` / `allow_groups`
+  allowlist, e.g. `wheel`, for cross-UID admin visibility). Distros that
+  want an even stricter gate can still narrow `GetProcessDetails` in the
+  bus policy file.
 
 `dist/debian/postinst` ensures the `netdev` group exists and, when
 installed via `sudo apt install` / `pkexec`, automatically adds the
@@ -444,6 +464,15 @@ to a sensible range and emits a `qWarning()` if the file value is out of
 range (intervals: `[10 ms, 1 h]`; windows/timeouts: `[0, 24 h]`, with `0`
 meaning "disable that step"). Typos in the conffile produce a visible
 warning, not a degenerate cadence.
+
+The `[process_details]` section (loaded by `loadProcessDetailsPolicy`,
+separate from `loadIdleConfig`) controls who may see the privileged
+`exe`/`cwd`/`cmdline` fields from `GetProcessDetails` — see §4. Keys:
+`disclosure` (`owner` default / `permissive` / `restricted`), and the
+`restricted`-mode `allow_users` / `allow_groups` allowlists (comma- or
+whitespace-separated; groups match primary or supplementary membership
+via `qiftop::platform::userInGroup`). An unrecognised `disclosure` value
+warns and falls back to `owner`.
 
 Override path: `qiftop-agent --config <path>`.
 

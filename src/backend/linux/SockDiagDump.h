@@ -58,6 +58,32 @@ inline constexpr int kMaxSocketEntries = 65536;
     return k;
 }
 
+// Local-only ("2-tuple") key for matching flows to sockets that carry no
+// remote in sock_diag: unconnected UDP sockets (the common case — a UDP
+// service binds a local addr/port and recvfrom()s from many peers) and
+// listening TCP sockets. The full 4-tuple key above never matches those
+// because their idiag_dst is 0.0.0.0:0 while a live conntrack flow has a real
+// remote. A distinct 1-byte tag prevents any collision with a 4-tuple key.
+[[nodiscard]] inline QByteArray makeLocalKey(quint8 proto,
+                                             const QHostAddress &localAddr,
+                                             quint16            localPort)
+{
+    QByteArray k;
+    k.reserve(24);
+    k.append('\x01');                       // tag: local-only key namespace
+    k.append(static_cast<char>(proto));
+    if (localAddr.protocol() == QAbstractSocket::IPv6Protocol) {
+        Q_IPV6ADDR v6 = localAddr.toIPv6Address();
+        k.append(reinterpret_cast<const char*>(&v6), sizeof(v6));
+    } else {
+        quint32 v4 = qToBigEndian(localAddr.toIPv4Address());
+        k.append(reinterpret_cast<const char*>(&v4), sizeof(v4));
+    }
+    quint16 p = qToBigEndian(localPort);
+    k.append(reinterpret_cast<const char*>(&p), sizeof(p));
+    return k;
+}
+
 // Open + bind a NETLINK_SOCK_DIAG socket in the calling thread's
 // CURRENT network namespace. Returns the fd on success, -1 on failure
 // (with a single qCWarning). Caller closes via ::close. Must be opened
@@ -148,8 +174,13 @@ inline DumpChunkResult parseDumpChunk(const char *buf, qsizetype n,
         const auto remote = detail::addrFromDiag(m->idiag_family, m->id.idiag_dst);
         const quint16 lport = qFromBigEndian(m->id.idiag_sport);
         const quint16 rport = qFromBigEndian(m->id.idiag_dport);
-        outMap.insert(makeFlowKey(proto, local, lport, remote, rport),
-                      m->idiag_inode);
+        const quint64 inode = m->idiag_inode;
+        outMap.insert(makeFlowKey(proto, local, lport, remote, rport), inode);
+        // Also index by local-only key so unconnected UDP sockets / listeners
+        // (whose remote is 0.0.0.0:0) can be matched to a live flow by its
+        // local end. Inserted unconditionally — cheap, and the full 4-tuple
+        // lookup is still tried first on the resolve side.
+        outMap.insert(makeLocalKey(proto, local, lport), inode);
     }
     return DumpChunkResult::NeedMore;
 }

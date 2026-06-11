@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 #include "IdleManager.h"
 
@@ -18,5 +19,27 @@ constexpr auto kDefaultConfigPath = "/etc/qiftop/agent.conf";
 // Extracted from agent/main.cpp so it can be unit-tested without
 // spawning the agent.
 [[nodiscard]] IdleManager::Config loadIdleConfig(const QString &path);
+
+// Policy controlling who may see the *privileged* per-process detail
+// fields (exe / cwd / cmdline) returned by Connections.GetProcessDetails.
+// The low-sensitivity bulk fields (pid / uid / comm / startTime) are
+// always returned to any authorised (netdev-group) caller — this policy
+// only gates the fields the root agent can read across UID boundaries
+// thanks to CAP_SYS_PTRACE / CAP_DAC_READ_SEARCH.
+struct ProcessDetailsPolicy {
+    enum class Mode {
+        Owner,       // root or the process owner (default — least disclosure)
+        Permissive,  // any authorised caller (pre-0.2.1 behaviour)
+        Restricted,  // root, the owner, or a caller in allowUsers / allowGroups
+    };
+    Mode        mode = Mode::Owner;
+    QStringList allowUsers;   // usernames granted cross-UID detail (Restricted)
+    QStringList allowGroups;  // group names granted cross-UID detail (Restricted)
+};
+
+// Parse the `[process_details]` section of the INI file at `path`.
+// Missing file / section yields the default (Owner) policy. An
+// unrecognised `disclosure` value warns and falls back to Owner.
+[[nodiscard]] ProcessDetailsPolicy loadProcessDetailsPolicy(const QString &path);
 
 } // namespace qiftop::agent

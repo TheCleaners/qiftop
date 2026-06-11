@@ -1,17 +1,26 @@
 #include "NetworkModel.h"
 #include "util/Units.h"
 
-#include <algorithm>
-
 NetworkModel::NetworkModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
-    m_elapsed.start();
+    // Translate the aggregator's model-agnostic change signals into the
+    // QAbstractItemModel protocol. beginResetModel() must run BEFORE the
+    // aggregator mutates its rows, so it's wired to aboutToReset().
+    connect(&m_agg, &qiftop::aggregate::InterfaceAggregator::aboutToReset,
+            this, [this] { beginResetModel(); });
+    connect(&m_agg, &qiftop::aggregate::InterfaceAggregator::didReset,
+            this, [this] { endResetModel(); });
+    connect(&m_agg, &qiftop::aggregate::InterfaceAggregator::rowsChanged,
+            this, [this](int first, int last) {
+                emit dataChanged(index(first, 0),
+                                 index(last, static_cast<int>(Column::ColumnCount) - 1));
+            });
 }
 
 int NetworkModel::rowCount(const QModelIndex &parent) const
 {
-    return parent.isValid() ? 0 : static_cast<int>(m_rows.size());
+    return parent.isValid() ? 0 : m_agg.rowCount();
 }
 
 int NetworkModel::columnCount(const QModelIndex &parent) const
@@ -21,10 +30,10 @@ int NetworkModel::columnCount(const QModelIndex &parent) const
 
 QVariant NetworkModel::data(const QModelIndex &index, int role) const
 {
-    if (!index.isValid() || index.row() < 0 || index.row() >= m_rows.size())
+    if (!index.isValid() || index.row() < 0 || index.row() >= m_agg.rowCount())
         return {};
 
-    const Row &row = m_rows[index.row()];
+    const Row &row = m_agg.rowAt(index.row());
     const auto col = static_cast<Column>(index.column());
 
     switch (role) {
@@ -115,14 +124,14 @@ QStringList NetworkModel::exportHeaders() const
 
 int NetworkModel::exportRowCount() const
 {
-    return static_cast<int>(m_rows.size());
+    return m_agg.rowCount();
 }
 
 QVariantList NetworkModel::exportRow(int row) const
 {
-    if (row < 0 || row >= m_rows.size())
+    if (row < 0 || row >= m_agg.rowCount())
         return {};
-    const Row &r = m_rows[row];
+    const Row &r = m_agg.rowAt(row);
     const InterfaceStats &s = r.current;
     return {
         s.name,
@@ -142,58 +151,6 @@ QVariantList NetworkModel::exportRow(int row) const
 
 void NetworkModel::updateStats(QList<InterfaceStats> stats)
 {
-    const qint64 nowMs     = m_elapsed.elapsed();
-    const qint64 deltaMs   = nowMs - m_lastElapsedMs;
-    m_lastElapsedMs        = nowMs;
-    const double deltaSecs = deltaMs > 0 ? deltaMs / 1000.0 : 1.0;
-
-    // Sort by name for deterministic row order; QSortFilterProxyModel can re-sort.
-    std::ranges::sort(stats, {}, &InterfaceStats::name);
-
-    // Decide whether the row set itself changed (add/remove). Resetting the model is
-    // simplest and correct; interface churn is rare so the cost is negligible.
-    const bool structureChanged = [&] {
-        if (stats.size() != m_rows.size())
-            return true;
-        for (qsizetype i = 0; i < stats.size(); ++i) {
-            if (stats[i].name != m_rows[i].current.name)
-                return true;
-        }
-        return false;
-    }();
-
-    if (structureChanged) {
-        beginResetModel();
-        m_rows.clear();
-        m_rows.reserve(stats.size());
-        for (const InterfaceStats &s : stats) {
-            Row row;
-            row.current = s;
-            if (auto it = m_prev.constFind(s.name); it != m_prev.constEnd()) {
-                row.rxRate = static_cast<double>(s.rxBytes - it->rxBytes) / deltaSecs;
-                row.txRate = static_cast<double>(s.txBytes - it->txBytes) / deltaSecs;
-            }
-            m_rows.append(std::move(row));
-        }
-        endResetModel();
-    } else {
-        for (qsizetype i = 0; i < stats.size(); ++i) {
-            const InterfaceStats &s = stats[i];
-            Row &row = m_rows[i];
-            if (auto it = m_prev.constFind(s.name); it != m_prev.constEnd()) {
-                row.rxRate = static_cast<double>(s.rxBytes - it->rxBytes) / deltaSecs;
-                row.txRate = static_cast<double>(s.txBytes - it->txBytes) / deltaSecs;
-            }
-            row.current = s;
-        }
-        emit dataChanged(index(0, 0),
-                         index(static_cast<int>(m_rows.size()) - 1,
-                               static_cast<int>(Column::ColumnCount) - 1));
-    }
-
-    // Refresh previous-sample cache
-    m_prev.clear();
-    m_prev.reserve(stats.size());
-    for (const InterfaceStats &s : stats)
-        m_prev.insert(s.name, s);
+    m_agg.updateStats(std::move(stats));
 }
+

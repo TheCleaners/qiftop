@@ -87,9 +87,12 @@ int main(int argc, char *argv[])
 #endif
 
     const auto idleCfg = qiftop::agent::loadIdleConfig(parser.value(configOpt));
+    const auto detailsPolicy =
+        qiftop::agent::loadProcessDetailsPolicy(parser.value(configOpt));
     auto resolver = qiftop::backend::createProcessResolver({});
     qiftop::agent::Application application(bus, &netMonitor, &connMonitor,
                                            idleCfg, std::move(resolver));
+    application.setProcessDetailsPolicy(detailsPolicy);
     if (!application.start()) {
         qCritical().noquote() << "agent:" << application.errorString();
         return 3;

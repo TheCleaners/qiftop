@@ -1,9 +1,8 @@
 #pragma once
 
 #include <QAbstractTableModel>
-#include <QElapsedTimer>
-#include <QHash>
 
+#include "aggregate/InterfaceAggregator.h"
 #include "backend/NetworkMonitor.h"
 #include "util/Exportable.h"
 
@@ -46,14 +45,11 @@ public slots:
     void updateStats(QList<InterfaceStats> stats);
 
 private:
-    struct Row {
-        InterfaceStats current{};
-        double rxRate = 0.0; // bytes/sec
-        double txRate = 0.0; // bytes/sec
-    };
+    using Row = qiftop::aggregate::InterfaceAggregator::Row;
 
-    QList<Row>                     m_rows; // sorted by name
-    QHash<QString, InterfaceStats> m_prev;
-    QElapsedTimer                  m_elapsed;
-    qint64                         m_lastElapsedMs = 0;
+    // The model is a thin QAbstractItemModel adapter over the plain-QObject
+    // aggregator that owns the rate computation + row set (shared with the
+    // ncurses frontend). We translate the aggregator's coarse change signals
+    // into begin/endResetModel() + dataChanged().
+    qiftop::aggregate::InterfaceAggregator m_agg;
 };

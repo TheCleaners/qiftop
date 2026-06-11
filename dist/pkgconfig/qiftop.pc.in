@@ -1,0 +1,15 @@
+# Relocatable: prefix is derived from this file's own location (pcfiledir),
+# so it is correct whether libqiftop was installed via `cmake --install
+# --prefix X` or packaged by CPack under /usr — independent of the
+# configure-time CMAKE_INSTALL_PREFIX.
+prefix=@QIFTOP_PC_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: qiftop
+Description: Qt6 network-monitoring data library (DTOs, DBus client, aggregators, filter language, export)
+URL: https://github.com/TheCleaners/qiftop
+Version: @PROJECT_VERSION@
+Requires: Qt6Core Qt6Network Qt6DBus
+Cflags: -I${includedir}/qiftop -I${includedir}
+Libs: -L${libdir} -lqiftop

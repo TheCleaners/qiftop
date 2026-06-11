@@ -278,10 +278,22 @@ qint32 SockDiagResolver::resolvePid(const Connection &flow)
     std::lock_guard lock(m_d->mu);
     m_d->maybeRefresh();
 
-    const QByteArray key = makeKey(proto,
-                                   flow.local.address,  flow.local.port,
-                                   flow.remote.address, flow.remote.port);
-    auto itSock = m_d->keyToInode.constFind(key);
+    // Try the full 4-tuple first (connected sockets / established TCP), then
+    // fall back to a local-only match for unconnected UDP sockets and
+    // listeners: first the flow's exact local addr+port, then a wildcard bind
+    // (0.0.0.0 / ::) on the same port.
+    auto itSock = m_d->keyToInode.constFind(
+        makeKey(proto, flow.local.address, flow.local.port,
+                flow.remote.address, flow.remote.port));
+    if (itSock == m_d->keyToInode.constEnd())
+        itSock = m_d->keyToInode.constFind(
+            sockdiag::makeLocalKey(proto, flow.local.address, flow.local.port));
+    if (itSock == m_d->keyToInode.constEnd()) {
+        const bool v6 = flow.local.address.protocol() == QAbstractSocket::IPv6Protocol;
+        const QHostAddress anyAddr(v6 ? QHostAddress::AnyIPv6 : QHostAddress::AnyIPv4);
+        itSock = m_d->keyToInode.constFind(
+            sockdiag::makeLocalKey(proto, anyAddr, flow.local.port));
+    }
     if (itSock == m_d->keyToInode.constEnd()) return 0;
     auto itPid = m_d->inodeToPid.constFind(*itSock);
     if (itPid == m_d->inodeToPid.constEnd()) return 0;

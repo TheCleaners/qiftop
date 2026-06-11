@@ -1,7 +1,9 @@
 #include "ConnectionsService.h"
 
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QDBusReply>
 
 #include <algorithm>
 #include <limits>
@@ -82,17 +84,57 @@ dbus::ProcessDetailsDto ConnectionsService::GetProcessDetails(uint pid)
 #ifdef BACKEND_LINUX
     const auto d = backend::linux_::readProcessDetails(static_cast<qint32>(pid));
     if (!d.valid) return out;
+    // Low-sensitivity bulk fields (already exposed via GetConnections) go to
+    // every netdev caller. The privileged symlink/argv fields (exe/cwd/cmdline)
+    // — readable only because the root agent holds CAP_SYS_PTRACE /
+    // CAP_DAC_READ_SEARCH, and able to leak cross-UID paths and secrets passed
+    // on the command line — are disclosed only to root or the PID's owner.
     out.pid              = quint32(d.pid);
     out.uid              = d.uid;
     out.comm             = d.comm;
-    out.exe              = d.exe;
-    out.cmdline          = d.cmdline;
-    out.cwd              = d.cwd;
     out.startTimeJiffies = d.startTimeJiffies;
+    if (callerMaySeeProcessFields(d.uid)) {
+        out.exe          = d.exe;
+        out.cmdline      = d.cmdline;
+        out.cwd          = d.cwd;
+    }
 #else
     Q_UNUSED(pid);
 #endif
     return out;
+}
+
+bool ConnectionsService::callerMaySeeProcessFields(quint32 targetUid) const
+{
+    using Mode = ProcessDetailsPolicy::Mode;
+    // Permissive: any authorised (netdev) caller — restores pre-0.2.1 behaviour.
+    if (m_detailsPolicy.mode == Mode::Permissive)
+        return true;
+    // Not a D-Bus call (in-process embedding / unit test): the caller is the
+    // agent itself — no privilege boundary to enforce.
+    if (!calledFromDBus())
+        return true;
+    auto *iface = connection().interface();
+    if (!iface)
+        return false;                       // fail safe: can't verify the caller
+    const QDBusReply<uint> uidReply = iface->serviceUid(message().service());
+    if (!uidReply.isValid())
+        return false;                       // fail safe
+    const uint caller = uidReply.value();
+    // Root and the process owner always see the privileged fields.
+    if (caller == 0 || caller == targetUid)
+        return true;
+    // Restricted: additionally honour the admin-configured user/group allowlist
+    // (e.g. wheel) for cross-UID disclosure.
+    if (m_detailsPolicy.mode == Mode::Restricted) {
+        const QString name = qiftop::platform::userNameForUid(caller);
+        if (!name.isEmpty() && m_detailsPolicy.allowUsers.contains(name, Qt::CaseInsensitive))
+            return true;
+        for (const QString &g : m_detailsPolicy.allowGroups)
+            if (qiftop::platform::userInGroup(caller, g))
+                return true;
+    }
+    return false;
 }
 
 void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)

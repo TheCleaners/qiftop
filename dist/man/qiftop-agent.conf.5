@@ -1,0 +1,155 @@
+.TH QIFTOP\-AGENT.CONF 5 "2026-06-10" "qiftop 0.2.1" "File Formats"
+.SH NAME
+qiftop\-agent.conf \- configuration file for qiftop\-agent
+.SH SYNOPSIS
+.I /etc/qiftop/agent.conf
+.SH DESCRIPTION
+Configuration for
+.BR qiftop\-agent (8),
+read once at startup. The format is INI as parsed by Qt's
+.B QSettings(IniFormat)
+\(em
+.BI [ section ]
+headers followed by
+.IB key = value
+lines;
+.RB ` # '
+begins a comment.
+.PP
+The file is optional: a missing file yields built\-in defaults. Unknown
+keys are ignored (forward\-compatible). Numeric values are clamped to
+sensible bounds and an out\-of\-range value emits a warning on stderr rather
+than producing a degenerate cadence. On Debian/RPM installs the file is a
+.B conffile
+so local edits survive package upgrades. Override the path with
+.BR "qiftop\-agent \-\-config " \fIpath\fR.
+.SH "SECTION [poll]"
+.TP
+.BI base_interval_ms= N
+Baseline poll cadence in milliseconds when clients are active. Default
+.BR 1000 .
+Range [10, 3600000].
+.TP
+.BI min_interval_ms= N
+Absolute floor for client cadence hints \(em the fastest the agent will
+ever poll, regardless of how aggressive a hint is. Default
+.BR 100 .
+This is the DoS guard against a client pinning the netlink subsystem.
+.SH "SECTION [idle]"
+.TP
+.BI timeout_secs= N
+Seconds with no incoming method call after which polling is paused
+entirely (near\-zero CPU; the next call wakes it). Default
+.BR 60 .
+.B 0
+disables the idle pause.
+.TP
+.BI hint_ttl_secs= N
+How long a client cadence hint (\fBSetDesiredIntervalMs\fR) stays in
+effect after the client's last call. Clients should re\-assert at roughly
+half this value. Default
+.BR 10 .
+Disconnected clients' hints expire silently.
+.TP
+.BI schedule= "w1:i1,w2:i2,w3:0"
+Adaptive slow\-down schedule: three
+.IB window_secs : interval_ms
+pairs. Read left to right: elapsed < \fIw1\fR uses
+.BR base_interval_ms ;
+\fIw1\fR..\fIw2\fR uses \fIi1\fR; \fIw2\fR..\fIw3\fR uses \fIi2\fR; beyond
+\fIw3\fR polling pauses. Default
+.BR 30:2000,45:5000,60:0 .
+The third interval is the "paused" sentinel and is ignored; \fIw3\fR
+should match
+.BR timeout_secs .
+.SH "SECTION [process_details]"
+Controls who may read the
+.B privileged
+per\-process fields \(em
+.IR exe ", " cwd " and the full " "command line" " \(em"
+returned by the
+.B Connections.GetProcessDetails(pid)
+D\-Bus method. The low\-sensitivity bulk fields
+.RB ( pid ", " uid ", " comm ", " "start time" )
+are
+.B always
+returned to any authorised (netdev\-group) caller and are unaffected by
+this section.
+.PP
+The root agent can read
+.IR /proc/<pid>/exe " and " /proc/<pid>/cwd
+for processes owned by other users (it holds
+.BR CAP_SYS_PTRACE / CAP_DAC_READ_SEARCH
+for attribution), and
+.I /proc/<pid>/cmdline
+can carry secrets passed on the command line; this key bounds how widely
+the agent re\-discloses them.
+.TP
+.BI disclosure= mode
+.RS
+.TP
+.B owner
+Root or the process's own owner only. (default)
+.TP
+.B permissive
+Any authorised (netdev) caller \(em every netdev member sees every
+process's
+.IR exe / cwd / cmdline .
+Restores the pre\-0.2.1 behaviour.
+.TP
+.B restricted
+Root, the process owner,
+.B or
+a caller named in
+.B allow_users
+/ a member of a group in
+.B allow_groups
+(e.g.
+.BR wheel ).
+Grants cross\-user visibility to a small set of administrators without
+opening it to the whole netdev group.
+.RE
+An unrecognised value warns and falls back to
+.BR owner .
+.TP
+.BI allow_users= "name[,name...]"
+Login names granted cross\-UID detail access in
+.B restricted
+mode. Comma\- or whitespace\-separated. Default empty.
+.TP
+.BI allow_groups= "group[,group...]"
+Group names granted cross\-UID detail access in
+.B restricted
+mode; matches primary
+.B or
+supplementary membership. Comma\- or whitespace\-separated. Default empty.
+.PP
+With
+.B restricted
+and both lists empty, behaviour is identical to
+.BR owner .
+.SH EXAMPLES
+A laptop that wants snappier updates and lets the
+.B wheel
+admins inspect any process:
+.PP
+.RS 4
+.nf
+[poll]
+base_interval_ms=500
+
+[idle]
+timeout_secs=30
+schedule=15:1000,25:3000,30:0
+
+[process_details]
+disclosure=restricted
+allow_groups=wheel
+.fi
+.RE
+.SH SEE ALSO
+.BR qiftop\-agent (8),
+.BR qiftop (1),
+.BR nqiftop (1)
+.SH HOMEPAGE
+https://github.com/TheCleaners/qiftop

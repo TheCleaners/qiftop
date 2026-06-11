@@ -1,0 +1,193 @@
+.TH NQIFTOP 1 "2026-06-10" "qiftop 0.2.1" "User Commands"
+.SH NAME
+nqiftop \- ncurses real\-time network traffic monitor (qiftop)
+.SH SYNOPSIS
+.B nqiftop
+.RI [ options ]
+.SH DESCRIPTION
+.B nqiftop
+is the terminal (ncurses) front\-end of qiftop. It presents the same two
+live views as the GUI \(em
+.B Interfaces
+and
+.B Connections
+\(em over SSH or on a headless box, with no X11/Wayland dependency.
+.PP
+Like
+.BR qiftop (1),
+it probes for the privileged
+.BR qiftop\-agent (8)
+on D\-Bus and consumes statistics from it as an unprivileged client; if no
+agent is reachable it falls back to an in\-process capture backend (which
+needs root for per\-connection data). The active source is shown at the
+right of the title bar alongside the aggregate throughput
+.RB ( \(*S
+RX\(da TX\(ua) and the current gauge scale.
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-interval " " \fIms\fR
+Poll/refresh interval in milliseconds (default 1000). Also adjustable at
+runtime in the Settings panel; an explicit value here overrides the saved
+one.
+.TP
+.B \-\-theme " " \fIname\fR
+Colour theme:
+.BR dark ", " light ", " colorblind ", " mono
+(default
+.BR dark ).
+Cycle live with
+.BR z .
+.TP
+.B \-\-view " " \fItab\fR
+Initial tab:
+.B interfaces
+or
+.BR connections .
+Default is the last\-used tab.
+.TP
+.B \-\-group " " \fImode\fR
+Group the Connections view:
+.BR off ", " interface ", " process ", " container .
+Default is the last\-used mode. Cycle live with
+.BR g .
+.TP
+.B \-\-session
+Talk to the agent on the
+.B session
+bus instead of the system bus (development).
+.TP
+.B \-\-no\-agent
+Skip the agent and capture in\-process (needs root).
+.TP
+.B \-\-verbose
+Diagnostics to stderr.
+.TP
+.BR \-h ", " \-\-help ", " \-v ", " \-\-version
+Show help / version and exit.
+.SH INTERACTIVE KEYS
+.SS Navigation
+.TP
+.BR j ", " k ", " \(da ", " \(ua
+Move the current\-line cursor down / up.
+.TP
+.BR Enter ", " Space
+Expand or collapse a detail tree under the current row (an aptitude\-style
+breakdown: 5\-tuple, direction, interface, TCP state, process and container
+attribution, rates, totals and packets; for interfaces: type, addresses,
+MTU, oper\-state, errors and drops).
+.TP
+.BR l ", " h
+Expand / collapse the current row.
+.TP
+.BR PgUp ", " PgDn ", " ^U ", " ^D
+Move the cursor by a full / half page.
+.TP
+.BR Home ", " G
+Jump to the top / bottom.
+.TP
+.BR Tab ", " 1 ", " 2
+Switch view (Interfaces / Connections).
+.SS Sorting and grouping
+.TP
+.B s
+Cycle the sort column.
+.TP
+.B f
+Open the Fields panel to pick the sort column and direction.
+.TP
+.B r
+Reverse the sort order.
+.TP
+.B g
+Cycle connection grouping (off / interface / process / container).
+.SS Filtering and display
+.TP
+.B /
+Edit a Connections filter expression (see
+.BR "FILTER LANGUAGE" ).
+.B Enter
+applies,
+.B Esc
+cancels editing; when a filter is active,
+.B Esc
+clears it.
+.TP
+.B p
+Pause / resume live updates.
+.TP
+.B z
+Cycle the colour theme.
+.TP
+.B S
+.RB ( "or " F2 )
+Open the Settings panel (theme, grouping, poll interval, gauge,
+direction colours, DNS resolution, UDP aggregation, rate smoothing). Use
+.BR "\(ua\(da" / "j" / "k"
+to move and
+.BR "\(<-" / "\(->" / "Space"
+to change a value.
+.TP
+.BR ? ", " F1
+Show the key\-binding help overlay.
+.TP
+.B a
+Show the About panel (application/library version, data source, Qt and OS
+version, terminal capability).
+.TP
+.B q
+Quit.
+.PP
+View, sort columns, grouping, theme, poll interval and every toggle are
+persisted and restored on the next launch (unless overridden on the
+command line).
+.SH FILTER LANGUAGE
+The Connections filter is a small boolean expression language (shared with
+the GUI). Combine predicates with
+.BR and ", " or ", " not
+and parentheses.
+.PP
+.B String fields:
+.IR proto ", " src ", " dst ", " host ", " iface ", " family ", " direction ", "
+.IR comm ", " runtime ", " container ", " chain_has .
+.br
+.B Numeric fields:
+.IR sport ", " dport ", " port ", " bytes_in / out / total ", "
+.IR pkts_in / out / total ", " rate_in / out / total ", " pid ", " uid .
+.PP
+.B Operators:
+.RB ` : '
+(string substring / numeric ==),
+.RB ` = ' " / " ` != '
+(exact / negated),
+.RB ` ~ '
+(regex),
+.RB ` < ' " " ` <= ' " " ` > ' " " ` >= '
+(numeric).
+Numeric values accept IEC/SI byte suffixes
+.RB ( K ", " Ki ", " M ", " Mi ", " G ", " Gi ", " T ", " Ti ).
+.PP
+.B Examples:
+.PP
+.RS 4
+.nf
+proto:tcp and port=443
+rate_total > 1Mi
+host ~ amazonaws and not dport:53
+runtime:docker and bytes_out > 100Ki
+pid=0
+.fi
+.RE
+.SH FILES
+.TP
+.I ~/.config/qiftop/nqiftop.conf
+Per\-user nqiftop settings (\fBQSettings\fR INI), separate from the GUI's
+.IR qiftop.conf .
+.SH SEE ALSO
+.BR qiftop (1),
+.BR qiftop\-agent (8),
+.BR qiftop\-agent.conf (5),
+.BR iftop (8)
+.SH HOMEPAGE
+https://github.com/TheCleaners/qiftop
+.SH BUGS
+Report issues at https://github.com/TheCleaners/qiftop/issues

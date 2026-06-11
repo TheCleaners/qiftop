@@ -13,14 +13,18 @@ Qt6 iftop-style network monitor for Linux.
 libnetfilter_conntrack), with optional per-flow **process and container
 attribution**. Privileged data collection is split out into a small DBus
 system-bus daemon (`qiftop-agent`) so the UI itself does not need elevated
-capabilities.
+capabilities. A terminal front-end, **`nqiftop`**, offers the same views
+over SSH / on headless hosts (ncurses, no X11/Wayland).
 
 ![qiftop grouping live synthetic traffic by process and touring the
 preferences dialog](https://github.com/TheCleaners/qiftop/releases/download/v0.2-rc1/demo.gif)
 
-> The capture above is driven entirely by **synthetic data** (reserved
+![nqiftop showing connections grouped by container with the row gauge, the
+settings panel and live theme switching](https://github.com/TheCleaners/qiftop/releases/download/v0.2-rc1/nqiftop-demo.gif)
+
+> Both captures are driven entirely by **synthetic data** (reserved
 > documentation addresses + `example.*` hostnames) — see
-> [`docs/demo/`](docs/demo/). It's hosted as a release asset to keep the
+> [`docs/demo/`](docs/demo/). They are hosted as release assets to keep the
 > repo lean.
 
 ## Features

@@ -39,6 +39,7 @@ jobs:
             libgl1-mesa-dev \
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
+            libncurses-dev \
             dbus-x11
 
       - name: Configure
@@ -105,6 +106,7 @@ jobs:
             libgl1-mesa-dev \
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
+            libncurses-dev \
             dbus-x11 ca-certificates
 
       - name: Install build dependencies (fedora family)
@@ -135,6 +137,7 @@ jobs:
             qt6-qtbase-devel qt6-qtbase-private-devel \
             mesa-libGL-devel \
             libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
+            ncurses-devel \
             dbus-daemon dbus-tools \
             libasan libubsan \
             shadow-utils"
@@ -189,6 +192,7 @@ jobs:
             libgl1-mesa-dev \
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
+            libncurses-dev \
             file fakeroot lintian desktop-file-utils
 
       - name: Configure + build
@@ -236,9 +240,10 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work ubuntu:24.04 bash -euxc '
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
-            apt-get install -y -qq ./qiftop-agent_*.deb ./qiftop_*.deb
+            apt-get install -y -qq ./libqiftop0_*.deb ./qiftop-agent_*.deb ./qiftop_*.deb ./nqiftop_*.deb
             QT_QPA_PLATFORM=offscreen qiftop --version
             qiftop-agent --version
+            nqiftop --version
             # postinst should have created the netdev group:
             getent group netdev
             # systemd unit file (CPack default install dir is /lib/systemd):

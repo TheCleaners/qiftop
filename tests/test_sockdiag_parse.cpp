@@ -124,12 +124,18 @@ private slots:
         QHash<QByteArray, quint64> out;
         QCOMPARE(parseDumpChunk(buf.constData(), buf.size(), IPPROTO_TCP, out),
                  DumpChunkResult::NeedMore);
-        QCOMPARE(out.size(), 1);
+        // Each socket is indexed twice: by full 4-tuple and by local 2-tuple
+        // (so unconnected UDP sockets / listeners match a flow by local end).
+        QCOMPARE(out.size(), 2);
         const QByteArray key = makeFlowKey(
             IPPROTO_TCP,
             QHostAddress(QStringLiteral("10.0.0.5")),    8080,
             QHostAddress(QStringLiteral("203.0.113.7")), 443);
         QCOMPARE(out.value(key, 0), quint64(4242));
+        const QByteArray localKey = makeLocalKey(
+            IPPROTO_TCP, QHostAddress(QStringLiteral("10.0.0.5")), 8080);
+        QCOMPARE(out.value(localKey, 0), quint64(4242));
+        QVERIFY(key != localKey);
     }
 
     void dumpChunkDoneAndAck()
