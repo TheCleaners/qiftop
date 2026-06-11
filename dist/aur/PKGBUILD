@@ -13,7 +13,7 @@
 # prefers /usr/lib on Arch). The libexec path is set by GNUInstallDirs and is
 # shared across every package format (deb/rpm/aur); not special-cased here.
 pkgname=qiftop
-pkgver=0.2.3
+pkgver=0.2.4
 pkgrel=1
 pkgdesc='Qt6 iftop-style network monitor with GUI, TUI, DBus agent and library'
 arch=('x86_64')

@@ -225,6 +225,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Packaging recipe versions match project() VERSION
+        # The standalone recipes (AUR/Alpine/COPR) hardcode the version; CPack
+        # derives the .deb/.rpm version from project() so it can't catch drift.
+        # Fail if any recipe lags the source of truth (this exact drift shipped
+        # once — recipes stuck at the previous release after a version bump).
+        run: |
+          ver="$(grep -oP 'project\(qiftop VERSION \K[0-9]+\.[0-9]+(\.[0-9]+)?' CMakeLists.txt)"
+          echo "project() VERSION = $ver"
+          fail=0
+          grep -q "^pkgver=$ver$"          dist/aur/PKGBUILD    || { echo "::error::dist/aur/PKGBUILD pkgver != $ver"; fail=1; }
+          grep -q "^pkgver=$ver$"          dist/alpine/APKBUILD || { echo "::error::dist/alpine/APKBUILD pkgver != $ver"; fail=1; }
+          grep -qE "^Version: +$ver$"      dist/copr/qiftop.spec || { echo "::error::dist/copr/qiftop.spec Version != $ver"; fail=1; }
+          exit $fail
+
       - name: Install build + QA dependencies
         run: |
           sudo apt-get update
