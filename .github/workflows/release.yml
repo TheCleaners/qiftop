@@ -229,15 +229,16 @@ jobs:
               libnl3-devel libnfnetlink-devel libnetfilter_conntrack-devel \
               ncurses-devel \
               dbus-daemon systemd shadow-utils
-            # Start from a clean build dir. A prior failed run can leave a
-            # root-owned build-rpm/ (created by this root container) that
-            # actions/checkout — running as the non-root runner user — cannot
-            # remove on a reused workspace; its stale CMakeCache.txt (baked with
-            # the /src path) then breaks "cmake -S . -B build-rpm". Removing it
-            # here (as root, inside the container) is a no-op on a fresh
-            # checkout and fixes the reused-workspace case.
-            rm -rf build-rpm
-            cmake -S . -B build-rpm -G Ninja \
+            # Build in a CONTAINER-LOCAL directory (/build-rpm), NOT inside the
+            # bind-mounted /src. With an in-mount build dir, cmake configure
+            # records the logical /src path in CMakeCache.txt but a subsequent
+            # "cmake --build" canonicalises the bind mount back to the host
+            # path (/home/runner/.../build-rpm) and aborts with a cache-dir
+            # mismatch. Building outside the mount removes that path duality
+            # entirely; we copy the finished .rpms back into /src/build-rpm so
+            # the downstream smoke-install / checksum / upload steps (which run
+            # on the host workspace) find them.
+            cmake -S /src -B /build-rpm -G Ninja \
               -DCMAKE_BUILD_TYPE=${{ steps.ver.outputs.build_type }} \
               -DCPACK_STRIP_FILES=${{ steps.ver.outputs.strip_files }} \
               -DCPACK_PACKAGE_VERSION=${{ steps.ver.outputs.rpm_version }} \
@@ -246,11 +247,13 @@ jobs:
             # Build everything (tests are off, auto-package is off) rather than
             # an explicit target list: the enumerated list repeatedly went
             # stale when new binaries were added (man pages, then check_qiftop),
-            # breaking cpack which couldn't find the unbuilt target. The .deb
+            # breaking cpack which couldn'"'"'t find the unbuilt target. The .deb
             # job builds all targets the same way.
-            cmake --build build-rpm --parallel
-            cd build-rpm && cpack -G RPM -V
-            ls -la *.rpm
+            cmake --build /build-rpm --parallel
+            ( cd /build-rpm && cpack -G RPM -V )
+            rm -rf /src/build-rpm && mkdir -p /src/build-rpm
+            cp /build-rpm/*.rpm /src/build-rpm/
+            ls -la /src/build-rpm/*.rpm
           '
 
       - name: Smoke install in clean fedora:44 container
