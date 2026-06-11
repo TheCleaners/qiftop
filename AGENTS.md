@@ -971,12 +971,16 @@ can be dropped with `vagrant destroy default`.
   signing"). The private half lives in the `GPG_PRIVATE_KEY` Actions
   secret (passphraseless); the public half is committed at
   `dist/repo/qiftop-archive-keyring.asc` and published at the Pages
-  root. The dnf repo uses the metadata-signature model
-  (`repo_gpgcheck=1`, `gpgcheck=0`) — the signed `repomd.xml`
-  authenticates package checksums, the exact analog of apt's signed
-  `Release`. Per-package `rpm --addsign` is a deliberate post-stable
-  TODO. If `GPG_PRIVATE_KEY` is absent the workflow publishes unsigned
-  (forks).
+  root. The dnf repo signs BOTH the metadata and each package: the
+  detached `repomd.xml.asc` (`repo_gpgcheck=1`) authenticates package
+  checksums (the analog of apt's signed `Release`), and every `.rpm` is
+  individually signed with `rpm --addsign` (header RSA/SHA256,
+  `gpgcheck=1`). Headless signing on the Ubuntu pages runner needs an
+  explicit `__gpg_sign_cmd` macro (rpm's default invocation omits
+  `--batch`/`--pinentry-mode loopback`, so a passphraseless key fails
+  with "gpg exec failed") — see `dist/repo/build-pages.sh`. If
+  `GPG_PRIVATE_KEY` is absent the workflow publishes unsigned
+  (`gpgcheck=0 repo_gpgcheck=0`, forks).
 
 ---
 
