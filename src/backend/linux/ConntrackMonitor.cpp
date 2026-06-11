@@ -10,6 +10,8 @@
 #include <QTimer>
 #include <QtDebug>
 
+#include <list>
+
 extern "C" {
 #include <libnetfilter_conntrack/libnetfilter_conntrack.h>
 }
@@ -24,7 +26,68 @@ extern "C" {
 
 namespace {
 
+constexpr std::size_t kRouteCacheMaxEntries = 8192;
+constexpr std::size_t kIfIndexCacheMaxEntries = 256;
+
 using AddrToIface = QHash<QHostAddress, QString>;
+
+template <typename Key, typename Value>
+class LruCache {
+public:
+    explicit LruCache(std::size_t maxEntries)
+        : m_maxEntries(maxEntries)
+    {
+    }
+
+    Value *find(const Key &key)
+    {
+        auto it = m_items.find(key);
+        if (it == m_items.end())
+            return nullptr;
+        touch(it.value());
+        return &it.value().value;
+    }
+
+    void insert(const Key &key, const Value &value)
+    {
+        auto it = m_items.find(key);
+        if (it != m_items.end()) {
+            it.value().value = value;
+            touch(it.value());
+            return;
+        }
+
+        if (m_maxEntries == 0)
+            return;
+
+        m_recent.push_front(key);
+        m_items.insert(key, Entry{value, m_recent.begin()});
+        if (m_items.size() > qsizetype(m_maxEntries))
+            evictLeastRecent();
+    }
+
+private:
+    struct Entry {
+        Value value;
+        typename std::list<Key>::iterator recentIt;
+    };
+
+    void touch(Entry &entry)
+    {
+        m_recent.splice(m_recent.begin(), m_recent, entry.recentIt);
+    }
+
+    void evictLeastRecent()
+    {
+        const Key &key = m_recent.back();
+        m_items.remove(key);
+        m_recent.pop_back();
+    }
+
+    std::size_t m_maxEntries;
+    std::list<Key> m_recent;
+    QHash<Key, Entry> m_items;
+};
 
 struct IfaceMap {
     AddrToIface byAddr;     // any local IP → ifname
@@ -100,14 +163,14 @@ struct PollCtx {
     QList<Connection>            *out;
     const QSet<QHostAddress>     *localAddrs;
     const IfaceMap               *ifaceMap;
-    QHash<QHostAddress, QString> *routeCache;   // dst → ifname
-    QHash<QString, quint32>      *ifIndexCache; // ifname → ifindex (cached if_nametoindex)
+    LruCache<QHostAddress, QString> *routeCache;   // dst → ifname
+    LruCache<QString, quint32>      *ifIndexCache; // ifname → ifindex (cached if_nametoindex)
 };
 
-quint32 cachedIfIndex(QHash<QString, quint32> *cache, const QString &name)
+quint32 cachedIfIndex(LruCache<QString, quint32> *cache, const QString &name)
 {
     if (name.isEmpty()) return 0;
-    if (auto it = cache->constFind(name); it != cache->cend()) return it.value();
+    if (const quint32 *idx = cache->find(name)) return *idx;
     const unsigned idx = ::if_nametoindex(name.toLocal8Bit().constData());
     cache->insert(name, idx);
     return idx;
@@ -124,8 +187,8 @@ QString attributeIface(PollCtx *ctx, const QHostAddress &local, const QHostAddre
     // answer per-destination to keep syscall pressure low.
     if (remote.isNull())
         return {};
-    if (auto it = ctx->routeCache->constFind(remote); it != ctx->routeCache->cend())
-        return it.value();
+    if (const QString *iface = ctx->routeCache->find(remote))
+        return *iface;
     const QHostAddress src = routeSourceForDest(remote);
     QString iface;
     if (!src.isNull()) {
@@ -318,15 +381,6 @@ private slots:
         }
 
         PollCtx ctx{&flows, &localAddrs, &ifaceMap, &m_routeCache, &m_ifIndexCache};
-        // Bound the route cache so a busy router can't make it grow forever.
-        // Eviction is whole-cache; entries are cheap to rebuild on the next
-        // miss (one connect()/getsockname() per unique destination).
-        if (m_routeCache.size() > 8192)
-            m_routeCache.clear();
-        // ifIndex cache is much smaller (one entry per interface name) but
-        // we still cap it in case of pathological hot-plug churn.
-        if (m_ifIndexCache.size() > 256)
-            m_ifIndexCache.clear();
         nfct_callback_register(h, NFCT_T_ALL, &nfctCallback, &ctx);
 
         // Dump v4 and v6 in two separate queries. AF_UNSPEC is documented
@@ -359,12 +413,13 @@ private:
     bool    m_acctChecked = false;
 
     // dst-address → ifname cache for the route-lookup fallback (forwarded
-    // flows). Bounded so it can't grow unboundedly on a busy router. Cleared
-    // periodically inside poll() if it gets too large.
-    QHash<QHostAddress, QString> m_routeCache;
+    // flows). Bounded LRU so it can't grow unboundedly on a busy router.
+    // Entries persist until evicted; this keeps the existing cached-across-
+    // ticks staleness tradeoff while avoiding whole-cache thrash.
+    LruCache<QHostAddress, QString> m_routeCache{kRouteCacheMaxEntries};
     // ifname → ifindex cache, shared across the whole tick. Avoids one
     // if_nametoindex() syscall per flow.
-    QHash<QString, quint32>      m_ifIndexCache;
+    LruCache<QString, quint32>      m_ifIndexCache{kIfIndexCacheMaxEntries};
 };
 
 ConntrackMonitor::ConntrackMonitor(QObject *parent)
