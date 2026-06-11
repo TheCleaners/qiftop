@@ -69,9 +69,21 @@ QString chipColor(const QStyleOptionViewItem &option, bool selected,
     return pick(pal.detail);
 }
 
-QTextDocument *buildGroupDoc(const QStyleOptionViewItem &option,
-                             const QVariantList &chips,
-                             const ChipPalette &pal)
+void resetDoc(QTextDocument &doc, const QStyleOptionViewItem &option)
+{
+    doc.clear();
+    doc.setTextWidth(-1);
+    doc.setDocumentMargin(0);
+    doc.setDefaultFont(option.font);
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    doc.setDefaultTextOption(wrap);
+}
+
+void buildGroupDoc(QTextDocument &doc,
+                   const QStyleOptionViewItem &option,
+                   const QVariantList &chips,
+                   const ChipPalette &pal)
 {
     const bool selected = option.state & QStyle::State_Selected;
     QStringList spans;
@@ -92,19 +104,14 @@ QTextDocument *buildGroupDoc(const QStyleOptionViewItem &option,
         " <span style=\"color:%1;\">·</span> ")
         .arg(option.palette.color(QPalette::PlaceholderText).name(QColor::HexArgb));
 
-    auto *doc = new QTextDocument;
-    doc->setDocumentMargin(0);
-    doc->setDefaultFont(option.font);
-    QTextOption wrap;
-    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-    doc->setDefaultTextOption(wrap);
-    doc->setHtml(spans.join(sep));
-    return doc;
+    resetDoc(doc, option);
+    doc.setHtml(spans.join(sep));
 }
 
-QTextDocument *buildDoc(const QStyleOptionViewItem &option,
-                        const QModelIndex &index,
-                        bool colorCode)
+void buildDoc(QTextDocument &doc,
+              const QStyleOptionViewItem &option,
+              const QModelIndex &index,
+              bool colorCode)
 {
     const QString proto  = index.data(ConnectionModel::ProtoTextRole).toString().toHtmlEscaped();
     const QString local  = index.data(ConnectionModel::LocalTextRole).toString().toHtmlEscaped();
@@ -146,30 +153,27 @@ QTextDocument *buildDoc(const QStyleOptionViewItem &option,
         ).arg(protoSpan, srcText, c.muted, dstText);
     }
 
-    auto *doc = new QTextDocument;
-    doc->setDocumentMargin(0);
-    doc->setDefaultFont(option.font);
-    QTextOption wrap;
-    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-    doc->setDefaultTextOption(wrap);
-    doc->setHtml(html);
-    return doc;
+    resetDoc(doc, option);
+    doc.setHtml(html);
 }
 
 } // namespace
 
 // Returns the group-header chip document when `index` is a group row
 // (GroupChipsRole non-empty), else the normal flow-endpoint document.
-static QTextDocument *chooseDoc(const QStyleOptionViewItem &option,
-                                const QModelIndex &index,
-                                bool colorCode,
-                                const ChipPalette &chipPalette)
+static void chooseDoc(QTextDocument &doc,
+                      const QStyleOptionViewItem &option,
+                      const QModelIndex &index,
+                      bool colorCode,
+                      const ChipPalette &chipPalette)
 {
     const QVariantList chips =
         index.data(ConnectionModel::GroupChipsRole).toList();
-    if (!chips.isEmpty())
-        return buildGroupDoc(option, chips, chipPalette);
-    return buildDoc(option, index, colorCode);
+    if (!chips.isEmpty()) {
+        buildGroupDoc(doc, option, chips, chipPalette);
+        return;
+    }
+    buildDoc(doc, option, index, colorCode);
 }
 
 void ConnectionFlowDelegate::paint(QPainter *painter,
@@ -192,8 +196,8 @@ void ConnectionFlowDelegate::paint(QPainter *painter,
 
     const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
 
-    QTextDocument *doc = chooseDoc(opt, index, m_colorCode, m_chipPalette);
-    doc->setTextWidth(textRect.width());
+    chooseDoc(m_doc, opt, index, m_colorCode, m_chipPalette);
+    m_doc.setTextWidth(textRect.width());
 
     painter->save();
     painter->translate(textRect.topLeft());
@@ -203,10 +207,8 @@ void ConnectionFlowDelegate::paint(QPainter *painter,
                                                ? QPalette::HighlightedText
                                                : QPalette::Text));
     ctx.clip = QRect(0, 0, textRect.width(), textRect.height());
-    doc->documentLayout()->draw(painter, ctx);
+    m_doc.documentLayout()->draw(painter, ctx);
     painter->restore();
-
-    delete doc;
 }
 
 QSize ConnectionFlowDelegate::sizeHint(const QStyleOptionViewItem &option,
@@ -215,7 +217,7 @@ QSize ConnectionFlowDelegate::sizeHint(const QStyleOptionViewItem &option,
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
 
-    QTextDocument *doc = chooseDoc(opt, index, m_colorCode, m_chipPalette);
+    chooseDoc(m_doc, opt, index, m_colorCode, m_chipPalette);
 
     // Measure at the live column width so wrapped content (long IPv6
     // endpoints in a narrow window) reports its true multi-line height
@@ -229,11 +231,10 @@ QSize ConnectionFlowDelegate::sizeHint(const QStyleOptionViewItem &option,
     else if (auto *table = qobject_cast<QTableView*>(view()))
         colWidth = table->columnWidth(index.column());
     if (colWidth > 8) {
-        doc->setTextWidth(colWidth - 6);   // small text margin
+        m_doc.setTextWidth(colWidth - 6);   // small text margin
     } else {
-        doc->setTextWidth(-1);
+        m_doc.setTextWidth(-1);
     }
-    const QSize hint = doc->size().toSize();
-    delete doc;
+    const QSize hint = m_doc.size().toSize();
     return {hint.width(), hint.height() + 4};
 }

@@ -3,6 +3,7 @@
 #include "RowGaugeDelegate.h"
 
 #include <QColor>
+#include <QTextDocument>
 
 // Colours for the group-header chips, configurable via Settings and
 // deliberately distinct from the peer src/dst colours used for flow
@@ -50,4 +51,5 @@ public:
 private:
     bool m_colorCode = true;
     ChipPalette m_chipPalette;
+    mutable QTextDocument m_doc;
 };
