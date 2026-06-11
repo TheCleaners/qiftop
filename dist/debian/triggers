@@ -1,0 +1,6 @@
+# dpkg triggers control file for the libqiftop0 shared-library package.
+# Fires libc's ldconfig trigger on install/upgrade/removal so the dynamic
+# linker cache is refreshed for the shipped libqiftop.so.0 (the modern
+# equivalent of a postinst `ldconfig` call; satisfies lintian's
+# lacks-ldconfig-trigger check).
+activate-noawait ldconfig
