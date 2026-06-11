@@ -8,6 +8,8 @@
 #include "tui/Screen.h"
 #include "tui/TuiFormat.h"
 #include "util/ConnectionFilter.h"
+#include "aggregate/InterfaceAggregator.h"
+#include "aggregate/ConnectionAggregator.h"
 
 class QTimer;
 
@@ -124,6 +126,12 @@ private:
 
     // Pause: freeze live updates so the snapshot can be read.
     bool m_paused = false;
+    // Snapshot captured at pause time. While paused we render from this frozen
+    // copy, not the live aggregator, so the view does not shift/resort as data
+    // keeps arriving in the background (a key-driven redraw would otherwise
+    // re-read the mutated live rows and move the cursor row out from under us).
+    QList<aggregate::InterfaceAggregator::Row>  m_frozenIfaceRows;
+    QList<aggregate::ConnectionAggregator::Row> m_frozenConnRows;
 
     // Filter (Connections view): a live ConnectionFilter mini-language query.
     bool                  m_filterEditing = false;

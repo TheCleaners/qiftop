@@ -171,10 +171,17 @@ void TuiApp::handleKey(int key)
     case 'p':
     case 'P':
         m_paused = !m_paused;
-        if (m_paused)
+        if (m_paused) {
+            // Freeze the current view; the aggregators keep updating live so
+            // unpausing shows fresh data.
+            if (m_ifaceAgg) m_frozenIfaceRows = m_ifaceAgg->rows();
+            if (m_connAgg)  m_frozenConnRows  = m_connAgg->rows();
             m_smoothTimer->stop();
-        else
+        } else {
+            m_frozenIfaceRows.clear();
+            m_frozenConnRows.clear();
             m_smoothTimer->start();
+        }
         break;
     case '/':
         m_filterEditing = true;
@@ -283,7 +290,7 @@ Frame TuiApp::buildFrame()
     if (m_view == View::Interfaces) {
         f.sortCol  = m_ifaceSortCol;
         f.sortDesc = m_ifaceSortDesc;
-        const auto &rows = m_ifaceAgg->rows();
+        const auto &rows = m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows();
         const QList<int> order =
             sortedInterfaceIndices(rows, m_ifaceSortCol, m_ifaceSortDesc);
         for (int i : order) {
@@ -300,7 +307,7 @@ Frame TuiApp::buildFrame()
     } else {
         f.sortCol  = m_connSortCol;
         f.sortDesc = m_connSortDesc;
-        const auto &rows = m_connAgg->rows();
+        const auto &rows = m_paused ? m_frozenConnRows : m_connAgg->rows();
         const QList<int> order =
             sortedConnectionIndices(rows, m_connSortCol, m_connSortDesc);
 
@@ -488,14 +495,14 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.selectable = false;
         f.modal.footer     = QStringLiteral("↑↓ next/prev · any other key closes");
         if (m_detailView == View::Interfaces) {
-            for (const auto &r : m_ifaceAgg->rows())
+            for (const auto &r : (m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows()))
                 if (interfaceKey(r) == m_detailKey) {
                     f.modal.title = QStringLiteral("Interface — %1").arg(r.current.name);
                     f.modal.items = interfaceDetailRows(r);
                     return;
                 }
         } else {
-            for (const auto &r : m_connAgg->rows())
+            for (const auto &r : (m_paused ? m_frozenConnRows : m_connAgg->rows()))
                 if (connectionKey(r) == m_detailKey) {
                     f.modal.title = QStringLiteral("Connection — %1").arg(m_connAgg->protoLabel(r.current));
                     f.modal.items = connectionDetailRows(*m_connAgg, r);
