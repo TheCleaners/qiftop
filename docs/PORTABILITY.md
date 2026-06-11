@@ -1,226 +1,212 @@
 # Portability — multi-OS / multi-datapath roadmap
 
-> Status: **exploratory**. qiftop v0.1 is Linux-only by design. This
-> document captures the current portability boundary, what would be
-> needed to run on other operating systems or with alternative data
-> sources, and which structural decisions to make early so a future
-> port doesn't require a rewrite.
+> Status: **exploratory**. qiftop 0.2.2 is still a Linux product, but the
+> tree now has a reusable Widgets-free `libqiftop`, the Qt Widgets GUI
+> (`qiftop`), and the ncurses terminal frontend (`nqiftop`). This document
+> records the current portability boundary and the backend-abstraction rules
+> to preserve for future ports.
 
 ---
 
 ## 1. Current portability boundary
 
-| Layer                | Today                            | Portability                                  |
-|----------------------|----------------------------------|----------------------------------------------|
-| `ui/`                | Qt 6 Widgets                     | ✅ Already portable to every Qt 6 target.    |
-| `dns/`               | `QHostInfo`-based async resolver | ✅ Portable.                                 |
-| `config/`            | `QSettings`                      | ✅ Portable.                                 |
-| `util/Units`         | Pure C++/Qt                      | ✅ Portable.                                 |
-| `util/ConnectionFilter` | Pure C++/Qt                   | ✅ Portable.                                 |
-| `util/Exporter`      | Pure C++/Qt                      | ✅ Portable.                                 |
-| `backend/` interfaces | Abstract `QObject` bases        | ✅ Portable.                                 |
-| `backend/PlatformInfo` | POSIX `getifaddrs` + Linux sysctl with fallbacks | 🟡 Compiles everywhere, full data only on Linux. |
-| `dbus/Types`         | Qt DBus marshalling              | 🟡 Compiles everywhere; **runs** wherever a system/session bus exists. |
-| `backend/linux/`     | libnl-3 + libnetfilter_conntrack | 🔴 Linux-only.                               |
-| `agent/`             | DBus daemon                      | 🟡 Logic portable; DBus availability varies. |
-| `util/HandoffServer` | Unix socket + `SO_PEERCRED`      | 🟡 Linux/BSD only; macOS needs `LOCAL_PEERCRED`; Windows needs a different IPC. |
-| `util/PrivilegeEscalator` | pkexec / sudo / kdesu      | 🔴 Linux-desktop-only.                       |
-| `dist/systemd/`, `dist/dbus/`, `dist/debian/` | systemd + Debian | 🔴 Linux-distro-specific packaging.          |
+| Layer | Today | Portability |
+|-------|-------|-------------|
+| `libqiftop` core (`aggregate/`, `dbus/`, `config/`, `dns/`, most `util/`, abstract `backend/`) | Qt6::Core/Network/DBus shared library; no Qt Widgets | 🟡 Source is intended to stay platform-clean, but the top-level build currently requires a concrete backend and errors out off Linux. |
+| `ui/` + `qiftop_ui` | Qt 6 Widgets GUI, models, delegates, tray, and GUI-only elevation helpers | 🟡 Widgets code is portable Qt; bundled self-elevation / handoff helpers are Linux/POSIX desktop glue. |
+| `tui/` / `nqiftop` | ncursesw frontend built on `libqiftop` | 🟡 Headless and Widgets-free, but built only on Linux today; raw curses and terminal syscalls are isolated to `src/tui/`. |
+| `dns/` | `QHostInfo`-based async resolver | ✅ Portable. |
+| `config/` | `QSettings` | ✅ Portable. |
+| `aggregate/` | Plain `QObject` interface/connection aggregators | ✅ Portable and shared by GUI/TUI/library consumers. |
+| `util/Units`, `util/ConnectionFilter`, `util/Exporter`, `util/Autostart` | Pure C++/Qt helpers | ✅ / 🟡 Mostly portable; `Autostart` is XDG-desktop specific. |
+| `util/Handoff*`, `util/PrivilegeEscalator` | GUI fallback elevation IPC and helper launching | 🔴 Linux/POSIX desktop-specific; not part of the installed `libqiftop` headers. |
+| `backend/` interfaces | `NetworkMonitor`, `ConnectionMonitor`, `ProcessResolver`, DTO-adjacent value types | ✅ Abstract, no platform headers. |
+| `backend/null/` | No-op `ProcessResolver` fallback | ✅ Portable. |
+| `backend/dbus/` | Client-side DBus proxy monitors | 🟡 Portable wherever Qt DBus and a suitable bus are available. |
+| `backend/PlatformInfo` | Local address / uid-name / group helpers with `Q_OS_*` guards | 🟡 Compiles with fallbacks; richer data on Unix/Linux. |
+| `backend/linux/` | libnl-3, libnetfilter_conntrack, sock_diag, cgroup and netns attribution | 🔴 Linux-only. |
+| `agent/` | DBus daemon wrapping the abstract monitors/resolver | 🟡 Service logic is mostly Qt Core/DBus; production data sources and install model are Linux. |
+| `dist/systemd/`, `dist/dbus/`, `dist/debian/`, RPM/Pages repo rules | systemd, system DBus policy, Debian/Fedora packaging | 🔴 Linux-distro-specific. |
 
-Legend: ✅ portable / 🟡 partly / 🔴 OS-specific.
+Legend: ✅ portable / 🟡 partly portable / 🔴 OS-specific.
 
-The **structural** picture is good: the abstract `NetworkMonitor`,
-`ConnectionMonitor`, and now `ProcessResolver` interfaces are all
-free of platform headers, and the platform-specific code lives in
-`backend/<os>/` subdirectories. The two **biggest architectural**
-roadblocks for non-Linux ports are DBus and the privilege model
-(see §4).
+The backend shape is still the key abstraction: `NetworkMonitor` emits
+per-interface snapshots, `ConnectionMonitor` emits per-flow snapshots and
+lazy process-detail replies, and `ProcessResolver` enriches flows with
+process/container metadata. Kernel-facing implementations live under
+`backend/<os>/` (`backend/linux/` today); client-side transport proxies live
+under `backend/dbus/`; the universal resolver fallback lives under
+`backend/null/`.
+
+Layering rule to preserve: code in `dbus/`, `dns/`, `config/`, `aggregate/`,
+the abstract `backend/` headers, and the library-safe subset of `util/` must
+remain free of Qt Widgets and platform headers. UI code may use Qt Widgets;
+raw platform/terminal glue should stay in narrow leaf files (`backend/linux/`,
+`backend/PlatformInfo.cpp`, `src/tui/Screen.cpp` / `main.cpp`, or the current
+GUI elevation helpers) rather than leaking into public headers.
 
 ---
 
 ## 2. Target platforms — data-source survey
 
+These are **not support claims**; they are the likely APIs a future backend
+would need.
+
 ### 2.1 Linux (current)
 
-| Need                         | API                                                       |
-|------------------------------|-----------------------------------------------------------|
-| Per-interface counters       | rtnetlink via libnl-3 (`rtnl_link_*`)                     |
-| Per-flow counters            | libnetfilter_conntrack (`NFCT_Q_DUMP`)                    |
-| Local addresses              | `getifaddrs()`                                            |
-| Ephemeral port range         | `/proc/sys/net/ipv4/ip_local_port_range`                  |
-| Socket → PID                 | `NETLINK_SOCK_DIAG` + `/proc/<pid>/fd` walk (v0.2 step 2) |
-| PID → cgroup/container       | `/proc/<pid>/cgroup` (v0.2 step 3)                        |
-| Cross-netns flows            | `setns()` + sock_diag inside (v0.2 step 4)                |
-| Privilege model              | `CAP_NET_ADMIN`, system DBus, pkexec                      |
+| Need | API |
+|------|-----|
+| Per-interface counters | rtnetlink via libnl-3 (`rtnl_link_*`) |
+| Per-flow counters | libnetfilter_conntrack (`NFCT_Q_DUMP`; qiftop issues separate IPv4 and IPv6 dumps) |
+| Local addresses | `getifaddrs()` via `backend/PlatformInfo` |
+| Ephemeral port range | `/proc/sys/net/ipv4/ip_local_port_range` |
+| Socket → PID | `NETLINK_SOCK_DIAG` plus `/proc/<pid>/fd` walk |
+| PID → cgroup/container | `/proc/<pid>/cgroup` via `CgroupClassifier` |
+| Cross-netns flows | `setns(CLONE_NEWNET)` plus sock_diag inside each container netns (`NetnsScanner`) |
+| Privilege model | root `qiftop-agent` with `CAP_NET_ADMIN`, `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH`, `CAP_SYS_ADMIN`; system DBus; `netdev` policy gate; systemd sandbox |
+| Clients | Qt Widgets GUI (`qiftop`), ncurses TUI (`nqiftop`), and `libqiftop` consumers via DBus proxies |
 
 ### 2.2 FreeBSD / OpenBSD / NetBSD
 
-| Need                         | API                                                       |
-|------------------------------|-----------------------------------------------------------|
-| Per-interface counters       | `sysctl net.link.generic.ifdata.*` or `getifaddrs()` AF_LINK |
-| Per-flow counters            | `pfctl -ss` parse, or **libpfctl** (FreeBSD 13+), or BPF + per-flow accounting |
-| Local addresses              | `getifaddrs()` ✅                                          |
-| Ephemeral port range         | `sysctl net.inet.ip.portrange.first/last`                 |
-| Socket → PID                 | `sysctl net.inet.tcp.pcblist` then `kvm_*` / `procstat`   |
-| Container attribution        | jails: `jail_get(2)`; podman/containerd on FreeBSD = niche |
-| Privilege model              | Setuid helper or capsicum-sandboxed daemon; no DBus by default |
+| Need | API |
+|------|-----|
+| Per-interface counters | `sysctl net.link.generic.ifdata.*` or `getifaddrs()` AF_LINK |
+| Per-flow counters | `pfctl -ss` parse, **libpfctl** (FreeBSD 13+), or BPF + userspace accounting |
+| Local addresses | `getifaddrs()` |
+| Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` |
+| Socket → PID | `sysctl net.inet.tcp.pcblist` plus `kvm_*` / `procstat` |
+| Container attribution | Jails via `jail_get(2)`; OCI runtime attribution is platform-specific |
+| Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed |
 
-Verdict: **moderate** lift; clean `backend/freebsd/` plus a no-DBus
-IPC option (see §4.1) would land it.
+Verdict: **moderate** lift for interface counters and basic flows, larger if
+we want a DBus-free transport and rich attribution.
 
 ### 2.3 macOS / Darwin
 
-| Need                         | API                                                       |
-|------------------------------|-----------------------------------------------------------|
-| Per-interface counters       | `sysctl net.link.iflist` or `if_data`; or `PF_NDRV`       |
-| Per-flow counters            | **No** kernel-level per-flow accounting comparable to conntrack. Options: `nettop`-style via private `NetworkStatistics` framework; `NEFilterDataProvider` (Network Extension, requires entitlement + System Extension); BPF (`/dev/bpf*`) traffic-mirroring + userspace flow tracker. |
-| Local addresses              | `getifaddrs()` ✅                                          |
-| Ephemeral port range         | `sysctl net.inet.ip.portrange.first/last`                 |
-| Socket → PID                 | `proc_listpids` + `proc_pidfdinfo` (libproc); no privileges required for own uid |
-| Container attribution        | N/A by default; could attribute Docker Desktop's `vpnkit` indirectly |
-| Privilege model              | `SMJobBless` for a privileged helper, signed bundle, no DBus |
+| Need | API |
+|------|-----|
+| Per-interface counters | `sysctl net.link.iflist` / `if_data`, or another Network framework source |
+| Per-flow counters | No conntrack equivalent. Options are private `NetworkStatistics`, Network Extension, BPF + userspace flow tracking, or disabling the Connections view. |
+| Local addresses | `getifaddrs()` |
+| Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` |
+| Socket → PID | `proc_listpids` + `proc_pidfdinfo` (libproc) |
+| Container attribution | None by default; Docker Desktop/VM attribution would be indirect |
+| Privilege model | `SMAppService` / privileged helper, signed bundle, no DBus by default |
 
-Verdict: **hard**. The big roadblock is per-flow accounting — there
-is no equivalent of conntrack. A v1 macOS port would likely ship
-only the per-interface view (libnl equivalent) and disable the
-Connections tab until a Network Extension–based collector lands.
-Network Extension System Extensions require a paid Apple Developer
-ID + entitlement.
+Verdict: **hard**. The main blocker is trustworthy per-flow byte/packet
+accounting without a Linux-style conntrack table.
 
 ### 2.4 Windows
 
-| Need                         | API                                                       |
-|------------------------------|-----------------------------------------------------------|
-| Per-interface counters       | `GetIfTable2` / `GetIfEntry2` (iphlpapi)                  |
-| Per-flow counters            | `GetExtendedTcpTable` / `GetExtendedUdpTable` (snapshot only); ETW Microsoft-Windows-Kernel-Network provider for byte/packet deltas; or WinDivert (GPL) for true per-flow byte accounting |
-| Local addresses              | `GetAdaptersAddresses`                                    |
-| Ephemeral port range         | `GetTcpRange` / registry `MaxUserPort` (legacy)           |
-| Socket → PID                 | `GetExtendedTcpTable(TCP_TABLE_OWNER_PID_ALL)` — built-in, no privileges |
-| Container attribution        | Hyper-V containers: ETW container-id field; Docker Desktop: WSL2 (delegate to Linux backend running inside WSL) |
-| Privilege model              | UAC manifest, Windows Service; no DBus                    |
+| Need | API |
+|------|-----|
+| Per-interface counters | `GetIfTable2` / `GetIfEntry2` (`iphlpapi`) |
+| Per-flow counters | `GetExtendedTcpTable` / `GetExtendedUdpTable` snapshots, ETW Kernel-Network provider for deltas, or a driver such as WinDivert |
+| Local addresses | `GetAdaptersAddresses` |
+| Ephemeral port range | Modern TCP dynamic port APIs or registry fallback |
+| Socket → PID | owner-PID TCP/UDP tables |
+| Container attribution | Windows/Hyper-V container metadata or WSL2 delegation |
+| Privilege model | Windows service / UAC; no DBus |
 
-Verdict: **moderate** for the per-interface and per-PID flow view
-(`GetExtendedTcpTable` is unique among the four OSes for being both
-free and not requiring privileges). Real-time per-flow accounting
-needs ETW or WinDivert, both of which add a deployment story.
+Verdict: **moderate** for interface and PID-owned socket snapshots; harder
+for real-time byte accounting and packaging.
 
 ---
 
 ## 3. Architectural decisions to preserve
 
-These rules already hold today; they exist BECAUSE of future ports.
-Reviewers/agents touching the codebase should keep them intact.
-
-1. **`backend/` interfaces never include platform headers.** The
-   `NetworkMonitor`, `ConnectionMonitor`, `ProcessResolver`, and
-   (now) `PlatformInfo` headers are POSIX-/platform-clean. Concrete
-   impls go in `backend/<os>/` (compiled subdir picked in
-   `CMakeLists.txt`) or behind `qiftop::platform` (inline
-   `#if defined(Q_OS_*)`).
-2. **DTOs (`dbus/Types.h`) use kernel-neutral encodings on the wire.**
-   IANA proto numbers, RFC 2863 oper-state, kernel ifindex, conntrack
-   TCP states — every one is an external standard or has a documented
-   fallback (TcpState::None for non-Linux conntrack-less ports). A
-   future macOS port encodes its data into these same DTOs.
-3. **Capability tokens, not Version compare.** Every new optional
-   feature gets a token (`process-attribution`, `container-attribution`,
-   `oper-state`, `tcp-state`…) which the resolver / service advertises
-   only when the runtime probe succeeded. A macOS agent that can't
-   provide `tcp-state` simply omits the token; the existing UI
-   already hides the column when the token is absent.
-4. **Compile-time options gate compile-in; runtime probes gate use.**
-   See `QIFTOP_ENABLE_PROCESS_ATTRIBUTION` etc. — the same pattern
-   should be used for any future macOS/Windows feature that needs
-   an entitlement or driver.
-5. **The factory pattern** (`createProcessResolver()`,
-   `createNetworkMonitor()` in `main.cpp`'s `#ifdef` block) keeps
-   `main.cpp` to ~5 lines per platform. New ports add a clause,
-   never edit the call sites.
+1. **Backends stay behind abstract `QObject` interfaces.**
+   `NetworkMonitor`, `ConnectionMonitor`, and `ProcessResolver` headers must
+   stay platform-clean. Concrete capture/enrichment code goes in
+   `backend/<os>/`; transport proxies go in `backend/dbus/`; no-op fallbacks
+   go in `backend/null/`.
+2. **Shared library code stays Widgets-free.** `libqiftop` is Qt
+   Core/Network/DBus only. Anything that needs `QWidget`, item views,
+   delegates, tray UI, ncurses, or elevation UI belongs in the GUI/TUI layer,
+   not in the installed library headers.
+3. **DTOs use stable external encodings.** DBus DTO fields use IANA protocol
+   numbers, RFC/kernel values, ifindex, and explicit fallback values rather
+   than private enum ordinals.
+4. **Capability tokens beat version checks.** Optional behaviour is advertised
+   by append-only tokens (`process-attribution-wire`, `container-chain-wire`,
+   `tcp-state`, `on-demand-process-details`, …). Clients must treat missing
+   tokens as "feature absent".
+5. **Compile-time options gate compile-in; runtime probes gate use.** The
+   Linux attribution toggles (`QIFTOP_ENABLE_PROCESS_ATTRIBUTION`,
+   `QIFTOP_ENABLE_CONTAINER_ATTRIBUTION`, `QIFTOP_ENABLE_NETNS_SCAN`) compile
+   sources in or out; resolver `initialize()` and `capabilities()` decide what
+   is actually available at runtime.
+6. **Adding a platform requires a real backend clause.** The root
+   `CMakeLists.txt` currently errors on non-Linux because no concrete backend
+   exists. A future port should add `src/backend/<platform>/`, link the target
+   into `qiftoplib`, define `BACKEND_<PLATFORM>`, and update the few frontend
+   factory branches that instantiate the concrete monitors.
 
 ---
 
-## 4. The four real roadblocks
+## 4. The main roadblocks
 
-### 4.1 DBus
+### 4.1 DBus transport
 
-The agent IPC is hard-coded to DBus today. macOS has no system bus;
-Windows has none either; even on FreeBSD it's rarely installed.
+The shipped agent IPC is DBus. That works well on Linux system/session buses,
+but macOS and Windows do not have a native system bus and BSD availability is
+not guaranteed. Because clients talk to `NetworkMonitor` / `ConnectionMonitor`
+objects, a future non-DBus transport could provide the same abstract monitor
+shape, but it would need a new framing/authentication design and equivalent
+capability discovery.
 
-**Plan B** that we should keep open: the `NetworkMonitor` /
-`ConnectionMonitor` / `ProcessResolver` interfaces are pure
-`QObject` signal emitters — they don't know they're behind DBus
-proxies. We could add a `backend/local/LocalSocketTransport.{h,cpp}`
-(or even Qt's `QLocalSocket` + a tiny CBOR framing) that serialises
-the same DTOs. Same agent process, different transport. No DBus
-required.
+### 4.2 Privilege model
 
-This isn't a v0.2 task, but **before adding any new DBus-only
-method, ask whether the contract should be transport-agnostic**.
-The `qiftop_dbus` static library is named for the transport; a
-future `qiftop_ipc` could front both transports.
+The current privileged path assumes a Linux root daemon (preferred) or Linux
+desktop elevation helpers (GUI fallback). Other OSes need native privilege
+install/activation stories: launchd helpers on macOS, a Windows service/UAC,
+or a BSD daemon/setuid-helper model. `nqiftop` has no GUI self-elevation path;
+its in-process fallback simply requires the process to have the needed rights.
 
-### 4.2 Privilege escalation
+### 4.3 Per-flow accounting on macOS and some BSD setups
 
-`pkexec` / Polkit is Linux-only. macOS has `SMJobBless` (now
-deprecated in favour of `SMAppService`), Windows has UAC, FreeBSD
-has setuid + capsicum. `util/PrivilegeEscalator` is already isolated
-behind a small interface (`requestElevated()`); a future port adds
-a sibling class without touching `MainWindow`.
+Linux conntrack gives qiftop cheap, kernel-maintained byte/packet counters per
+flow. macOS has no direct equivalent, and BSD options depend heavily on pf/BPF
+availability and privilege. Any port may need to ship interface-only mode first
+or omit the Connections view by leaving the relevant capability tokens absent.
 
-### 4.3 Per-flow accounting on macOS
+### 4.4 Packaging and policy
 
-There is no kernel-level conntrack on macOS. Any port that ships
-the Connections view there will need to either:
-* Ship a System Extension (Network Extension API) — requires a paid
-  Apple Developer ID, code signing, notarization, and a separately
-  installed `.systemextension` bundle.
-* Use BPF (`/dev/bpf*`) + userspace flow tracker — works without
-  entitlements but requires CAP_NET_ADMIN-equivalent (root, or the
-  user being in `_bpf` group).
-* Disable the tab via capability token absence.
-
-The third is the v1 escape hatch and the architecture supports it
-today.
-
-### 4.4 Packaging
-
-`dist/debian/`, `dist/systemd/`, `dist/dbus/` are all Debian-flavour
-Linux. macOS needs a `.pkg` or `.app` bundle, Windows needs an MSI
-or NSIS installer, FreeBSD needs a port skeleton. None of this
-affects the source layout; the install rules in `CMakeLists.txt`
-just gain `if(APPLE)` / `if(WIN32)` clauses analogous to the
-existing `if(UNIX AND NOT APPLE)` Linux block.
+Debian/Ubuntu and Fedora packaging now exist, but they are still Linux-specific
+(systemd unit, system DBus policy, apt/dnf repositories, Linux capabilities).
+macOS, Windows, and BSD ports would need new installer, service activation,
+code-signing, and access-control policy work without changing the abstract
+backend interfaces.
 
 ---
 
 ## 5. Concrete recommendations going forward
 
-* **Keep `backend/PlatformInfo.{h,cpp}` as THE single place** for any
-  "ask the kernel about the local host" call. New probes (e.g. PID
-  for the currently-active user, available cgroup subsystems) live
-  here behind `#if defined(Q_OS_*)`. The header stays platform-clean.
-* **Never include `<linux/*>`, `<sys/un.h>`, `<netinet/*>`, or
-  `<windows.h>` outside `backend/<os>/`** or inside `qiftop::platform`
-  with documented fallbacks.
-* **Every new DBus method ships with a token.** If you're tempted to
-  add `agent.Version >= "0.4"` gating in the client, stop — the macOS
-  agent will never expose `Version` in the same way. Use a token.
-* **When in doubt, follow the `ProcessResolver` pattern.** Abstract
-  interface in `backend/`, `null/` fallback that compiles everywhere,
-  `<os>/` concrete impl, factory hides the `#ifdef`, capability
-  tokens advertised at runtime. This is the v0.2 template for every
-  future feature with platform-specific data sources.
+* Keep kernel/data-source code in `backend/<os>/` and keep public backend
+  headers platform-clean. `backend/PlatformInfo.cpp` is the narrow exception
+  for small host probes with guarded fallbacks.
+* Do not add Qt Widgets, curses, or platform headers to `libqiftop` public
+  headers (`aggregate/`, `dbus/`, `config/`, `dns/`, portable `util/`, and
+  abstract `backend/`).
+* If GUI/TUI platform glue needs OS headers, isolate it in a leaf translation
+  unit and do not let it become a dependency of the shared library API.
+* Add a capability token for every new optional agent/transport feature.
+  Never gate client behaviour on string-comparing the agent `Version`.
+* Follow the `ProcessResolver` pattern for future enrichment features:
+  abstract interface, null fallback, `<os>/` implementation, factory/probe,
+  bounded caches, and runtime capability tokens.
+* When adding a new frontend, link `libqiftop` and keep rendering/toolkit code
+  at the edge, like `qiftop_ui` for Widgets and `src/tui/Screen.cpp` for
+  ncurses.
 
 ---
 
-## 6. What's NOT planned
+## 6. What's not planned for 0.2.x
 
-To set expectations:
-
-* macOS / Windows / *BSD ports are **not** v0.2 work. v0.2 is
-  per-flow process+container attribution on Linux.
-* No System Extension / notarized macOS app planned.
-* No Hyper-V / WSL bridge planned.
-* The DBus contract stays the contract for the foreseeable future;
-  the `libqiftop` extraction (per AGENTS.md §2) is the path toward
-  alternative transports if/when needed.
+* macOS, Windows, or BSD support.
+* A non-DBus production transport.
+* A macOS Network Extension / notarized collector.
+* A Windows packet driver integration.
+* Shipping in-process privileged capture to third-party `libqiftop`
+  consumers; installed library consumers are expected to stream from the
+  agent via the DBus proxies.

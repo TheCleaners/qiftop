@@ -1,4 +1,4 @@
-.TH QIFTOP\-AGENT.CONF 5 "2026-06-10" "qiftop 0.2.1" "File Formats"
+.TH QIFTOP\-AGENT.CONF 5 "2026-06-10" "qiftop 0.2.2" "File Formats"
 .SH NAME
 qiftop\-agent.conf \- configuration file for qiftop\-agent
 .SH SYNOPSIS
@@ -17,9 +17,9 @@ lines;
 begins a comment.
 .PP
 The file is optional: a missing file yields built\-in defaults. Unknown
-keys are ignored (forward\-compatible). Numeric values are clamped to
-sensible bounds and an out\-of\-range value emits a warning on stderr rather
-than producing a degenerate cadence. On Debian/RPM installs the file is a
+keys are ignored (forward\-compatible). Numeric values are bounded by the
+loader so typos do not produce degenerate cadences: rejected values warn and
+fall back to the built\-in default, while documented clamps are noted below. On Debian/RPM installs the file is a
 .B conffile
 so local edits survive package upgrades. Override the path with
 .BR "qiftop\-agent \-\-config " \fIpath\fR.
@@ -28,19 +28,22 @@ so local edits survive package upgrades. Override the path with
 .BI base_interval_ms= N
 Baseline poll cadence in milliseconds when clients are active. Default
 .BR 1000 .
-Range [10, 3600000].
+Accepted range [\fBmin_interval_ms\fR, 3600000]; invalid values fall back to
+the default.
 .TP
 .BI min_interval_ms= N
 Absolute floor for client cadence hints \(em the fastest the agent will
 ever poll, regardless of how aggressive a hint is. Default
 .BR 100 .
-This is the DoS guard against a client pinning the netlink subsystem.
+Accepted range [10, 3600000]. This is the DoS guard against a client
+pinning the netlink subsystem.
 .SH "SECTION [idle]"
 .TP
 .BI timeout_secs= N
 Seconds with no incoming method call after which polling is paused
 entirely (near\-zero CPU; the next call wakes it). Default
 .BR 60 .
+Accepted range [0, 86400] seconds;
 .B 0
 disables the idle pause.
 .TP
@@ -49,12 +52,16 @@ How long a client cadence hint (\fBSetDesiredIntervalMs\fR) stays in
 effect after the client's last call. Clients should re\-assert at roughly
 half this value. Default
 .BR 10 .
-Disconnected clients' hints expire silently.
+Positive values up to 86400 seconds are accepted; 0 or negative values fall
+back to the default, and larger values clamp to 86400. Sub-second values are
+not expressible in the INI. Disconnected clients' hints expire silently.
 .TP
 .BI schedule= "w1:i1,w2:i2,w3:0"
 Adaptive slow\-down schedule: three
 .IB window_secs : interval_ms
-pairs. Read left to right: elapsed < \fIw1\fR uses
+pairs. Window values are seconds in the range [0, 86400]; interval values are
+milliseconds in [\fBmin_interval_ms\fR, 3600000]. Read left to right:
+elapsed < \fIw1\fR uses
 .BR base_interval_ms ;
 \fIw1\fR..\fIw2\fR uses \fIi1\fR; \fIw2\fR..\fIw3\fR uses \fIi2\fR; beyond
 \fIw3\fR polling pauses. Default
@@ -109,7 +116,17 @@ a caller named in
 Grants cross\-user visibility to a small set of administrators without
 opening it to the whole netdev group.
 .RE
-An unrecognised value warns and falls back to
+The canonical values are
+.BR owner ,
+.BR permissive
+and
+.BR restricted ;
+compatibility aliases
+.BR all
+(for permissive) and
+.BR users
+(for restricted) are also accepted. An unrecognised value warns and falls
+back to
 .BR owner .
 .TP
 .BI allow_users= "name[,name...]"

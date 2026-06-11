@@ -1,4 +1,4 @@
-.TH QIFTOP 1 "2026-06-10" "qiftop 0.2.1" "User Commands"
+.TH QIFTOP 1 "2026-06-10" "qiftop 0.2.2" "User Commands"
 .SH NAME
 qiftop \- Qt6 real\-time network traffic monitor (per\-interface and per\-connection)
 .SH SYNOPSIS
@@ -17,12 +17,11 @@ state, MTU, addresses and error/drop counters.
 table), with direction inference, reverse\-DNS, and optional grouping by
 interface, process or container.
 .PP
-qiftop never touches the kernel itself. On startup it probes for the
-privileged
+On startup qiftop probes for the privileged
 .BR qiftop\-agent (8)
 on the system D\-Bus and, when reachable, consumes statistics from it as an
-unprivileged client. When the agent is not installed or the user lacks
-access (see
+unprivileged client so the GUI never touches the kernel. When the agent is
+not installed or the user lacks access (see
 .B SECURITY
 in
 .BR qiftop\-agent (8)),
@@ -37,7 +36,8 @@ status bar.
 .TP
 .BR \-i ", " \-\-interface " " \fIiface\fR
 Open on the Connections tab and restrict it to flows on \fIiface\fR. May
-be given more than once to show several interfaces. Mirrors
+be given more than once to show several interfaces. This filter is
+transient (not saved) and mirrors
 .BR iftop (8)'s
 .BR \-i .
 .TP
