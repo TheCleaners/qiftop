@@ -4,6 +4,53 @@ All notable changes to qiftop are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-06-10
+
+The "test depth + integration reach" release: more of the capture path is now
+unit-testable, a monitoring-plugin integration lands, and a batch of
+correctness fixes from a focused bug/perf triage.
+
+### Added
+- **`check_qiftop`** — a Nagios/Icinga/Zabbix monitoring plugin (a `libqiftop`
+  consumer) that samples an interface or filter-scoped flow rate, compares it
+  against `--warning`/`--critical` thresholds (IEC suffixes accepted), and
+  emits Nagios-format output + perfdata with exit codes 0/1/2/3. Shipped as
+  the `qiftop-monitoring-plugin` package (installed under `libexec/qiftop`),
+  with a `check_qiftop(1)` man page. This is the polling-check complement to
+  the Prometheus exporter example.
+- **In-process agent-service tests** (`test_services`) driving
+  `ConnectionsService`/`InterfacesService` through the fake monitors (snapshot
+  cap, dropped-flow handling, process/container/chain attribution, server-side
+  direction) — no real D-Bus bus required.
+- **Pure conntrack flow-orientation logic** extracted to `ConntrackOrient.h`
+  (`orientConntrackFlow`) and unit-tested (`test_conntrack_orient`): inbound /
+  outbound / forwarded / both-local orientation is now testable without a live
+  conntrack handle.
+- A **cri-o Tier-2 attribution runner** (`run-crio.sh`).
+
+### Fixed
+- **Process attribution could pick the wrong PID** for unconnected UDP sockets
+  on local-key collisions (e.g. `SO_REUSEPORT`, or a wildcard `0.0.0.0:port`
+  socket coexisting with a specific-address socket on the same port). The
+  local 2-tuple fallback is now ambiguity-aware (a local key with more than
+  one owner yields no attribution) and UDP-only; exact 4-tuple matches still
+  take precedence, so connected-socket/TCP attribution is unchanged. The
+  container-side scanner gained the same UDP fallback + guard.
+- nqiftop CSV export (`w`) now writes the **displayed** (filtered/sorted) rows
+  rather than the full raw set.
+- nqiftop: the `+N more` indicator no longer paints over the cursor row; CSV
+  export filenames include milliseconds to avoid same-second collisions.
+- Interface rate no longer underflows to a huge bogus value on a kernel
+  counter reset/wrap (rate clamps to 0, matching the connection aggregator).
+- Agent snapshot cap: overflow-safe top-N-by-bytes comparison and no full
+  flow-list copy when over the cap.
+- Agent config: an out-of-range `hint_ttl_secs` now warns and falls back
+  instead of being silently clamped.
+
+### Performance
+- `SockDiagResolver` reads each PID's start time once per refresh instead of
+  repeatedly (per socket fd and per resolved flow).
+
 Pre-release alpha tags (`v0.1-alphaN`) are intentionally omitted; their
 commit history is preserved in `git log`.
 
@@ -237,6 +284,7 @@ privileged DBus daemon).
 - CI also ran packaging QA (`lintian`, `desktop-file-validate`, and a Docker
   smoke install).
 
+[0.2.3]: https://github.com/TheCleaners/qiftop/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/TheCleaners/qiftop/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/TheCleaners/qiftop/compare/v0.2...v0.2.1
 [0.2]: https://github.com/TheCleaners/qiftop/compare/v0.1...v0.2

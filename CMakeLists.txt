@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(qiftop VERSION 0.2.2 LANGUAGES CXX)
+project(qiftop VERSION 0.2.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -365,6 +365,7 @@ qiftop_install_manpage(dist/man/qiftop-agent.conf.5 5 qiftop-agent)
 if(TARGET nqiftop)
     qiftop_install_manpage(dist/man/nqiftop.1       1 nqiftop)
 endif()
+qiftop_install_manpage(dist/man/check_qiftop.1      1 check-qiftop)
 
 install(FILES LICENSE README.md
         DESTINATION ${CMAKE_INSTALL_DOCDIR}
