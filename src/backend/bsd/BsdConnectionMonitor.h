@@ -1,20 +1,18 @@
 #pragma once
 
-#include <QTimer>
+#include <QThread>
 
 #include "backend/ConnectionMonitor.h"
 
 namespace qiftop::backend::bsd {
 
-// Placeholder per-flow monitor for BSD platforms. NetBSD has no
-// conntrack-equivalent kernel flow table; real per-flow byte/packet
-// accounting would come from pf state (pfctl -ss / libpfctl) or a
-// BPF + userspace accounting datapath (see docs/PORTABILITY.md §2.2).
-//
-// Until that backend exists this monitor emits no flows and reports
-// accounting as unavailable exactly once, so the Connections view
-// degrades gracefully instead of looking broken. The interface view
-// (BsdNetworkMonitor) is fully functional in the meantime.
+class BsdConnectionWorker;
+
+// BSD per-flow monitor. Owns a QThread running a BsdConnectionWorker that
+// sniffs IP traffic via libpcap/BPF and maintains a userspace flow table
+// (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS — there is no conntrack). When
+// capture can't start (no /dev/bpf access) it reports accounting
+// unavailable and stays quiet, so the Connections view degrades gracefully.
 class BsdConnectionMonitor : public ConnectionMonitor {
     Q_OBJECT
 
@@ -24,9 +22,11 @@ public:
 
     void start() override;
     void stop()  override;
+    void setPollIntervalMs(int ms) override;
 
 private:
-    bool m_warned = false;
+    QThread              m_thread;
+    BsdConnectionWorker *m_worker = nullptr; // owned by m_thread
 };
 
 } // namespace qiftop::backend::bsd

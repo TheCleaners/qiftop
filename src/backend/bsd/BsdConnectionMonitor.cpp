@@ -1,31 +1,48 @@
 #include "BsdConnectionMonitor.h"
+#include "BsdConnectionWorker.h"
 
 namespace qiftop::backend::bsd {
 
 BsdConnectionMonitor::BsdConnectionMonitor(QObject *parent)
     : ConnectionMonitor(parent)
-{}
+    , m_worker(new BsdConnectionWorker) // no parent; moved to m_thread
+{
+    m_worker->moveToThread(&m_thread);
 
-BsdConnectionMonitor::~BsdConnectionMonitor() = default;
+    connect(&m_thread, &QThread::started,  m_worker, &BsdConnectionWorker::start);
+    connect(&m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
+
+    connect(m_worker, &BsdConnectionWorker::connectionsUpdated,
+            this,     &ConnectionMonitor::connectionsUpdated);
+    connect(m_worker, &BsdConnectionWorker::accountingUnavailable,
+            this,     &ConnectionMonitor::accountingUnavailable);
+}
+
+BsdConnectionMonitor::~BsdConnectionMonitor()
+{
+    stop();
+}
 
 void BsdConnectionMonitor::start()
 {
-    if (!m_warned) {
-        m_warned = true;
-        // Defer the signal so listeners connected after construction
-        // still receive it.
-        QMetaObject::invokeMethod(this, [this] {
-            emit accountingUnavailable(
-                QStringLiteral("Per-flow accounting is not yet implemented on "
-                               "this platform (no conntrack equivalent; a pf/BPF "
-                               "backend is the planned datapath)."));
-            emit connectionsUpdated({});
-        }, Qt::QueuedConnection);
-    }
+    m_thread.start();
 }
 
 void BsdConnectionMonitor::stop()
 {
+    if (!m_thread.isRunning())
+        return;
+    QMetaObject::invokeMethod(m_worker, &BsdConnectionWorker::stop, Qt::QueuedConnection);
+    m_thread.quit();
+    m_thread.wait();
+}
+
+void BsdConnectionMonitor::setPollIntervalMs(int ms)
+{
+    if (!m_thread.isRunning())
+        return;
+    QMetaObject::invokeMethod(m_worker, "setPollIntervalMs",
+                              Qt::QueuedConnection, Q_ARG(int, ms));
 }
 
 } // namespace qiftop::backend::bsd
