@@ -79,23 +79,31 @@ or `pkg-config --cflags --libs qiftop`.
 
 ## Target use cases
 
-The facility is designed so each of these is a thin consumer, not a fork:
+The facility is designed so each of these is a thin consumer, not a fork.
+Shipped examples live under [`examples/`](../examples) (standalone
+`find_package(qiftop)` projects):
 
-1. **NDJSON / line-oriented CLI** (shipped as the example) — pipe live flow
-   data into `jq`, a log shipper, `awk`, etc. `--once` gives a batch
-   snapshot for cron/scripts.
-2. **Prometheus / OpenMetrics exporter** — map aggregator rows to gauges
-   (`qiftop_iface_rx_bytes_per_sec{iface="eth0"}` …) on a scrape endpoint.
-   Reuses the smoothing + reference logic for free.
-3. **Alerting daemon** — evaluate the filter mini-language (or custom
-   predicates) against the stream; fire on `rate_total>X`,
-   `host~suspicious`, a new container talking out, etc.
-4. **Language bindings** — Python / Rust over a future stable C ABI
+1. **NDJSON / line-oriented CLI** — `examples/ndjson-stream` (interfaces) and
+   `examples/ndjson-connections` (per-flow, with process/container
+   attribution). Pipe live data into `jq`, a log shipper, `awk`, etc.;
+   `--once` gives a batch snapshot for cron/scripts.
+2. **Prometheus / OpenMetrics exporter** — `examples/prometheus-exporter`:
+   serves `/metrics` (interface byte counters + per-container/process rate
+   gauges) so alerting ("incessantly hogging" via a PromQL `for:` clause) is
+   delegated to Prometheus/Alertmanager — no new ecosystem to learn.
+3. **Snapshot export** — `examples/snapshot-export`: one-shot CSV/JSON dump of
+   the current flow table via `util::exporter`.
+4. **Top-talkers CLI** — `examples/top-talkers`: a headless `iftop -t`-style
+   printer over the aggregator + IEC rate formatter.
+5. **Alerting daemon** (planned) — evaluate the filter mini-language against
+   the stream; fire on `rate_total>X`, a new container talking out, etc. See
+   the v0.3 alerting design.
+6. **Language bindings** — Python / Rust over a future stable C ABI
    (`extern "C"` shim) wrapping the DTOs + aggregators. Deferred, but the
    library is kept binding-friendly (plain value types, no Widgets).
-5. **Embedding** — any Qt app that wants live traffic data without the
+7. **Embedding** — any Qt app that wants live traffic data without the
    qiftop UI links the aggregators directly.
-6. **Alternative frontends** — the ncurses `nqiftop` (next) is the first
+8. **Alternative frontends** — the ncurses `nqiftop` is the first
    non-Qt-Widgets frontend; it reuses the aggregators wholesale.
 
 ## Stability

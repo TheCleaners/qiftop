@@ -17,6 +17,7 @@
 
 #include <qiftop/aggregate/InterfaceAggregator.h>
 #include <qiftop/backend/dbus/DBusNetworkMonitor.h>
+#include <qiftop/dbus/Types.h>
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -37,6 +38,11 @@ int main(int argc, char **argv)
     // it so queued (cross-thread) delivery works regardless of backend.
     qRegisterMetaType<InterfaceStats>();
     qRegisterMetaType<QList<InterfaceStats>>();
+
+    // Register the DBus wire DTO metatypes with QtDBus, or the agent's
+    // StatsChanged reply fails to unmarshal ("type
+    // QList<qiftop::dbus::InterfaceStatsDto> is not registered with QtDBus").
+    qiftop::dbus::registerTypes();
 
     const QStringList args = app.arguments();
     const bool sessionBus  = args.contains(QStringLiteral("--session"));

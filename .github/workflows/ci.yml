@@ -203,6 +203,24 @@ jobs:
             -DQIFTOP_AUTO_PACKAGE=OFF
           cmake --build build --parallel
 
+      - name: Build libqiftop examples against the installed library
+        # Each examples/* is a standalone find_package(qiftop) consumer. Build
+        # them against a component-only install (libqiftop runtime + dev — NOT
+        # the whole project, whose systemd unit installs to an absolute /lib
+        # path needing root) so the public API + CMake package stay consumable
+        # and the examples can't bit-rot.
+        run: |
+          P="$PWD/_install"
+          cmake --install build --component libqiftop     --prefix "$P"
+          cmake --install build --component libqiftop-dev --prefix "$P"
+          for ex in examples/*/; do
+            [ -f "$ex/CMakeLists.txt" ] || continue
+            echo "::group::build $ex"
+            cmake -S "$ex" -B "$ex/build" -G Ninja -DCMAKE_PREFIX_PATH="$P"
+            cmake --build "$ex/build" --parallel
+            echo "::endgroup::"
+          done
+
       - name: Package (.deb)
         working-directory: build
         run: |

@@ -19,10 +19,9 @@
 #            (this is the standard apt model).
 #   * dnf  — `repo_gpgcheck=1` verifies `repomd.xml.asc`; repomd carries the
 #            checksum of `primary.xml`, which carries the checksum of every
-#            .rpm. So a signed repomd transitively authenticates the
-#            packages, exactly like apt's signed Release. Package-level
-#            `gpgcheck` (rpm --addsign) is a separate, additive step left as
-#            a post-stable TODO; we ship `gpgcheck=0 repo_gpgcheck=1`.
+#            .rpm. Each .rpm is ALSO individually signed via `rpm --addsign`
+#            (header RSA/SHA256), so `gpgcheck=1` clients verify packages
+#            directly too. Both checks use the same project key.
 set -euo pipefail
 
 IN_DIR="${1:?usage: build-pages.sh <input-pkg-dir> <output-public-dir>}"
@@ -106,22 +105,39 @@ shopt -u nullglob
 [[ ${#rpms[@]} -gt 0 ]] || { echo "no .rpm files in $IN_DIR" >&2; exit 1; }
 cp "${rpms[@]}" "$RPM/"
 
+# Per-package signing: rpm --addsign embeds an RSA/SHA256 header signature so
+# `gpgcheck=1` clients verify every package directly, in addition to the
+# signed repomd (`repo_gpgcheck=1`). Headless gpg needs an explicit sign
+# command — rpm's default invocation doesn't pass --batch/--pinentry-mode
+# loopback, so a passphraseless key still fails with "gpg exec failed". The
+# recipe below is validated against rpm + gnupg on the Ubuntu pages runner.
+pkg_gpgcheck=0
+repo_gpgcheck=0
+if [[ -n "$KEY_ID" ]]; then
+    echo "==> signing rpms (rpm --addsign)"
+    gpgbin="$(command -v gpg)"
+    rpm --define "_gpg_name $KEY_ID" \
+        --define "__gpg $gpgbin" \
+        --define "__gpg_sign_cmd $gpgbin --batch --no-armor --pinentry-mode loopback --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}" \
+        --addsign "$RPM"/*.rpm
+    pkg_gpgcheck=1
+    repo_gpgcheck=1
+fi
+
 createrepo_c --quiet "$RPM"
 if [[ -n "$KEY_ID" ]]; then
     gpg --batch --yes --default-key "$KEY_ID" --detach-sign --armor "$RPM/repodata/repomd.xml"
 fi
 
 # Drop-in .repo file for /etc/yum.repos.d/. repo_gpgcheck verifies the signed
-# repomd; gpgcheck (per-package) is off because the rpms aren't individually
-# signed yet (the signed repomd already authenticates them via checksums).
-repo_gpgcheck=0
-[[ -n "$KEY_ID" ]] && repo_gpgcheck=1
+# repomd; gpgcheck verifies each package's own signature (rpm --addsign above).
+# Both are 1 when signing, 0 for an unsigned (fork) build.
 cat > "$RPM/qiftop.repo" <<EOF
 [qiftop]
 name=qiftop
 baseurl=$BASE_URL/rpm
 enabled=1
-gpgcheck=0
+gpgcheck=$pkg_gpgcheck
 repo_gpgcheck=$repo_gpgcheck
 gpgkey=$BASE_URL/qiftop-archive-keyring.asc
 EOF

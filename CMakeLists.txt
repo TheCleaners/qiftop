@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(qiftop VERSION 0.2.1 LANGUAGES CXX)
+project(qiftop VERSION 0.2.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -224,6 +224,16 @@ include(CMakePackageConfigHelpers)
 # the DBus client proxies (DBus*Monitor) to stream from the agent, the
 # aggregators for the smoothed/derived view, the filter mini-language, the
 # DTOs, and the JSON/CSV exporter — all Widgets-free.
+# Ship package directories with canonical 0755 permissions regardless of the
+# builder's umask. A developer running `cpack` under umask 002 would otherwise
+# stage group-writable 0775 directories, which dpkg packages verbatim and
+# lintian flags (non-standard-dir-perm). CI builders (umask 022) are unaffected,
+# but this keeps locally-built packages reproducible and lint-clean.
+set(CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
+    OWNER_READ OWNER_WRITE OWNER_EXECUTE
+    GROUP_READ GROUP_EXECUTE
+    WORLD_READ WORLD_EXECUTE)
+
 install(TARGETS qiftoplib
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             COMPONENT libqiftop

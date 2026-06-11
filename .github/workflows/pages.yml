@@ -44,7 +44,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            apt-utils createrepo-c gnupg
+            apt-utils createrepo-c gnupg rpm
 
       - name: Download all release packages (cumulative)
         env:

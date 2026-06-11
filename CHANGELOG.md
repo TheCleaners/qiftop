@@ -4,6 +4,47 @@ All notable changes to qiftop are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-10
+
+The "libqiftop consumers + polish" release: example consumers that exercise
+the shared library, plus nqiftop and packaging refinements.
+
+### Added
+- **Example consumers** under `examples/` (standalone `find_package(qiftop)`
+  projects, built against the installed library in CI so they can't bit-rot):
+  - `prometheus-exporter` — a Prometheus/OpenMetrics `/metrics` endpoint
+    (interface byte counters + per-container/process rate gauges). Alerting
+    such as "is a container incessantly hogging bandwidth?" is delegated to
+    Prometheus/Alertmanager via a PromQL `for:` clause — no new ecosystem to
+    learn. Container/process rates are gauges (windowed with
+    `max_over_time`), not fake counters over churning flows, keeping
+    cardinality bounded.
+  - `ndjson-connections` — per-flow NDJSON with process/container attribution.
+  - `snapshot-export` — one-shot CSV/JSON dump via `util::exporter`.
+  - `top-talkers` — a headless `iftop -t`-style top-N printer.
+- **nqiftop view export** — `w` writes the active view (interfaces or
+  connections) to a timestamped CSV via the shared exporter, with a transient
+  status line.
+
+### Changed
+- **nqiftop pause is now a true freeze.** `p` snapshots the current rows and
+  renders/navigates from that frozen copy, so the view no longer shifts or
+  resorts under a key-driven redraw while paused (the aggregators keep
+  updating in the background, so unpausing shows fresh data).
+
+### Fixed
+- The `ndjson-stream` example never called `qiftop::dbus::registerTypes()`, so
+  it silently received no data at runtime; fixed (and all examples now
+  register the DBus DTO metatypes).
+
+### Packaging
+- Each `.rpm` is now individually signed with `rpm --addsign` (header
+  RSA/SHA256) in the dnf repo, and the published `qiftop.repo` sets
+  `gpgcheck=1` — packages are verified directly, in addition to the signed
+  `repomd.xml`.
+- Package directories are staged 0755 regardless of the builder's umask
+  (locally-built packages are reproducible and lint-clean).
+
 ## [0.2.1] - 2026-06-10
 
 The "libqiftop + ncurses" release: the Widgets-free core is now a reusable
@@ -81,6 +122,7 @@ shared library, and qiftop gains a first-class terminal frontend.
   IPv6 support, a system tray with live sparklines, and a filter
   mini-language.
 
+[0.2.2]: https://github.com/TheCleaners/qiftop/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/TheCleaners/qiftop/compare/v0.2...v0.2.1
 [0.2]: https://github.com/TheCleaners/qiftop/compare/v0.1...v0.2
 [0.1]: https://github.com/TheCleaners/qiftop/releases/tag/v0.1
