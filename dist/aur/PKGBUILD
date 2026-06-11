@@ -2,14 +2,24 @@
 # A split-package layout (qiftop / qiftop-agent / nqiftop / libqiftop) is
 # possible later; for v0.2.4 this intentionally ships all install components
 # in one straightforward package.
+#
+# Verified end-to-end in an archlinux:latest container: makepkg builds, the
+# package installs, and all artifacts land (binaries, libqiftop.so, the
+# freedesktop .desktop + AppStream metainfo + hicolor icons, the systemd unit
+# relocated to /usr/lib, shell completions, and the netdev group via
+# qiftop.install).
+#
+# Known namcap note: check_qiftop installs to /usr/libexec/qiftop (namcap
+# prefers /usr/lib on Arch). The libexec path is set by GNUInstallDirs and is
+# shared across every package format (deb/rpm/aur); not special-cased here.
 pkgname=qiftop
 pkgver=0.2.3
 pkgrel=1
 pkgdesc='Qt6 iftop-style network monitor with GUI, TUI, DBus agent and library'
 arch=('x86_64')
 url='https://github.com/TheCleaners/qiftop'
-license=('GPL2')
-depends=('qt6-base' 'libnl' 'libnetfilter_conntrack' 'ncurses')
+license=('GPL-2.0-or-later')
+depends=('qt6-base' 'libnl' 'libnetfilter_conntrack' 'ncurses' 'hicolor-icon-theme')
 makedepends=('cmake' 'ninja' 'pkgconf')
 optdepends=(
   'nftables: enable the qiftop-agent conntrack shim for IPv6 flow visibility'
@@ -25,7 +35,8 @@ build() {
   cmake -S "$srcdir/$pkgname-$pkgver" -B "$srcdir/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
-    -DQIFTOP_BUILD_TESTS=OFF
+    -DQIFTOP_BUILD_TESTS=OFF \
+    -DQIFTOP_AUTO_PACKAGE=OFF
   ninja -C "$srcdir/build"
 }
 
