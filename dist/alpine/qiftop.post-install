@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# Best-effort enrollment for installs launched via sudo or pkexec, mirroring
+# the Debian/RPM packaging. Failing to enroll must never fail package install.
+target_user=""
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+	target_user="${SUDO_USER}"
+elif [ -n "${PKEXEC_UID:-}" ]; then
+	target_user="$(getent passwd "${PKEXEC_UID}" 2>/dev/null | cut -d: -f1 || true)"
+fi
+
+if [ -n "$target_user" ] && getent passwd "$target_user" >/dev/null 2>&1; then
+	if ! id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx netdev; then
+		if command -v addgroup >/dev/null 2>&1; then
+			addgroup "$target_user" netdev >/dev/null 2>&1 || true
+			echo "qiftop: added user '$target_user' to group 'netdev'." >&2
+			echo "qiftop: log out and back in (or run 'newgrp netdev') for it to take effect." >&2
+		fi
+	fi
+fi
+
+if command -v rc-service >/dev/null 2>&1; then
+	rc-service dbus reload >/dev/null 2>&1 || true
+fi
+
+cat >&2 <<'MSG'
+qiftop: qiftop-agent DBus access is restricted to root and netdev members.
+Alpine uses OpenRC, so the packaged systemd unit is not enabled or used.
+A native OpenRC service for qiftop-agent is not shipped yet.
+MSG
+
+exit 0

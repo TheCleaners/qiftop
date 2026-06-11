@@ -1,0 +1,66 @@
+# Contributor: qiftop maintainers <noreply@example.com>
+# Maintainer: qiftop maintainers <noreply@example.com>
+#
+# First-cut Alpine package: intentionally single-package, matching the AUR
+# PKGBUILD. A future split into qiftop-agent / qiftop-libs / qiftop-dev /
+# nqiftop / qiftop-monitoring-plugin would better match Alpine policy once
+# the OpenRC service story is finalized.
+#
+# Alpine uses OpenRC, not systemd. Upstream installs a systemd unit for other
+# distros; this recipe relocates it to /usr/lib/systemd/system so it is inert
+# on Alpine but still available for systemd-based derivatives. A native OpenRC
+# init script that also loads the nftables conntrack shim is a future addition.
+#
+# Verified in an alpine:latest container: abuild -r builds and signs the .apk,
+# it installs, and all artifacts land (binaries, libqiftop.so, check_qiftop,
+# both .desktop files + AppStream metainfo, completions, the inert systemd
+# unit, netdev group). Build passes -DQIFTOP_AUTO_PACKAGE=OFF (mandatory: the
+# agent target's POST_BUILD cpack hook otherwise fires mid-build).
+pkgname=qiftop
+pkgver=0.2.3
+pkgrel=0
+pkgdesc="Qt6 iftop-style network monitor with GUI, TUI, DBus agent and library"
+url="https://github.com/TheCleaners/qiftop"
+arch="x86_64"
+license="GPL-2.0-or-later"
+depends="dbus hicolor-icon-theme"
+makedepends="
+	cmake
+	g++
+	libnetfilter_conntrack-dev
+	libnl3-dev
+	ncurses-dev
+	pkgconf
+	qt6-qtbase-dev
+	qt6-qtbase-private-dev
+	samurai
+	"
+install="$pkgname.pre-install $pkgname.post-install"
+source="$pkgname-$pkgver.tar.gz::https://github.com/TheCleaners/qiftop/archive/refs/tags/v$pkgver.tar.gz"
+builddir="$srcdir/$pkgname-$pkgver"
+
+build() {
+	cmake -S . -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DQIFTOP_BUILD_TESTS=OFF \
+		-DQIFTOP_AUTO_PACKAGE=OFF
+	cmake --build build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+
+	# Upstream installs this under /lib/systemd/system for Debian-derived
+	# packages. Alpine does not consume systemd units by default (OpenRC), so
+	# keep it out of /lib and leave it as an inert compatibility artifact.
+	if [ -d "$pkgdir/lib/systemd/system" ]; then
+		install -dm755 "$pkgdir/usr/lib/systemd/system"
+		mv "$pkgdir"/lib/systemd/system/* "$pkgdir/usr/lib/systemd/system/"
+		rmdir "$pkgdir/lib/systemd/system" "$pkgdir/lib/systemd" "$pkgdir/lib" 2>/dev/null || true
+	fi
+}
+
+# Fill this with the release tarball checksum when publishing to Alpine/aports.
+sha512sums="SKIP"
