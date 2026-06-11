@@ -298,24 +298,30 @@ endif()
 
 # Man pages. Debian policy + lintian require installed man pages to be
 # gzip-compressed (`uncompressed-manual-page` is a lintian error). CPack
-# does not run debhelper's dh_compress, so we gzip them at build time and
-# install the .gz ourselves. `gzip -n` drops the name/mtime header for
-# reproducible packages. Grouped by component so each binary ships its
-# own page(s).
+# does not run debhelper's dh_compress, so we gzip them ourselves.
+#
+# Compress at CONFIGURE time (execute_process) rather than via a build-time
+# custom target: the release RPM job builds only named targets
+# (`cmake --build --target qiftop qiftop-agent nqiftop`), which would skip an
+# `ALL` custom target and leave the .gz missing when cpack runs its install.
+# Generating during configure guarantees the .gz exists before any build or
+# cpack step. The source pages are added to CMAKE_CONFIGURE_DEPENDS so editing
+# one re-triggers configure (and recompression).
 find_program(GZIP_TOOL gzip)
 function(qiftop_install_manpage SRC SECTION COMPONENT)
     if(GZIP_TOOL)
         get_filename_component(_name "${SRC}" NAME)
+        set(_src "${CMAKE_CURRENT_SOURCE_DIR}/${SRC}")
         set(_gz "${CMAKE_BINARY_DIR}/man/${_name}.gz")
-        add_custom_command(
-            OUTPUT  "${_gz}"
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/man"
-            COMMAND ${GZIP_TOOL} -9 -n -c "${CMAKE_CURRENT_SOURCE_DIR}/${SRC}" > "${_gz}"
-            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${SRC}"
-            COMMENT "Compressing man page ${_name}"
-            VERBATIM)
-        string(MAKE_C_IDENTIFIER "manpage_${_name}" _tgt)
-        add_custom_target("${_tgt}" ALL DEPENDS "${_gz}")
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/man")
+        execute_process(
+            COMMAND ${GZIP_TOOL} -9 -n -c "${_src}"
+            OUTPUT_FILE "${_gz}"
+            RESULT_VARIABLE _gzrc)
+        if(NOT _gzrc EQUAL 0)
+            message(FATAL_ERROR "Failed to gzip man page ${SRC} (rc=${_gzrc})")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_src}")
         install(FILES "${_gz}"
                 DESTINATION "${CMAKE_INSTALL_MANDIR}/man${SECTION}"
                 COMPONENT "${COMPONENT}")
