@@ -1,4 +1,5 @@
 #include "ConntrackMonitor.h"
+#include "ConntrackOrient.h"
 #include "util/Logging.h"
 
 #include <QFile>
@@ -181,25 +182,12 @@ int nfctCallback(enum nf_conntrack_msg_type, struct nf_conntrack *ct, void *data
     const quint64 origPkts  = getU64(ATTR_ORIG_COUNTER_PACKETS);
     const quint64 replPkts  = getU64(ATTR_REPL_COUNTER_PACKETS);
 
-    // Decide local/remote orientation from the host's interface addresses:
-    //  - If src is local, this is an outbound flow → tx = ORIG, rx = REPL.
-    //  - If dst is local (and src is not), this is inbound → swap.
-    //  - Otherwise (forwarded/none) keep the ORIG tuple as-is.
-    Connection c;
-    c.proto = proto;
-    const bool srcLocal = ctx->localAddrs->contains(src);
-    const bool dstLocal = ctx->localAddrs->contains(dst);
-    if (srcLocal || !dstLocal) {
-        c.local   = {src, sport};
-        c.remote  = {dst, dport};
-        c.txBytes = origBytes;  c.rxBytes  = replBytes;
-        c.txPackets = origPkts; c.rxPackets = replPkts;
-    } else {
-        c.local   = {dst, dport};
-        c.remote  = {src, sport};
-        c.txBytes = replBytes;  c.rxBytes  = origBytes;
-        c.txPackets = replPkts; c.rxPackets = origPkts;
-    }
+    Connection c = qiftop::backend::linux::orientConntrackFlow(src, dst,
+                                                               sport, dport,
+                                                               proto,
+                                                               origBytes, replBytes,
+                                                               origPkts, replPkts,
+                                                               *ctx->localAddrs);
     c.iface   = attributeIface(ctx, c.local.address, c.remote.address);
     c.ifIndex = cachedIfIndex(ctx->ifIndexCache, c.iface);
     if (proto == L4Proto::Tcp && nfct_attr_is_set(ct, ATTR_TCP_STATE)) {

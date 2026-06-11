@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <vector>
 
 #include "IdleManager.h"
 #include "Attribution.h"
@@ -41,6 +42,29 @@ HostContext gatherHostContext()
     ctx.ephemeralLow  = lo;
     ctx.ephemeralHigh = hi;
     return ctx;
+}
+
+struct ByteTotal {
+    quint64 low = 0;
+    bool carry = false;
+};
+
+ByteTotal totalBytes(const Connection &c)
+{
+    constexpr auto kMax = std::numeric_limits<quint64>::max();
+    return ByteTotal{
+        c.rxBytes + c.txBytes,
+        c.rxBytes > kMax - c.txBytes,
+    };
+}
+
+bool hasGreaterTotalBytes(const Connection &a, const Connection &b)
+{
+    const ByteTotal at = totalBytes(a);
+    const ByteTotal bt = totalBytes(b);
+    if (at.carry != bt.carry)
+        return at.carry;
+    return at.low > bt.low;
 }
 
 } // namespace
@@ -147,19 +171,28 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
     // see in a "top talkers" tool — and log when we truncate.
     static constexpr int kMaxConnections = 4096;
 
-    QList<Connection> kept = conns;
-    if (kept.size() > kMaxConnections) {
-        std::partial_sort(kept.begin(),
-                          kept.begin() + kMaxConnections,
-                          kept.end(),
-                          [](const Connection &a, const Connection &b) {
-                              return (a.rxBytes + a.txBytes) > (b.rxBytes + b.txBytes);
+    QList<Connection> kept;
+    if (conns.size() > kMaxConnections) {
+        std::vector<const Connection *> top;
+        top.reserve(static_cast<std::size_t>(conns.size()));
+        for (const Connection &c : conns)
+            top.push_back(&c);
+        std::partial_sort(top.begin(),
+                          top.begin() + kMaxConnections,
+                          top.end(),
+                          [](const Connection *a, const Connection *b) {
+                              return hasGreaterTotalBytes(*a, *b);
                           });
+        kept.reserve(kMaxConnections);
+        for (int i = 0; i < kMaxConnections; ++i)
+            kept.append(*top[static_cast<std::size_t>(i)]);
         kept.resize(kMaxConnections);
         // qWarning, not qCInfo, because it means the user is losing data.
         qWarning().noquote()
             << "ConnectionsService: capping snapshot at" << kMaxConnections
             << "of" << conns.size() << "flows (kept top talkers by bytes)";
+    } else {
+        kept = conns;
     }
 
     // Populate Direction server-side so non-Qt libqiftop consumers don't

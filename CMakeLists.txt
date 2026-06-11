@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(qiftop VERSION 0.2.2 LANGUAGES CXX)
+project(qiftop VERSION 0.2.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -180,6 +180,14 @@ if(QIFTOP_BUILD_TUI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 endif()
 
+# --- Monitoring plugin (Nagios / Icinga / Zabbix-compatible) ----------------
+# Pure libqiftop DBus consumer; no Widgets and no in-process backend fallback.
+add_executable(check_qiftop
+    src/tools/check-qiftop/main.cpp)
+target_include_directories(check_qiftop PRIVATE src)
+target_link_libraries(check_qiftop PRIVATE qiftoplib)
+target_compile_definitions(check_qiftop PRIVATE QIFTOP_VERSION="${PROJECT_VERSION}")
+
 # --- Demo harness (privacy-safe synthetic GUI driver) -----------------------
 # Off by default. Builds docs/demo/qiftop-demo.cpp, which drives the real
 # MainWindow from the in-memory test fakes with fabricated data (RFC 5737
@@ -306,6 +314,13 @@ if(TARGET nqiftop)
             COMPONENT nqiftop)
 endif()
 
+# Monitoring daemons conventionally execute plugins from libexec rather than
+# PATH. Keep the binary under a qiftop-owned subdirectory so distro-specific
+# nagios-plugins directories do not need to exist on every target system.
+install(TARGETS check_qiftop
+        RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/qiftop
+        COMPONENT check-qiftop)
+
 # Man pages. Debian policy + lintian require installed man pages to be
 # gzip-compressed (`uncompressed-manual-page` is a lintian error). CPack
 # does not run debhelper's dh_compress, so we gzip them ourselves.
@@ -350,6 +365,7 @@ qiftop_install_manpage(dist/man/qiftop-agent.conf.5 5 qiftop-agent)
 if(TARGET nqiftop)
     qiftop_install_manpage(dist/man/nqiftop.1       1 nqiftop)
 endif()
+qiftop_install_manpage(dist/man/check_qiftop.1      1 check-qiftop)
 
 install(FILES LICENSE README.md
         DESTINATION ${CMAKE_INSTALL_DOCDIR}
@@ -516,6 +532,17 @@ nqiftop is a terminal UI for live per-interface and per-connection traffic,
 built on libqiftop. It streams from the qiftop-agent over DBus, or captures
 in-process when run as root — no X/Wayland needed, so it works over SSH.")
 
+# --- check_qiftop monitoring-plugin package ---------------------------------
+set(CPACK_DEBIAN_CHECK-QIFTOP_PACKAGE_NAME    "qiftop-monitoring-plugin")
+set(CPACK_DEBIAN_CHECK-QIFTOP_PACKAGE_SECTION "net")
+set(CPACK_DEBIAN_CHECK-QIFTOP_PACKAGE_DEPENDS "libqiftop0 (= ${CPACK_PACKAGE_VERSION})")
+set(CPACK_DEBIAN_CHECK-QIFTOP_PACKAGE_RECOMMENDS "qiftop-agent")
+set(CPACK_DEBIAN_CHECK-QIFTOP_DESCRIPTION
+"Nagios/Icinga/Zabbix monitoring plugin for qiftop.
+check_qiftop is a one-shot threshold checker built on libqiftop. It streams
+from qiftop-agent over DBus, waits for enough samples to compute rates, then
+emits standard Nagios plugin status and perfdata.")
+
 # --- RPM generator (Fedora / openSUSE etc.) ---------------------------------
 # Mirrors the DEB config above. Built with `cpack -G RPM` (needs rpmbuild +
 # the Fedora -devel libs). Library Requires are discovered automatically by
@@ -559,6 +586,11 @@ set(CPACK_RPM_LIBQIFTOP-DEV_PACKAGE_REQUIRES "qiftop-libs = ${CPACK_PACKAGE_VERS
 set(CPACK_RPM_NQIFTOP_PACKAGE_NAME    "nqiftop")
 set(CPACK_RPM_NQIFTOP_PACKAGE_SUMMARY "ncurses network monitor (qiftop, headless)")
 set(CPACK_RPM_NQIFTOP_PACKAGE_RECOMMENDS "qiftop-agent")
+
+# check_qiftop rpm: auto-req resolves libqiftop.so.0 + Qt6.
+set(CPACK_RPM_CHECK-QIFTOP_PACKAGE_NAME    "qiftop-monitoring-plugin")
+set(CPACK_RPM_CHECK-QIFTOP_PACKAGE_SUMMARY "Nagios/Icinga/Zabbix monitoring plugin for qiftop")
+set(CPACK_RPM_CHECK-QIFTOP_PACKAGE_RECOMMENDS "qiftop-agent")
 # Preserve user edits to the config file across upgrades (Fedora %config(noreplace)).
 set(CPACK_RPM_QIFTOP-AGENT_USER_FILELIST "%config(noreplace) /etc/qiftop/agent.conf")
 # Group creation + user enrollment + systemd reload, mirroring the DEB
@@ -611,6 +643,9 @@ if(TARGET nqiftop)
         DISPLAY_NAME "nqiftop ncurses frontend"
         DESCRIPTION  "Headless terminal UI for live interface + connection traffic")
 endif()
+cpack_add_component(check-qiftop
+    DISPLAY_NAME "check_qiftop monitoring plugin"
+    DESCRIPTION  "Nagios/Icinga/Zabbix-compatible one-shot qiftop threshold checker")
 
 # --- Auto-rebuild .deb packages on every build ------------------------------
 # Convenience for developers: keep the per-component .debs in the build dir

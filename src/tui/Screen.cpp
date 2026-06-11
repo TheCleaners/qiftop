@@ -310,8 +310,10 @@ void Screen::render(const Frame &f)
     // --- body (starts at line 3: title bar, menu bar, header above) ---
     const int body = bodyHeight();
     const int total = static_cast<int>(f.rows.size());
+    const bool showMore = body > 1 && (f.scrollOffset + body) < total;
+    const int dataLines = showMore ? body - 1 : body;
     int shown = 0;
-    for (int i = 0; i < body && (f.scrollOffset + i) < total; ++i) {
+    for (int i = 0; i < dataLines && (f.scrollOffset + i) < total; ++i) {
         const int idx = f.scrollOffset + i;
         const Role role = idx < f.rowRoles.size() ? f.rowRoles[idx] : Role::Normal;
         const bool isCursor = (idx == f.cursor);
@@ -337,9 +339,9 @@ void Screen::render(const Frame &f)
         ++shown;
     }
     const int below = total - (f.scrollOffset + shown);
-    if (below > 0 && body > 0) {
+    if (showMore && below > 0) {
         attrset(attrFor(Role::Stale));
-        putLine(3 + body - 1,
+        putLine(3 + shown,
                 fitCell(QStringLiteral("  … +%1 more (↓ to scroll)").arg(below),
                         width, false));
         attrset(A_NORMAL);

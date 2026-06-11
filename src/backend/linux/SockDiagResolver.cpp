@@ -158,6 +158,11 @@ struct SockDiagResolver::Impl {
             std::snprintf(fdPath, sizeof(fdPath), "/proc/%ld/fd", pid);
             DIR *fdDir = ::opendir(fdPath);
             if (!fdDir) continue;
+            // Snapshot once per pid per refresh, then reuse for every socket fd
+            // owned by that pid. The resolve/enrich paths still re-check the
+            // current starttime before serving cached attribution.
+            const auto st = procsnap::pidStartTime(qint32(pid));
+            const quint64 startTime = st.value_or(0);
             while (auto *fde = ::readdir(fdDir)) {
                 if (fde->d_name[0] == '.') continue;
                 char linkPath[96];
@@ -175,14 +180,11 @@ struct SockDiagResolver::Impl {
                         const QString target = QString::fromUtf8(linkBuf.data(),
                                                                  int(n));
                         if (auto inode = sockdiag::parseSocketLink(target)) {
-                            // Snapshot starttime now; verifies later.
-                            // If the pid is already gone, store 0 —
-                            // resolveFlow will treat any nonzero
-                            // mismatch as reuse.
-                            const auto st = procsnap::pidStartTime(qint32(pid));
-                            inodeToPid.insert(*inode,
-                                              { qint32(pid), st.value_or(0) });
-                            pidToStartTime.insert(qint32(pid), st.value_or(0));
+                            // If the pid is already gone, store 0 — resolvePid
+                            // will reject it when the guard cannot re-read the
+                            // same starttime.
+                            inodeToPid.insert(*inode, { qint32(pid), startTime });
+                            pidToStartTime.insert(qint32(pid), startTime);
                         }
                         break;
                     }
@@ -278,23 +280,35 @@ qint32 SockDiagResolver::resolvePid(const Connection &flow)
     std::lock_guard lock(m_d->mu);
     m_d->maybeRefresh();
 
-    // Try the full 4-tuple first (connected sockets / established TCP), then
-    // fall back to a local-only match for unconnected UDP sockets and
-    // listeners: first the flow's exact local addr+port, then a wildcard bind
-    // (0.0.0.0 / ::) on the same port.
+    // Try the full 4-tuple first (connected sockets / established TCP). UDP
+    // then gets a local-only fallback for unconnected sockets: exact local
+    // addr+port, then wildcard bind (0.0.0.0 / ::) on the same port. TCP
+    // listeners are deliberately excluded from the local fallback: listener
+    // collisions are common and live TCP flows should have a full tuple.
     auto itSock = m_d->keyToInode.constFind(
         makeKey(proto, flow.local.address, flow.local.port,
                 flow.remote.address, flow.remote.port));
-    if (itSock == m_d->keyToInode.constEnd())
-        itSock = m_d->keyToInode.constFind(
+    if (itSock == m_d->keyToInode.constEnd() && proto == IPPROTO_UDP) {
+        const auto itLocal = m_d->keyToInode.constFind(
             sockdiag::makeLocalKey(proto, flow.local.address, flow.local.port));
-    if (itSock == m_d->keyToInode.constEnd()) {
         const bool v6 = flow.local.address.protocol() == QAbstractSocket::IPv6Protocol;
         const QHostAddress anyAddr(v6 ? QHostAddress::AnyIPv6 : QHostAddress::AnyIPv4);
-        itSock = m_d->keyToInode.constFind(
+        const auto itWildcard = m_d->keyToInode.constFind(
             sockdiag::makeLocalKey(proto, anyAddr, flow.local.port));
+
+        if (itLocal != m_d->keyToInode.constEnd()) {
+            if (itWildcard != m_d->keyToInode.constEnd()
+                && (sockdiag::isAmbiguousLocalInode(*itWildcard)
+                    || *itWildcard != *itLocal)) {
+                return 0;
+            }
+            itSock = itLocal;
+        } else {
+            itSock = itWildcard;
+        }
     }
     if (itSock == m_d->keyToInode.constEnd()) return 0;
+    if (sockdiag::isAmbiguousLocalInode(*itSock)) return 0;
     auto itPid = m_d->inodeToPid.constFind(*itSock);
     if (itPid == m_d->inodeToPid.constEnd()) return 0;
 

@@ -92,6 +92,58 @@ public:
 private:
     QList<aggregate::InterfaceAggregator::Row> m_rows;
 };
+
+QList<int> displayedConnectionIndices(const QList<aggregate::ConnectionAggregator::Row> &rows,
+                                      const aggregate::ConnectionAggregator &agg,
+                                      int sortCol,
+                                      bool sortDesc,
+                                      const qiftop::filter::ExprPtr &filterExpr)
+{
+    const QList<int> order = sortedConnectionIndices(rows, sortCol, sortDesc);
+    QList<int> matched;
+    matched.reserve(order.size());
+    for (int i : order) {
+        if (!filterExpr) {
+            matched << i;
+            continue;
+        }
+        const auto &row = rows[i];
+        const Connection &c = row.current;
+        const qiftop::filter::Context ctx{
+            c, row.rxRate, row.txRate,
+            agg.cachedHostname(c.local.address),
+            agg.cachedHostname(c.remote.address),
+        };
+        if (qiftop::filter::matches(filterExpr, ctx))
+            matched << i;
+    }
+    return matched;
+}
+
+QList<aggregate::ConnectionAggregator::Row>
+rowsForIndices(const QList<aggregate::ConnectionAggregator::Row> &rows,
+               const QList<int> &indices)
+{
+    QList<aggregate::ConnectionAggregator::Row> out;
+    out.reserve(indices.size());
+    for (int i : indices)
+        out << rows[i];
+    return out;
+}
+
+QString uniqueExportPath(const QString &baseName, const QString &stamp)
+{
+    QDir dir = QDir::current();
+    QString name = QStringLiteral("%1-%2.csv").arg(baseName, stamp);
+    if (!dir.exists(name))
+        return dir.absoluteFilePath(name);
+
+    for (int n = 1; ; ++n) {
+        name = QStringLiteral("%1-%2-%3.csv").arg(baseName, stamp).arg(n);
+        if (!dir.exists(name))
+            return dir.absoluteFilePath(name);
+    }
+}
 }
 
 
@@ -393,8 +445,9 @@ Frame TuiApp::buildFrame()
         f.sortCol  = m_connSortCol;
         f.sortDesc = m_connSortDesc;
         const auto &rows = m_paused ? m_frozenConnRows : m_connAgg->rows();
-        const QList<int> order =
-            sortedConnectionIndices(rows, m_connSortCol, m_connSortDesc);
+        const QList<int> matched =
+            displayedConnectionIndices(rows, *m_connAgg, m_connSortCol,
+                                       m_connSortDesc, m_filterExpr);
 
         // Direction colours can be disabled (a customization point): fall back
         // to Normal, but still mark stale rows so they read as dimmed.
@@ -403,24 +456,6 @@ Frame TuiApp::buildFrame()
                 return rowRoleForConnection(*m_connAgg, r);
             return r.stale ? Role::Stale : Role::Normal;
         };
-
-        const auto passesFilter = [&](const aggregate::ConnectionAggregator::Row &row) {
-            if (!m_filterExpr)
-                return true;
-            const Connection &c = row.current;
-            const qiftop::filter::Context ctx{
-                c, row.rxRate, row.txRate,
-                m_connAgg->cachedHostname(c.local.address),
-                m_connAgg->cachedHostname(c.remote.address),
-            };
-            return qiftop::filter::matches(m_filterExpr, ctx);
-        };
-
-        // Filtered indices in the current sort order.
-        QList<int> matched;
-        for (int i : order)
-            if (passesFilter(rows[i]))
-                matched << i;
 
         if (m_groupBy == GroupBy::None) {
             for (int i : matched) {
@@ -533,6 +568,8 @@ Frame TuiApp::buildFrame()
             else if (cursor >= scroll + body)
                 scroll = cursor - body + 1;
             scroll = std::clamp(scroll, 0, std::max(0, total - body));
+            if (body > 1 && scroll + body < total && cursor >= scroll + body - 1)
+                scroll = std::clamp(cursor - body + 2, 0, std::max(0, total - body));
         }
         f.cursor = cursor;
     }
@@ -750,8 +787,8 @@ void TuiApp::exportCurrentView()
     // Snapshot the active view's rows (frozen copy when paused) and serialise
     // to CSV via the shared libqiftop exporter, into a timestamped file in the
     // current working directory. A transient footer message reports the result.
-    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
-    QString name, err;
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    QString path, err;
     QByteArray data;
     int count = 0;
 
@@ -759,15 +796,19 @@ void TuiApp::exportCurrentView()
         IfaceRowsExportable ex(m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows());
         count = ex.exportRowCount();
         data  = util::exporter::toCsv(ex);
-        name  = QStringLiteral("qiftop-interfaces-%1.csv").arg(stamp);
+        path  = uniqueExportPath(QStringLiteral("qiftop-interfaces"), stamp);
     } else {
-        ConnRowsExportable ex(m_paused ? m_frozenConnRows : m_connAgg->rows());
+        const auto &rows = m_paused ? m_frozenConnRows : m_connAgg->rows();
+        // Grouped views render synthetic group headers; CSV exports the flat
+        // filtered/sorted flow set underneath so downstream tools get records.
+        ConnRowsExportable ex(rowsForIndices(
+            rows, displayedConnectionIndices(rows, *m_connAgg, m_connSortCol,
+                                             m_connSortDesc, m_filterExpr)));
         count = ex.exportRowCount();
         data  = util::exporter::toCsv(ex);
-        name  = QStringLiteral("qiftop-connections-%1.csv").arg(stamp);
+        path  = uniqueExportPath(QStringLiteral("qiftop-connections"), stamp);
     }
 
-    const QString path = QDir::current().absoluteFilePath(name);
     if (util::exporter::save(path, data, &err))
         flashMessage(QStringLiteral("Exported %1 rows to %2").arg(count).arg(path));
     else
