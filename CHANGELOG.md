@@ -4,6 +4,33 @@ All notable changes to qiftop are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-06-11
+
+A performance release: hot-path optimizations on the agent and UI, all
+behaviour-preserving (verified on glibc and musl).
+
+### Performance
+- **Aggregator signal coalescing** — `ConnectionAggregator` emitted a
+  per-row `rowsUpdated(i,i)` during each update (thousands of granular
+  signals per tick on a busy host, each driving proxy invalidation +
+  repaint). It now emits one `rowsUpdated(first,last)` per maximal
+  contiguous run of changed rows.
+- **Single-pass netns scan** — `NetnsScanner` walked `/proc` once per
+  namespace (O(netns × processes)); it now walks `/proc` once into a
+  `netns→pids` map and processes only each namespace's own pids. All
+  `setns` fencing and PID-reuse guards are preserved.
+- **Delegate allocation reuse** — `ConnectionFlowDelegate` reuses a single
+  `QTextDocument` instead of allocating one per cell per repaint frame
+  (rendered output unchanged).
+- **Bounded LRU route cache** — `ConntrackMonitor`'s route / ifindex caches
+  evict least-recently-used entries instead of clearing wholesale on
+  overflow, eliminating per-tick thrash on routers with many unique remotes.
+
+### Tested
+- New `test_aggregator_signals` verifies the coalescing (contiguous updates
+  collapse to one range, sparse updates to maximal runs). Full suite (34
+  tests) green on glibc and Alpine/musl.
+
 ## [0.2.4] - 2026-06-11
 
 The "rounded-out distribution" release: desktop-environment integration,
@@ -321,6 +348,7 @@ privileged DBus daemon).
 - CI also ran packaging QA (`lintian`, `desktop-file-validate`, and a Docker
   smoke install).
 
+[0.2.5]: https://github.com/TheCleaners/qiftop/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/TheCleaners/qiftop/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/TheCleaners/qiftop/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/TheCleaners/qiftop/compare/v0.2.1...v0.2.2
