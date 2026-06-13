@@ -18,7 +18,7 @@
 #      unit and the D-Bus system policy that should be pruned for BSD).
 #   2. Build with `make` and fix up PLIST/options until clean.
 
-DISTNAME=	qiftop-0.2.5
+DISTNAME=	qiftop-0.3.0
 CATEGORIES=	net
 MASTER_SITES=	${MASTER_SITE_GITHUB:=TheCleaners/}
 GITHUB_PROJECT=	qiftop

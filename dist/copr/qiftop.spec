@@ -11,7 +11,7 @@
 # clean apart from spelling false-positives (ncurses/Nagios/libqiftop/perfdata).
 
 Name:           qiftop
-Version:        0.2.5
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        Qt6 iftop-style network monitor
 
@@ -206,6 +206,11 @@ fi
 
 
 %changelog
+* Fri Jun 12 2026 qiftop maintainers <noreply@example.com> - 0.3.0-1
+- BSD client support (FreeBSD/NetBSD), attribution reason taxonomy
+  (forwarded/orphaned/nosocket, contract Version 0.6), v4-mapped IPv6
+  attribution fix, root-owned-config fix, new-client/old-agent wire
+  tolerance, and nqiftop UX (group collapse, Ctrl-F/Ctrl-B, W export).
 * Wed Jun 11 2026 qiftop maintainers <noreply@example.com> - 0.2.5-1
 - Performance: aggregator signal coalescing, single-pass netns scan,
   delegate allocation reuse, bounded LRU route cache.
