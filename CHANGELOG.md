@@ -4,6 +4,58 @@ All notable changes to qiftop are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-12
+
+The "all-inclusive" release: first-class **BSD support** (FreeBSD + NetBSD
+client builds), deeper **process/container attribution**, and a batch of
+correctness fixes. The Linux agent and the D-Bus contract remain
+backward-compatible — older clients keep working, and new clients now degrade
+gracefully against older agents.
+
+### Added
+- **BSD platform support** — `qiftop` (GUI), `nqiftop` (TUI) and `libqiftop`
+  build on **FreeBSD 14/15 and NetBSD 11** from the same tree (the Linux-only
+  agent is simply not built). In-process capture: `getifaddrs(3)` interface
+  counters, **libpcap/BPF** per-flow accounting with a userspace flow table and
+  SYN-based direction, a pure-`sysctl` socket→PID join for process attribution,
+  and **FreeBSD jail attribution** (jailed flows tagged `runtime:jail`). See
+  `docs/PORTABILITY.md` §7.
+- **Attribution reason** — every flow now reports *why* it is or isn't
+  attributed to a local process: `resolved`, `forwarded` (routed/NAT — no local
+  owner by design), `orphaned` (TCP socket torn down) or `nosocket`. Surfaced as
+  a colour-coded label in the GUI Process column, in the TUI detail panel, and
+  as a new `reason:` filter field. Computed server-side (D-Bus contract
+  `Version` 0.6, capability `attribution-reason`); clients derive it locally
+  when talking to an agent that predates the token.
+- **nqiftop** gained group collapse/expand (`h`/`l`/Enter), a grouping-aware
+  flow-column header, `Ctrl-F`/`Ctrl-B` page down/up (vim/less aliases), and a
+  `W` export action that prompts for a filename (`w` still auto-names).
+
+### Fixed
+- **Dual-stack (v4-mapped IPv6) attribution** — flows owned by an `AF_INET6`
+  socket serving an IPv4 peer (`::ffff:a.b.c.d`, the default for many daemons:
+  kdeconnect, sshd, most JVMs) were never attributed because the v6 socket key
+  could not match the pure-IPv4 conntrack flow. The sock_diag indexer now also
+  keys such sockets under their IPv4 form. On a typical host this raised overall
+  flow attribution from ~47% to ~73%.
+- **No more root-owned files in your home** — running a client privileged with a
+  foreign `$HOME` (`sudo -E nqiftop`, or the GUI self-elevation re-exec) used to
+  write root-owned `~/.config/qiftop/*.conf`. Settings are now loaded but not
+  written when persisting would escalate into another user's config directory.
+- **New client vs. old agent no longer crashes** — a newer client reading an
+  older agent's shorter D-Bus struct aborted (read past the end of the
+  structure). The wire readers now tolerate any shorter (append-only) struct,
+  and clients demarshal the raw reply instead of the typed reply that Qt would
+  reject outright on a signature mismatch.
+- **nqiftop**: fixed a 100% CPU spin on stdin EOF and unresponsive input on
+  FreeBSD (raw `read(2)` input path), plus garbled box-drawing on BSD curses
+  (wide-char rendering).
+
+### Changed
+- D-Bus contract `Version` → **0.6** (additive: `ConnectionDto.reason`,
+  capability `attribution-reason`). `org.qiftop.NetworkAgent1` is unchanged
+  otherwise; no `NetworkAgent2`.
+
 ## [0.2.5] - 2026-06-11
 
 A performance release: hot-path optimizations on the agent and UI, all
@@ -348,6 +400,7 @@ privileged DBus daemon).
 - CI also ran packaging QA (`lintian`, `desktop-file-validate`, and a Docker
   smoke install).
 
+[0.3.0]: https://github.com/TheCleaners/qiftop/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/TheCleaners/qiftop/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/TheCleaners/qiftop/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/TheCleaners/qiftop/compare/v0.2.2...v0.2.3
