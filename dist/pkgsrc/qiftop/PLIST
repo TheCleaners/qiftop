@@ -51,7 +51,7 @@ lib/cmake/qiftop/qiftopConfig.cmake
 lib/cmake/qiftop/qiftopConfigVersion.cmake
 lib/libqiftop.so
 lib/libqiftop.so.0
-lib/libqiftop.so.0.2.5
+lib/libqiftop.so.0.3.0
 lib/pkgconfig/qiftop.pc
 libexec/qiftop/check_qiftop
 man/man1/check_qiftop.1.gz

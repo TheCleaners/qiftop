@@ -41,20 +41,23 @@ settings panel and live theme switching](https://github.com/TheCleaners/qiftop/r
   first-class — with directionality, TCP state, totals and live rates.
 - **Process & container attribution** — flows can carry PID / `comm` / UID,
   container runtime/id/name and the full outer→inner container chain (Docker,
-  containerd, Podman, CRI-O, Kubernetes, LXC/LXD, systemd-nspawn).
+  containerd, Podman, CRI-O, Kubernetes, LXC/LXD, systemd-nspawn). Flows with
+  no local owner are tagged with a **reason** (forwarded/NAT, orphaned socket,
+  no-local-socket) instead of looking like a failed lookup.
 - **Grouped Connections views** in the GUI and TUI: flat/off, by interface, by
   process or by container; group rows aggregate child rates and totals.
 - **Filter expression mini-language** shared by GUI, TUI and libqiftop:
   `proto:tcp and dport=443`, `iface:wlp* and rate>1Mi`, `comm=postgres`,
-  `container:nginx`, `chain_has:kubernetes`, `pid=0`, with boolean operators,
-  numeric comparisons, byte suffixes and regex.
+  `container:nginx`, `chain_has:kubernetes`, `reason:forwarded`, `pid=0`, with
+  boolean operators, numeric comparisons, byte suffixes and regex.
 - **Live row gauges and smoothing**: row-spanning throughput gauges, direction
   tinting, UDP peer aggregation and optional EMA/eased display rates.
 - **Async reverse DNS** with an in-process cache; hostnames never block the UI.
-- **`nqiftop` for terminals**: `j`/`k` and arrow navigation, `Enter`/`l`
-  modal detail, `g` grouping, `/` filters, `p` true snapshot freeze, `w`
-  timestamped CSV export, `z` themes, `S` settings, `1`/`2` tabs, `?` help,
-  `a` about.
+- **`nqiftop` for terminals**: `j`/`k`/arrows and `Ctrl-F`/`Ctrl-B`/`Ctrl-D`/
+  `Ctrl-U`/PgUp/PgDn navigation, `Enter`/`l` modal detail, `h`/`l` group
+  collapse/expand, `g` grouping, `/` filters, `p` true snapshot freeze, `w`
+  timestamped CSV export (`W` prompts for a filename), `z` themes, `S`
+  settings, `1`/`2` tabs, `?` help, `a` about.
 - **Reusable data library and examples**: standalone `find_package(qiftop)`
   consumers live in [`examples/`](examples/) — see
   [`examples/README.md`](examples/README.md) for NDJSON, Prometheus, snapshot
@@ -62,6 +65,23 @@ settings panel and live theme switching](https://github.com/TheCleaners/qiftop/r
 - **Privilege split**: unprivileged clients talk to `qiftop-agent`; DBus access
   is gated to `root`/`netdev`, and `/etc/qiftop/agent.conf` controls process
   detail disclosure.
+
+## Platform support
+
+**Linux is the primary, full-featured platform.** The privileged `qiftop-agent`
+(libnl-3 interface stats + libnetfilter_conntrack per-flow accounting, plus the
+sock_diag/cgroup/netns attribution chain) is Linux-only, and the GUI/TUI clients
+stream from it over D-Bus (with an in-process self-elevating fallback).
+
+**FreeBSD and NetBSD are supported as client builds** (`qiftop` GUI + `nqiftop`
+TUI + `libqiftop`), built from the same tree — the agent is simply not built
+there. On the BSDs capture runs **in-process** (run privileged): per-interface
+counters via `getifaddrs(3)`, and per-flow accounting via **libpcap/BPF** with a
+userspace flow table and SYN-based direction inference. Process attribution uses
+a pure-`sysctl` socket→PID join (no `kvm`), and on **FreeBSD** jailed flows are
+attributed to their jail as a container (`runtime:jail`). See
+[`docs/PORTABILITY.md`](docs/PORTABILITY.md) §7 for the BSD field guide and build
+notes; packaging there is pkgsrc-stage (not yet a finished port).
 
 ## Install
 
