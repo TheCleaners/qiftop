@@ -100,6 +100,7 @@ qiftop_add_test(test_tui_theme test_tui_theme.cpp)
 qiftop_add_test(test_settings_migration
     test_settings_migration.cpp
     ${CMAKE_SOURCE_DIR}/src/config/Settings.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
     ${CMAKE_SOURCE_DIR}/src/util/Autostart.cpp)
 qiftop_add_test(test_autostart
     test_autostart.cpp

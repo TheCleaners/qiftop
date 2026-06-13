@@ -933,6 +933,19 @@ can be dropped with `vagrant destroy default`.
   `PATH=/usr/sbin:/usr/bin:/sbin:/bin` to keep the privileged child safe
   from any future relative-path exec resolving through a user-controlled
   directory (LPE primitive). Pinned by `test_priv_escalator`.
+* **Settings persistence under elevation.** Because `sessionEnv()`
+  forwards `HOME` (so the elevated child finds the user's theme/font
+  config), and because `sudo -E` / some `su`/`pkexec` setups also
+  preserve `HOME`, a privileged qiftop/nqiftop process resolves
+  `QSettings` to the *invoking* user's `~/.config` — writing there would
+  litter their home with **root-owned** `.conf` files (a recurring
+  papercut). `qiftop::platform::settingsWriteWouldEscalate()` returns
+  true when `geteuid()==0` and the config dir's nearest existing ancestor
+  is owned by a non-root user; both the GUI `Settings` (`m_persist`
+  gate on `store()` + the legacy migration) and the TUI
+  `TuiApp::saveSettings()` then **load but never write** settings. Normal
+  unprivileged runs persist exactly as before. Pinned by
+  `test_settings_migration::unprivileged_persistence_unaffected`.
 * **Handoff IPC hardening.** `HandoffServer` (parent ↔ privileged child
   IPC) enforces several invariants worth keeping intact:
     - Socket lives under `$XDG_RUNTIME_DIR` (mode 0700, kernel-managed)

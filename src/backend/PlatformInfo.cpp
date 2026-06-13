@@ -1,15 +1,18 @@
 #include "PlatformInfo.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QReadWriteLock>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QStringList>
 
 #if defined(Q_OS_UNIX)
 #  include <ifaddrs.h>
 #  include <netinet/in.h>
 #  include <sys/socket.h>
+#  include <sys/stat.h>
 #  include <sys/types.h>
 #  include <grp.h>
 #  include <pwd.h>
@@ -171,6 +174,40 @@ bool userInGroup(uint uid, const QString &groupName)
 #else
     Q_UNUSED(uid);
     Q_UNUSED(groupName);
+    return false;
+#endif
+}
+
+bool settingsWriteWouldEscalate()
+{
+#if defined(Q_OS_UNIX)
+    // Only privileged processes can create files owned by another user.
+    if (::geteuid() != 0)
+        return false;
+
+    // The directory QSettings(IniFormat user scope) writes into. Both the
+    // GUI (org "qiftop", app "qiftop") and the TUI ("nqiftop") land under
+    // this GenericConfigLocation root (…/.config), so checking the root's
+    // ownership covers every per-user .conf we might write.
+    const QString cfgRoot =
+        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    if (cfgRoot.isEmpty())
+        return false;
+
+    // Walk up to the nearest existing ancestor — the leaf (…/.config or the
+    // qiftop subdir) may not exist yet on a first run, in which case we'd be
+    // about to CREATE it; the owner of the parent ($HOME) is then decisive.
+    for (QString p = cfgRoot; !p.isEmpty(); ) {
+        struct stat st{};
+        if (::stat(p.toLocal8Bit().constData(), &st) == 0)
+            return st.st_uid != 0;   // existing tree owned by a non-root user
+        const QString parent = QFileInfo(p).path();
+        if (parent == p)             // reached "/" without resolving
+            break;
+        p = parent;
+    }
+    return false;
+#else
     return false;
 #endif
 }
