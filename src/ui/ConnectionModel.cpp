@@ -112,6 +112,14 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
                                          : c.process.comm;
                 return QStringLiteral("%1  [%2]").arg(name).arg(c.process.pid);
             }
+            // No local process: explain why rather than a bare dash, so a
+            // router/NAT host's forwarded flows aren't mistaken for a bug.
+            switch (c.reason) {
+            case AttributionReason::Forwarded:     return QStringLiteral("— forwarded —");
+            case AttributionReason::Orphaned:      return QStringLiteral("— orphaned —");
+            case AttributionReason::NoLocalSocket: return QStringLiteral("— no socket —");
+            case AttributionReason::Resolved:      break;   // pid==0 + Resolved: backend didn't set reason
+            }
             return QStringLiteral("—");
         case Column::Container: {
             const auto &ci = c.container;
@@ -206,7 +214,26 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
         const auto esc = [](const QString &s) { return s.toHtmlEscaped(); };
         switch (col) {
         case Column::Process:
-            if (c.process.pid <= 0) return QStringLiteral("Unattributed flow");
+            if (c.process.pid <= 0) {
+                switch (c.reason) {
+                case AttributionReason::Forwarded:
+                    return QStringLiteral("Forwarded flow — routed/NAT through this "
+                                          "host; neither endpoint is local, so there "
+                                          "is no local process to attribute.");
+                case AttributionReason::Orphaned:
+                    return QStringLiteral("Orphaned flow — the TCP connection is "
+                                          "tearing down and its socket is already "
+                                          "gone, so it has no owning process.");
+                case AttributionReason::NoLocalSocket:
+                    return QStringLiteral("No local socket — the owning socket wasn't "
+                                          "found (a closed UDP flow still in conntrack, "
+                                          "a kernel socket, or a process in a namespace "
+                                          "the resolver can't reach).");
+                case AttributionReason::Resolved:
+                    break;
+                }
+                return QStringLiteral("Unattributed flow");
+            }
             return QStringLiteral("<qt>pid: %1<br>comm: %2<br>uid: %3<br><br>Right-click → Details for cmdline / exe / cwd</qt>")
                 .arg(c.process.pid)
                 .arg(c.process.comm.isEmpty() ? QStringLiteral("?")
@@ -274,6 +301,26 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
     case Qt::ForegroundRole:
         if (row.stale)
             return QVariant::fromValue(QApplication::palette().color(QPalette::Disabled, QPalette::Text));
+        // Colour-code the synthetic reason label on unattributed flows so a
+        // forwarded/orphaned flow reads as "no owner by design" at a glance,
+        // distinct from a real process name.
+        if (col == Column::Process && c.process.pid <= 0) {
+            const bool dark =
+                QApplication::palette().color(QPalette::Base).lightness() < 128;
+            switch (c.reason) {
+            case AttributionReason::Forwarded:      // informational — routed/NAT
+                return QVariant::fromValue(dark ? QColor(120, 170, 235)
+                                                : QColor(40, 100, 190));
+            case AttributionReason::Orphaned:       // transient — socket gone
+                return QVariant::fromValue(dark ? QColor(215, 170, 90)
+                                                : QColor(160, 110, 20));
+            case AttributionReason::NoLocalSocket:  // muted — unknown owner
+                return QVariant::fromValue(dark ? QColor(150, 150, 150)
+                                                : QColor(120, 120, 120));
+            case AttributionReason::Resolved:
+                break;
+            }
+        }
         return {};
 
     case Qt::BackgroundRole:

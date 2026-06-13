@@ -90,14 +90,23 @@ void DBusNetworkMonitor::requestInitialSnapshot()
     connect(watcher, &QDBusPendingCallWatcher::finished, this,
             [this](QDBusPendingCallWatcher *w) {
                 w->deleteLater();
-                QDBusPendingReply<qiftop::dbus::InterfaceStatsDtoList> reply = *w;
-                if (reply.isError()) {
+                const QDBusMessage reply = w->reply();
+                if (reply.type() == QDBusMessage::ErrorMessage) {
                     qCWarning(lcVerbose).noquote()
                         << "DBusNetworkMonitor: GetInterfaces failed:"
-                        << reply.error().message();
+                        << reply.errorMessage();
                     return;
                 }
-                emit statsUpdated(qiftop::dbus::fromDtos(reply.value()));
+                // Demarshal the raw reply (not QDBusPendingReply<T>) so an
+                // older agent's shorter struct still decodes via the
+                // append-only-tolerant operator>> rather than being rejected
+                // on a signature mismatch. Mirrors DBusConnectionMonitor.
+                const auto args = reply.arguments();
+                if (args.isEmpty()) return;
+                QDBusArgument arg = args.at(0).value<QDBusArgument>();
+                qiftop::dbus::InterfaceStatsDtoList list;
+                arg >> list;
+                emit statsUpdated(qiftop::dbus::fromDtos(list));
             });
 }
 

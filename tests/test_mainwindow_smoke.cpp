@@ -328,6 +328,68 @@ private slots:
                  "Process column still hidden after wire cap advertised");
     }
 
+    // Unattributed flows carry a server-side reason; the Process column must
+    // render a colour-coded synthetic label ("— forwarded —", etc.) rather
+    // than a bare dash, so router/NAT traffic isn't mistaken for an
+    // attribution bug. Pins both the DisplayRole text and that a distinct
+    // ForegroundRole colour is assigned.
+    void unattributedFlowShowsColouredReasonLabel()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.setBackendInfo(true, QStringLiteral("0.6"),
+                         QStringList{ QStringLiteral("process-attribution-wire"),
+                                      QStringLiteral("attribution-reason") });
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(connView);
+
+        Connection fwd = mkFlow("eno1", "10.42.0.122", 9994,
+                                "84.17.53.155", 9993, L4Proto::Udp, 100, 50);
+        fwd.process.pid = 0;
+        fwd.reason      = AttributionReason::Forwarded;
+        Connection orph = mkFlow("eno1", "10.0.0.61", 54766,
+                                 "18.155.202.125", 443, L4Proto::Tcp, 10, 10);
+        orph.process.pid = 0;
+        orph.reason      = AttributionReason::Orphaned;
+        connMon.emitSnapshot({ fwd, orph });
+        QTest::qWait(50);
+
+        auto *m = connView->model();
+        const int pcol = static_cast<int>(ConnectionModel::Column::Process);
+        QCOMPARE(m->rowCount(), 2);
+
+        // Locate the forwarded row by its ConnectionRole (sort order is not
+        // asserted here) and check its Process cell.
+        bool sawForwarded = false, sawOrphaned = false;
+        for (int r = 0; r < m->rowCount(); ++r) {
+            const auto c = m->index(r, 0)
+                .data(ConnectionModel::ConnectionRole).value<Connection>();
+            const QModelIndex p = m->index(r, pcol);
+            const QString label = p.data(Qt::DisplayRole).toString();
+            const QVariant fg   = p.data(Qt::ForegroundRole);
+            if (c.reason == AttributionReason::Forwarded) {
+                sawForwarded = true;
+                QCOMPARE(label, QStringLiteral("— forwarded —"));
+                QVERIFY2(fg.isValid() && fg.canConvert<QColor>(),
+                         "forwarded reason label has no colour");
+            } else if (c.reason == AttributionReason::Orphaned) {
+                sawOrphaned = true;
+                QCOMPARE(label, QStringLiteral("— orphaned —"));
+                QVERIFY(fg.isValid() && fg.canConvert<QColor>());
+            }
+        }
+        QVERIFY(sawForwarded);
+        QVERIFY(sawOrphaned);
+    }
+
     // ---- batch 2 (scenario audit P0/P1 picks) ---------------------------
 
     // #1 filterExpressionTypedEndToEnd. Crosses: QLineEdit textChanged →

@@ -130,14 +130,27 @@ void DBusConnectionMonitor::requestInitialSnapshot()
     connect(watcher, &QDBusPendingCallWatcher::finished, this,
             [this](QDBusPendingCallWatcher *w) {
                 w->deleteLater();
-                QDBusPendingReply<qiftop::dbus::ConnectionDtoList> reply = *w;
-                if (reply.isError()) {
+                const QDBusMessage reply = w->reply();
+                if (reply.type() == QDBusMessage::ErrorMessage) {
                     qCWarning(lcVerbose).noquote()
                         << "DBusConnectionMonitor: GetConnections failed:"
-                        << reply.error().message();
+                        << reply.errorMessage();
                     return;
                 }
-                emit connectionsUpdated(qiftop::dbus::fromDtos(reply.value()));
+                // Demarshal the RAW reply rather than QDBusPendingReply<T>:
+                // an OLDER agent's shorter struct has a D-Bus signature that
+                // won't match our registered ConnectionDtoList type, so Qt's
+                // typed reply would reject it outright ("unexpected reply
+                // signature"). Reading the raw QDBusArgument routes through the
+                // append-only-tolerant operator>> instead (mirrors the
+                // ConnectionsChanged signal path). Future-proofs new client +
+                // old agent without an interface bump.
+                const auto args = reply.arguments();
+                if (args.isEmpty()) return;
+                QDBusArgument arg = args.at(0).value<QDBusArgument>();
+                qiftop::dbus::ConnectionDtoList list;
+                arg >> list;
+                emit connectionsUpdated(qiftop::dbus::fromDtos(list));
             });
 }
 

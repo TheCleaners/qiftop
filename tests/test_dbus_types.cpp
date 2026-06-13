@@ -63,6 +63,7 @@ private slots:
         original.direction      = Direction::Outbound;
         original.ifIndex        = 42;
         original.tcpState       = TcpState::Established;
+        original.reason         = AttributionReason::Forwarded;
 
         // DTO -> QVariant -> DTO via the marshalling operators
         const auto dtoIn = qiftop::dbus::toDto(original);
@@ -85,6 +86,7 @@ private slots:
         QCOMPARE(dtoOut.direction,     quint8(Direction::Outbound));
         QCOMPARE(dtoOut.ifIndex,       quint32(42));
         QCOMPARE(dtoOut.tcpState,      quint8(TcpState::Established));
+        QCOMPARE(dtoOut.reason,        quint8(AttributionReason::Forwarded));
 
         // Full round-trip back through fromDto must restore the value semantics
         const Connection rebuilt = qiftop::dbus::fromDto(dtoOut);
@@ -98,6 +100,18 @@ private slots:
         QCOMPARE(rebuilt.direction,      Direction::Outbound);
         QCOMPARE(rebuilt.ifIndex,        quint32(42));
         QCOMPARE(rebuilt.tcpState,       TcpState::Established);
+        QCOMPARE(rebuilt.reason,         AttributionReason::Forwarded);
+    }
+
+    void fromDtoClampsOutOfRangeReason()
+    {
+        // A future agent could grow AttributionReason; an unknown value
+        // must fold into the generic NoLocalSocket, not UB-cast.
+        qiftop::dbus::ConnectionDto d;
+        d.proto  = 6;
+        d.reason = 200;
+        const auto c = qiftop::dbus::fromDto(d);
+        QCOMPARE(c.reason, AttributionReason::NoLocalSocket);
     }
 
     void fromDtoClampsOutOfRangeDirection()

@@ -751,3 +751,39 @@ testable:
 
 Steps 1–3 are a long weekend. Step 5 is two or three. Steps 6 and
 the runtime matrix are perpetual.
+
+---
+
+## 9. Why a flow has *no* process — the attribution reason
+
+`pid == 0` is not always a failure. On a router/NAT host most of the
+conntrack table is traffic the host merely forwards, with no local
+socket and no local process by design. To stop those from looking like
+attribution bugs, every `ConnectionDto` carries a `reason`
+(`AttributionReason`, capability `attribution-reason`) computed
+server-side right after the resolver runs, reusing the same host-address
+context as direction inference (`heuristics::attributionReason`):
+
+| reason | when | meaning |
+|--------|------|---------|
+| `Resolved` | `pid > 0` | attributed to a local process |
+| `Forwarded` | neither endpoint is one of this host's addresses | routed / NAT / masquerade — another machine's flow; there is no local process |
+| `Orphaned` | TCP in a teardown state (FIN_WAIT/CLOSE_WAIT/LAST_ACK/TIME_WAIT/CLOSE) | the owning socket is already gone (inode 0) |
+| `NoLocalSocket` | local endpoint is ours but no live socket was found | a closed UDP flow still lingering in conntrack, a kernel socket, or a genuine miss |
+
+A PID always wins (`Resolved`), so a netns-scanned container flow that
+*looks* forwarded by address still reports `Resolved`. The reason is a
+filter field (`reason:forwarded`) and drives the GUI/TUI's synthetic
+Process-column label (`— forwarded —`, etc.) so the user sees *why* a
+flow is unattributed rather than a bare dash. Clients that talk to an
+agent without the `attribution-reason` token (or use the in-process
+backend) derive the same value locally from the existing wire fields via
+`heuristics::attributionReason`.
+
+Note the boundaries: `Forwarded` and `NoLocalSocket` are the kernel's
+"a conntrack flow needn't map to any host fd" cases — forwarded packets
+never hit a local socket, and conntrack entries (especially UDP, with
+its 30–120 s timeout) routinely outlive the ephemeral socket that
+created them. Going *deeper* (per-netns scanning, and the planned
+resolver-eagerness tiers) only recovers **local** container/VM/netns
+owners; a genuinely remote forwarded flow has no local process to find.

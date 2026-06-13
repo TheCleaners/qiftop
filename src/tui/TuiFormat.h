@@ -209,6 +209,19 @@ inline QList<SettingRow> interfaceDetailRows(const aggregate::InterfaceAggregato
     };
 }
 
+// Why an unattributed flow has no process — mirrors the GUI's synthetic
+// Process-column label so the TUI detail panel explains it too.
+inline QString unattributedLabel(AttributionReason reason)
+{
+    switch (reason) {
+    case AttributionReason::Forwarded:     return QStringLiteral("(forwarded — no local process)");
+    case AttributionReason::Orphaned:      return QStringLiteral("(orphaned — socket gone)");
+    case AttributionReason::NoLocalSocket: return QStringLiteral("(no local socket)");
+    case AttributionReason::Resolved:      break;
+    }
+    return QStringLiteral("(unattributed)");
+}
+
 inline QList<SettingRow> connectionDetailRows(const aggregate::ConnectionAggregator &agg,
                                               const aggregate::ConnectionAggregator::Row &r)
 {
@@ -235,7 +248,7 @@ inline QList<SettingRow> connectionDetailRows(const aggregate::ConnectionAggrega
                            ? QStringLiteral("%1 [%2] uid %3")
                                  .arg(c.process.comm.isEmpty() ? QStringLiteral("?") : c.process.comm)
                                  .arg(c.process.pid).arg(c.process.uid)
-                           : QStringLiteral("(unattributed)"), {}};
+                           : unattributedLabel(c.reason), {}};
     if (c.container.valid())
         rows << SettingRow{QStringLiteral("Container"),
                            QStringLiteral("%1 %2 (%3)")

@@ -211,6 +211,14 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
     // lookups are memoised by PID in agent::attributeFlows.
     attributeFlows(kept, m_resolver, AttributionOptions{m_wantContainerChain});
 
+    // Explain each flow's attribution outcome (Resolved / Forwarded /
+    // Orphaned / NoLocalSocket) once, server-side, reusing the same host
+    // context as direction inference. Lets every consumer distinguish "no
+    // local process by design" (routed/NAT) from a genuine attribution miss.
+    for (auto &c : kept)
+        c.reason = heuristics::attributionReason(
+            c, ctx.localAddrs, ctx.loopbackAddrs);
+
     m_last = dbus::toDtos(kept);
     emit ConnectionsChanged(static_cast<qulonglong>(m_clock.elapsed()), m_last);
 }

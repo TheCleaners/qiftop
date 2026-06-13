@@ -132,6 +132,11 @@ qiftop_add_test(test_dbus_types
     ${CMAKE_SOURCE_DIR}/src/dbus/Types.cpp)
 target_link_libraries(test_dbus_types PRIVATE Qt6::DBus)
 
+qiftop_add_test(test_wire_compat
+    test_wire_compat.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/Types.cpp)
+target_link_libraries(test_wire_compat PRIVATE Qt6::DBus)
+
 qiftop_add_test(test_dns_cache
     test_dns_cache.cpp
     ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp

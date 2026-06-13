@@ -92,6 +92,32 @@ enum class TcpState : quint8 {
     return QStringLiteral("?");
 }
 
+// Why a flow is (or is not) attributed to a local process. Populated
+// server-side after the resolver runs, so the UI can distinguish "we
+// failed to attribute a flow that has a local owner" from "this flow has
+// no local process by design" (routed/NAT, or a torn-down socket). When
+// the agent doesn't advertise the `attribution-reason` capability,
+// clients derive this locally via heuristics::attributionReason().
+enum class AttributionReason : quint8 {
+    Resolved      = 0,   // pid > 0 — attributed to a local process
+    NoLocalSocket = 1,   // local endpoint is ours but no live socket found
+                         //   (UDP conntrack husk, kernel socket, or a miss)
+    Orphaned      = 2,   // TCP teardown state — the owning socket is gone
+    Forwarded     = 3,   // routed/NAT/masquerade: neither end is a host
+                         //   address, so there is no local process at all
+};
+
+[[nodiscard]] inline QString attributionReasonToString(AttributionReason r)
+{
+    switch (r) {
+    case AttributionReason::Resolved:      return QStringLiteral("resolved");
+    case AttributionReason::NoLocalSocket: return QStringLiteral("nosocket");
+    case AttributionReason::Orphaned:      return QStringLiteral("orphaned");
+    case AttributionReason::Forwarded:     return QStringLiteral("forwarded");
+    }
+    return QStringLiteral("?");
+}
+
 [[nodiscard]] inline QString l4ProtoToString(L4Proto p)
 {
     switch (p) {
@@ -146,6 +172,11 @@ struct Connection {
 
     // Conntrack TCP state for TCP flows. `None` for UDP/ICMP/unknown.
     TcpState  tcpState  = TcpState::None;
+
+    // Why this flow is / isn't attributed to a local process. Populated
+    // server-side after attribution (see heuristics::attributionReason).
+    // `Resolved` whenever process.pid > 0.
+    AttributionReason reason = AttributionReason::Resolved;
 
     // Process + container attribution (v0.2). Populated server-side when a
     // ProcessResolver is wired and the matching attribution capability

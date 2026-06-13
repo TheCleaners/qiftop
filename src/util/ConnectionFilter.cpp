@@ -17,6 +17,8 @@ enum class Field {
     // Comm, Runtime. String multi-haystack (like Host): Container (matches
     // runtime+id+name) and ChainHas (any chain entry's runtime+id+name).
     Pid, Uid, Comm, Runtime, Container, ChainHas,
+    // v0.5: attribution reason (resolved/forwarded/orphaned/nosocket).
+    Reason,
 };
 
 enum class Op { Contains, Equals, NotEquals, Regex, Lt, Le, Gt, Ge };
@@ -76,6 +78,7 @@ const QHash<QString, FieldInfo> &fieldTable()
         { QStringLiteral("runtime"),   {Field::Runtime,   false} },
         { QStringLiteral("container"), {Field::Container, false} },
         { QStringLiteral("chain_has"), {Field::ChainHas,  false} },
+        { QStringLiteral("reason"),    {Field::Reason,    false} },
     };
     return t;
 }
@@ -155,6 +158,7 @@ QString extractText(Field f, const Context &ctx)
     case Field::Family:    return familyName(c);
     case Field::Direction: return directionName(c.direction);
     case Field::Comm:      return c.process.comm;
+    case Field::Reason:    return attributionReasonToString(c.reason);
     case Field::Runtime:   return c.container.runtime;
     case Field::Container:
         // Multi-haystack: runtime + id + name on separate lines so the
@@ -641,7 +645,7 @@ QString helpHtml()
         "<p><b>Text fields:</b> <code>proto</code>, <code>src</code>, <code>dst</code>,"
         " <code>host</code>, <code>iface</code>, <code>family</code>,"
         " <code>direction</code>, <code>comm</code>, <code>runtime</code>,"
-        " <code>container</code>, <code>chain_has</code></p>"
+        " <code>container</code>, <code>chain_has</code>, <code>reason</code></p>"
         "<p><b>Numeric fields:</b> <code>sport</code>, <code>dport</code>, <code>port</code>,"
         " <code>bytes_in</code>/<code>_out</code>/<code>bytes</code>,"
         " <code>pkts_in</code>/<code>_out</code>/<code>pkts</code>,"
@@ -650,7 +654,10 @@ QString helpHtml()
         "<p><b>Attribution notes:</b> <code>container</code> matches across"
         " runtime + id + name (like <code>host</code> across endpoints);"
         " <code>chain_has</code> matches any entry in the container nesting"
-        " ancestry; <code>pid=0</code> selects unattributed flows.</p>"
+        " ancestry; <code>pid=0</code> selects unattributed flows;"
+        " <code>reason</code> is <code>resolved</code>/<code>forwarded</code>/"
+        "<code>orphaned</code>/<code>nosocket</code> — why a flow is / isn't"
+        " attributed to a local process.</p>"
         "<p><b>Byte suffixes:</b> <code>K M G T</code> (×1000),"
         " <code>Ki Mi Gi Ti</code> (×1024)</p>"
         "<p><b>Examples:</b><br>"
