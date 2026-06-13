@@ -69,13 +69,15 @@ private:
     void  handleInfoKey(int key);              // key routing while Help/About open
     void  handleDetailKey(int key);            // key routing while a row Detail is open
     void  openDetail();                        // open the Detail overlay for the cursor row
-    void  exportCurrentView();                 // write the active view to a CSV file
+    void  exportCurrentView(const QString &explicitPath = QString()); // write CSV
+    void  promptExportFilename();              // start the "save as" prompt (W)
     void  flashMessage(const QString &msg);    // transient footer status (cleared on a timer)
     void  applyAggregatorSettings();           // push flags into the aggregator
     void  loadSettings();                      // restore view/sort/toggles/theme
     void  saveSettings() const;                // persist them (QSettings)
     void  onDataChanged();                     // data-driven redraw (paused-aware)
     void  handleFilterKey(int key);            // key routing while editing a filter
+    void  handleExportKey(int key);            // key routing while typing a filename
     void  commitFilter();                      // parse m_filterDraft -> m_filterExpr
 
     Screen                           *m_screen   = nullptr;
@@ -164,6 +166,8 @@ private:
     // Filter (Connections view): a live ConnectionFilter mini-language query.
     bool                  m_filterEditing = false;
     QString               m_filterDraft;   // text being typed
+    bool                  m_exportPrompt  = false; // "save as" filename prompt (W)
+    QString               m_exportDraft;   // filename being typed
     QString               m_filterText;    // committed text
     qiftop::filter::ExprPtr m_filterExpr;  // parsed (null = match-all)
     QString               m_filterError;   // last parse error (empty = ok)

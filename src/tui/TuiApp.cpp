@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
 #include <QSettings>
 #include <QSysInfo>
 #include <QtGlobal>
@@ -272,6 +273,10 @@ void TuiApp::handleKey(int key)
         handleFilterKey(key);
         return;
     }
+    if (m_exportPrompt) {
+        handleExportKey(key);
+        return;
+    }
 
     const int nCols = static_cast<int>(columnsFor(m_view).size());
     int &sortCol = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
@@ -317,8 +322,10 @@ void TuiApp::handleKey(int key)
         }
         break;
     case 'w':
+        exportCurrentView();           // auto-named, timestamped file
+        break;
     case 'W':
-        exportCurrentView();
+        promptExportFilename();         // prompt for a filename ("save as")
         break;
     case '/':
         m_filterEditing = true;
@@ -617,6 +624,10 @@ Frame TuiApp::buildFrame()
         f.footer = m_filterError.isEmpty()
             ? QStringLiteral(" /%1\u2588   (Enter apply · Esc cancel)").arg(m_filterDraft)
             : QStringLiteral(" /%1\u2588   ! %2").arg(m_filterDraft, m_filterError);
+    } else if (m_exportPrompt) {
+        // The menu bar becomes the "save as" filename input line.
+        f.footer = QStringLiteral(" save as: %1\u2588   (Enter save · Esc cancel)")
+                       .arg(m_exportDraft);
     } else if (!m_flashMsg.isEmpty()) {
         // Transient status (e.g. export confirmation) takes the footer line.
         f.footer = QStringLiteral(" %1").arg(m_flashMsg);
@@ -716,7 +727,8 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("g"),            QStringLiteral("Group connections by interface / process / container")),
             row(QStringLiteral("h/\u2190  l/\u2192"),  QStringLiteral("Collapse / expand the group under the cursor (when grouped)")),
             row(QStringLiteral("p"),            QStringLiteral("Pause / resume live updates")),
-            row(QStringLiteral("w"),            QStringLiteral("Write/export the current view to a CSV file")),
+            row(QStringLiteral("w"),            QStringLiteral("Write/export the current view to an auto-named CSV file")),
+            row(QStringLiteral("W"),            QStringLiteral("Export to a CSV file, prompting for the filename")),
             row(QStringLiteral("z"),            QStringLiteral("Cycle the colour theme")),
             row(QStringLiteral("S / F2"),       QStringLiteral("Settings (gauge, DNS, smoothing…)")),
             row(QStringLiteral("? / F1"),       QStringLiteral("This help")),
@@ -877,21 +889,23 @@ void TuiApp::flashMessage(const QString &msg)
     requestRedraw();
 }
 
-void TuiApp::exportCurrentView()
+void TuiApp::exportCurrentView(const QString &explicitPath)
 {
     // Snapshot the active view's rows (frozen copy when paused) and serialise
-    // to CSV via the shared libqiftop exporter, into a timestamped file in the
-    // current working directory. A transient footer message reports the result.
+    // to CSV via the shared libqiftop exporter. With no explicit path ('w') the
+    // file is auto-named and timestamped in the current working directory; with
+    // an explicit path ('W' prompt) the user's filename is used verbatim. A
+    // transient footer message reports the result.
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
     QString path, err;
     QByteArray data;
     int count = 0;
+    const bool iface = (m_view == View::Interfaces);
 
-    if (m_view == View::Interfaces) {
+    if (iface) {
         IfaceRowsExportable ex(m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows());
         count = ex.exportRowCount();
         data  = util::exporter::toCsv(ex);
-        path  = uniqueExportPath(QStringLiteral("qiftop-interfaces"), stamp);
     } else {
         const auto &rows = m_paused ? m_frozenConnRows : m_connAgg->rows();
         // Grouped views render synthetic group headers; CSV exports the flat
@@ -901,13 +915,68 @@ void TuiApp::exportCurrentView()
                                              m_connSortDesc, m_filterExpr)));
         count = ex.exportRowCount();
         data  = util::exporter::toCsv(ex);
-        path  = uniqueExportPath(QStringLiteral("qiftop-connections"), stamp);
+    }
+
+    if (explicitPath.isEmpty()) {
+        path = uniqueExportPath(iface ? QStringLiteral("qiftop-interfaces")
+                                      : QStringLiteral("qiftop-connections"), stamp);
+    } else {
+        path = explicitPath;
+        // Convenience: default to a .csv extension when the user omitted one.
+        if (!QFileInfo(path).fileName().contains(QLatin1Char('.')))
+            path += QStringLiteral(".csv");
     }
 
     if (util::exporter::save(path, data, &err))
         flashMessage(QStringLiteral("Exported %1 rows to %2").arg(count).arg(path));
     else
         flashMessage(QStringLiteral("Export failed: %1").arg(err));
+}
+
+void TuiApp::promptExportFilename()
+{
+    // Pre-fill with the auto name so Enter alone yields the default; the user
+    // can edit it. Mirrors the filter input line.
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    m_exportDraft = QStringLiteral("%1-%2.csv").arg(
+        m_view == View::Interfaces ? QStringLiteral("qiftop-interfaces")
+                                   : QStringLiteral("qiftop-connections"), stamp);
+    m_exportPrompt = true;
+    requestRedraw();
+}
+
+void TuiApp::handleExportKey(int key)
+{
+    switch (key) {
+    case 27: // Esc — cancel
+        m_exportPrompt = false;
+        m_exportDraft.clear();
+        break;
+    case '\n':
+    case '\r':
+    case KEY_ENTER:
+        m_exportPrompt = false;
+        if (!m_exportDraft.trimmed().isEmpty())
+            exportCurrentView(m_exportDraft.trimmed());
+        m_exportDraft.clear();
+        break;
+    case KEY_BACKSPACE:
+    case 127:
+    case 8:
+        if (!m_exportDraft.isEmpty())
+            m_exportDraft.chop(1);
+        break;
+    case KEY_RESIZE:
+        break;
+    default:
+        // Allow printable characters for a path/filename (incl. '/', '.', '-').
+        if (key >= 0x20 && key < 0x7f)
+            m_exportDraft.append(QChar(key));
+        else
+            return; // ignore, no repaint
+        break;
+    }
+    requestRedraw();
 }
 
 void TuiApp::handleDetailKey(int key)
