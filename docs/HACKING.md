@@ -61,6 +61,26 @@ sudo apt install --no-install-recommends apt-utils createrepo-c gnupg rpm lintia
 sudo dnf install -y rpm-build createrepo_c gnupg2 rpmlint desktop-file-utils
 ```
 
+### NetBSD / BSD (experimental)
+
+The BSD family builds the client side (`libqiftop`, `qiftop` GUI, `nqiftop`
+TUI, `check_qiftop`) with an in-process getifaddrs + libpcap backend; the
+`qiftop-agent` is Linux-only. Everything needed is in base + one pkgsrc
+package:
+
+```sh
+# pkgsrc (qt6) + base curses, base libpcap, base getifaddrs/sysctl
+pkgin install qt6-qtbase cmake ninja-build pkg-config git
+# non-login shells need the pkgsrc/base tools on PATH:
+export PATH=/usr/pkg/bin:/usr/pkg/sbin:/usr/sbin:/sbin:$PATH
+```
+
+Do NOT install pkgsrc `ncurses` — base curses is wide-capable and is what the
+build uses. Capturing flows needs root (`/dev/bpf`); run `nqiftop`/`qiftop`
+with `sudo` (or `doas`). See **docs/PORTABILITY.md §7** for the full BSD
+implementation guide and the gotchas (wide-char curses, the sysctl
+socket→PID join, DLT handling, the sysctl size-probe trap, etc.).
+
 ---
 
 ## 2. Build

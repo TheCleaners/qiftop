@@ -1,0 +1,18 @@
+qiftop is a Qt 6 / C++20 iftop-style network monitor.
+
+This package builds the BSD client surface:
+
+  * qiftop          - Qt 6 Widgets GUI client
+  * nqiftop         - ncurses TUI for headless / SSH use
+  * libqiftop       - Widgets-free shared data library (Qt6 Core/Network/DBus
+                      consumers; find_package(qiftop) -> qiftop::qiftop)
+  * check_qiftop    - Nagios/Icinga-compatible monitoring plugin
+
+On the BSDs, capture runs in-process: per-interface counters come from
+getifaddrs(3), and per-flow accounting from libpcap/BPF with a userspace
+flow table (there is no Linux-style conntrack). Per-flow process attribution
+(comm/pid/uid) is derived from a pure-sysctl socket->PID join on NetBSD.
+Capturing flows requires read access to /dev/bpf* (root).
+
+The privileged DBus agent (qiftop-agent) is Linux-only and is not part of
+this package; DBus is optional on BSD.

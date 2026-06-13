@@ -16,6 +16,7 @@
 #include <QTimer>
 
 #include <csignal>
+#include <cerrno>
 #include <memory>
 
 #include <fcntl.h>
@@ -40,8 +41,13 @@
 #include "backend/linux/NetlinkMonitor.h"
 #endif
 
+#ifdef BACKEND_BSD
+#include "backend/bsd/BsdConnectionMonitor.h"
+#include "backend/bsd/BsdNetworkMonitor.h"
+#endif
+
 // ncurses last (ERR, resizeterm) — after Qt to avoid macro clashes.
-#include <ncurses.h>
+#include "tui/Curses.h"
 
 #ifndef QIFTOP_VERSION
 #define QIFTOP_VERSION "0.0-dev"
@@ -158,6 +164,10 @@ int main(int argc, char *argv[])
         netMon  = std::make_unique<NetlinkMonitor>();
         connMon = std::make_unique<ConntrackMonitor>();
         sourceLabel = QStringLiteral("in-process");
+#elif defined(BACKEND_BSD)
+        netMon  = std::make_unique<qiftop::backend::bsd::BsdNetworkMonitor>();
+        connMon = std::make_unique<qiftop::backend::bsd::BsdConnectionMonitor>();
+        sourceLabel = QStringLiteral("in-process");
 #else
         std::fprintf(stderr, "nqiftop: no capture backend on this platform\n");
         return 1;
@@ -221,15 +231,33 @@ int main(int argc, char *argv[])
         connMon->setDesiredIntervalMs(ms);
     });
 
-    const auto drainInput = [&screen, &tui] {
-        int ch;
-        while ((ch = screen.pollKey()) != ERR)
-            tui.handleKey(ch);
-    };
-
+    // Input: read raw bytes from stdin ourselves and let Screen decode keys,
+    // rather than draining ncurses wgetch() from the notifier. wgetch() under
+    // an external event loop is fragile — it returns ERR for both "no input"
+    // and EOF (so a closed/redirected stdin spins the level-triggered notifier
+    // at 100% CPU), and on FreeBSD ncursesw it fails to consume bytes at all.
+    // A direct read() is portable and gives an unambiguous EOF (n == 0): an
+    // interactive TUI whose input has closed should exit (top/htop behaviour).
     QSocketNotifier stdinNotifier(STDIN_FILENO, QSocketNotifier::Read);
-    QObject::connect(&stdinNotifier, &QSocketNotifier::activated, &app,
-                     [drainInput] { drainInput(); });
+    QObject::connect(
+        &stdinNotifier, &QSocketNotifier::activated, &app,
+        [&screen, &tui, &stdinNotifier] {
+            char buf[256];
+            const ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
+            if (n > 0) {
+                screen.feedInput(buf, static_cast<int>(n));
+                int ch;
+                while ((ch = screen.pollKey()) != ERR)
+                    tui.handleKey(ch);
+                return;
+            }
+            if (n < 0 && (errno == EINTR || errno == EAGAIN))
+                return;            // transient; wait for the next wakeup
+            // n == 0 (EOF) or a hard error: stdin is gone — stop the notifier
+            // so it can't re-fire on the dead fd, and exit.
+            stdinNotifier.setEnabled(false);
+            QCoreApplication::quit();
+        });
 
     // --- signal-safe terminal restore + resize ---
     if (::pipe(g_sigPipe) == 0) {

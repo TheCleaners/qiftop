@@ -2,10 +2,13 @@
 
 #include <clocale>
 #include <cmath>
+#include <cwchar>
+#include <langinfo.h>
+#include <string>
 
 // ncurses last: it defines lower-case macros (erase, move, refresh, timeout…)
 // that would clash with Qt/STL identifiers if included before them.
-#include <ncurses.h>
+#include "tui/Curses.h"
 
 namespace qiftop::tui {
 
@@ -45,10 +48,33 @@ long ncursesAttr(int bits)
     return a;
 }
 
+void putLine(int y, const QString &s);
+
+// Convert a QString to a wchar_t string. On Linux/BSD wchar_t is 4 bytes, so
+// QString::toWCharArray emits one UCS-4 code point per character — exactly
+// what the wide curses API wants.
+std::wstring toWide(const QString &s)
+{
+    std::wstring w(s.size() + 1, L'\0');
+    const int n = s.toWCharArray(w.data());
+    w.resize(n < 0 ? 0 : n);
+    return w;
+}
+
+// Write `s` at (y, x) through the WIDE curses API. The narrow addstr() path
+// pushes raw UTF-8 bytes, which only renders correctly where the curses lib
+// does multibyte→cell decoding (Linux ncurses). BSD base curses places each
+// byte in its own cell, garbling box-drawing and other multibyte glyphs.
+// add_wch/addwstr is portable across ncurses and BSD curses.
+void putAt(int y, int x, const QString &s)
+{
+    const std::wstring w = toWide(s);
+    mvaddwstr(y, x, w.c_str());
+}
+
 void putLine(int y, const QString &s)
 {
-    const QByteArray utf8 = s.toUtf8();
-    mvaddstr(y, 0, utf8.constData());
+    putAt(y, 0, s);
 }
 
 } // namespace
@@ -59,7 +85,20 @@ void Screen::init()
 {
     if (m_active)
         return;
+    // Wide-character curses output requires a UTF-8 LC_CTYPE. Honour the
+    // user's environment first; if that yields a non-UTF-8 codeset (e.g. a
+    // bare "C"/POSIX locale over SSH), fall back to a known UTF-8 locale so
+    // box-drawing and other multibyte glyphs still render. Without this the
+    // wide API would fail to encode non-ASCII and the frames garble.
     std::setlocale(LC_ALL, "");
+    if (const char *cs = nl_langinfo(CODESET); !cs || std::string(cs) != "UTF-8") {
+        for (const char *loc : {"C.UTF-8", "en_US.UTF-8", "POSIX.UTF-8"}) {
+            if (std::setlocale(LC_ALL, loc)) {
+                std::setlocale(LC_CTYPE, loc);
+                break;
+            }
+        }
+    }
     initscr();
     cbreak();
     noecho();
@@ -153,40 +192,56 @@ int Screen::bodyHeight() const
     return h > 0 ? h : 0;
 }
 
+void Screen::feedInput(const char *data, int len)
+{
+    if (data && len > 0)
+        m_inbuf.append(data, len);
+}
+
 int Screen::pollKey()
 {
-    if (!m_active)
+    if (m_inbuf.isEmpty())
         return ERR;
-    const int ch = wgetch(stdscr);
-    // Under nodelay, ncurses does NOT assemble cursor/function-key escape
-    // sequences — it returns the raw bytes (ESC '[' 'A' …). Since our input is
-    // drained in a burst (QSocketNotifier fires when STDIN is readable and we
-    // loop until ERR), the continuation bytes are already buffered, so we can
-    // assemble them here. A lone ESC (next read == ERR) is returned as 27.
-    if (ch != 27)
-        return ch;
-    const int b1 = wgetch(stdscr);
-    if (b1 == ERR)
-        return 27;                 // real Escape key
-    if (b1 != '[' && b1 != 'O') {
-        // ESC + something else (e.g. Alt-key) — not a sequence we map; surface
-        // the ESC and let the next pollKey() return the trailing byte.
-        ungetch(b1);
+
+    const auto u = [&](int i) { return static_cast<unsigned char>(m_inbuf[i]); };
+    const unsigned char c = u(0);
+
+    // Non-escape byte: return it as-is (handleKey deals with raw bytes like
+    // 'q', Tab=9, Enter=10/13, Backspace=8/127).
+    if (c != 27) {
+        m_inbuf.remove(0, 1);
+        return c;
+    }
+
+    // ESC: could be a lone Escape key or the start of a CSI/SS3 sequence.
+    // Because we decode from a buffer filled per read() burst, a complete
+    // sequence normally arrives together; if only ESC is buffered, treat it as
+    // the Escape key (matches the previous wgetch behaviour).
+    if (m_inbuf.size() == 1) {
+        m_inbuf.remove(0, 1);
         return 27;
     }
-    const int b2 = wgetch(stdscr);
+    const unsigned char b1 = u(1);
+    if (b1 != '[' && b1 != 'O') {
+        // ESC + some other byte (e.g. Alt-key): surface ESC, keep the rest.
+        m_inbuf.remove(0, 1);
+        return 27;
+    }
+    if (m_inbuf.size() < 3)
+        return ERR;                    // incomplete CSI/SS3; wait for more bytes
+    const unsigned char b2 = u(2);
     switch (b2) {
-    case 'A': return KEY_UP;
-    case 'B': return KEY_DOWN;
-    case 'C': return KEY_RIGHT;
-    case 'D': return KEY_LEFT;
-    case 'H': return KEY_HOME;
-    case 'F': return KEY_END;
-    case '5': wgetch(stdscr); return KEY_PPAGE; // ESC [ 5 ~
-    case '6': wgetch(stdscr); return KEY_NPAGE; // ESC [ 6 ~
-    case '1': wgetch(stdscr); return KEY_HOME;  // ESC [ 1 ~
-    case '4': wgetch(stdscr); return KEY_END;   // ESC [ 4 ~
-    default:  return ERR;                       // unknown sequence; drop
+    case 'A': m_inbuf.remove(0, 3); return KEY_UP;
+    case 'B': m_inbuf.remove(0, 3); return KEY_DOWN;
+    case 'C': m_inbuf.remove(0, 3); return KEY_RIGHT;
+    case 'D': m_inbuf.remove(0, 3); return KEY_LEFT;
+    case 'H': m_inbuf.remove(0, 3); return KEY_HOME;
+    case 'F': m_inbuf.remove(0, 3); return KEY_END;
+    case '5': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_PPAGE; // ESC [ 5 ~
+    case '6': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_NPAGE; // ESC [ 6 ~
+    case '1': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_HOME;  // ESC [ 1 ~
+    case '4': if (m_inbuf.size() < 4) return ERR; m_inbuf.remove(0, 4); return KEY_END;   // ESC [ 4 ~
+    default:  m_inbuf.remove(0, 3); return ERR;                                           // unknown; drop
     }
 }
 
@@ -207,7 +262,7 @@ void Screen::render(const Frame &f)
     // part of the "UI" (a coloured title bar + menu bar) distinct from content.
     const auto fillLine = [&](int y, Role role) {
         attrset(attrFor(role));
-        mvaddstr(y, 0, QString(width, QLatin1Char(' ')).toUtf8().constData());
+        putAt(y, 0, QString(width, QLatin1Char(' ')));
     };
 
     // --- line 0: title / tab bar (UI chrome) ---
@@ -218,14 +273,14 @@ void Screen::render(const Frame &f)
             const QString label = QStringLiteral(" %1 ").arg(f.tabs[i]);
             // Active tab pops; inactive tabs blend into the title bar.
             attrset(attrFor(i == f.activeTab ? Role::TabActive : Role::TitleBar));
-            mvaddstr(0, x, label.toUtf8().constData());
+            putAt(0, x, label);
             x += label.size() + 1;
         }
         const QString src = f.sourceLabel;
         const int sx = width - src.size() - 1;
         if (sx > x) {
             attrset(attrFor(Role::TitleBar));
-            mvaddstr(0, sx, src.toUtf8().constData());
+            putAt(0, sx, src);
         }
         attrset(A_NORMAL);
     }
@@ -242,7 +297,7 @@ void Screen::render(const Frame &f)
             if (x + h.key.size() + 1 >= width)
                 break;
             attrset(attrFor(Role::MenuKey));
-            mvaddstr(1, x, h.key.toUtf8().constData());
+            putAt(1, x, h.key);
             x += h.key.size();
             QString lbl = h.desc.isEmpty() ? QStringLiteral(" ")
                                            : QStringLiteral(" %1").arg(h.desc);
@@ -251,13 +306,13 @@ void Screen::render(const Frame &f)
             if (x + lbl.size() > width)
                 lbl = lbl.left(width - x);
             attrset(attrFor(Role::Footer));
-            mvaddstr(1, x, lbl.toUtf8().constData());
+            putAt(1, x, lbl);
             x += lbl.size();
         }
         attrset(A_NORMAL);
     } else {
         attrset(attrFor(Role::Footer));
-        mvaddstr(1, 0, fitCell(f.footer, width, false).toUtf8().constData());
+        putAt(1, 0, fitCell(f.footer, width, false));
         attrset(A_NORMAL);
     }
 
@@ -389,7 +444,7 @@ void Screen::renderModal(const ModalPanel &s) const
     const auto borderRow = [&](int y, QChar fill) {
         QString line(boxW, fill);
         attrset(border);
-        mvaddstr(y, x0, line.toUtf8().constData());
+        putAt(y, x0, line);
         attrset(A_NORMAL);
     };
     const auto put = [&](int y, const QString &text, long a, bool center) {
@@ -405,11 +460,11 @@ void Screen::renderModal(const ModalPanel &s) const
             body = inner + QString(pad, QLatin1Char(' '));
         }
         attrset(border);
-        mvaddstr(y, x0, "\u2502"); // │ left border
+        mvaddwstr(y, x0, L"\u2502"); // │ left border
         attrset(a);
-        mvaddstr(y, x0 + 1, body.toUtf8().constData());
+        putAt(y, x0 + 1, body);
         attrset(border);
-        mvaddstr(y, x0 + 1 + innerW, "\u2502"); // │ right border
+        mvaddwstr(y, x0 + 1 + innerW, L"\u2502"); // │ right border
         attrset(A_NORMAL);
     };
 
@@ -426,7 +481,7 @@ void Screen::renderModal(const ModalPanel &s) const
         top += QString(dashes - left, QChar(0x2500));
         top += QStringLiteral("\u2510"); // ┐
         attrset(border);
-        mvaddstr(y, x0, top.toUtf8().constData());
+        putAt(y, x0, top);
         attrset(A_NORMAL);
     }
     ++y;
@@ -471,8 +526,8 @@ void Screen::renderModal(const ModalPanel &s) const
     borderRow(y, QChar(0x2500));
     // Redraw bottom corners over the filled line.
     attrset(border);
-    mvaddstr(y, x0, "\u2514");                 // └
-    mvaddstr(y, x0 + boxW - 1, "\u2518");      // ┘
+    mvaddwstr(y, x0, L"\u2514");                 // └
+    mvaddwstr(y, x0 + boxW - 1, L"\u2518");      // ┘
     attrset(A_NORMAL);
 }
 

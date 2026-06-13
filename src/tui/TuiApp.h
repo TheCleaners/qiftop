@@ -69,13 +69,15 @@ private:
     void  handleInfoKey(int key);              // key routing while Help/About open
     void  handleDetailKey(int key);            // key routing while a row Detail is open
     void  openDetail();                        // open the Detail overlay for the cursor row
-    void  exportCurrentView();                 // write the active view to a CSV file
+    void  exportCurrentView(const QString &explicitPath = QString()); // write CSV
+    void  promptExportFilename();              // start the "save as" prompt (W)
     void  flashMessage(const QString &msg);    // transient footer status (cleared on a timer)
     void  applyAggregatorSettings();           // push flags into the aggregator
     void  loadSettings();                      // restore view/sort/toggles/theme
     void  saveSettings() const;                // persist them (QSettings)
     void  onDataChanged();                     // data-driven redraw (paused-aware)
     void  handleFilterKey(int key);            // key routing while editing a filter
+    void  handleExportKey(int key);            // key routing while typing a filename
     void  commitFilter();                      // parse m_filterDraft -> m_filterExpr
 
     Screen                           *m_screen   = nullptr;
@@ -95,11 +97,32 @@ private:
     int  m_connCursor   = 0;
 
     // Per displayed row of the active view, rebuilt each buildFrame: whether the
-    // row is selectable (a real iface/flow vs. a group header) and its stable
-    // identity key. Drives cursor navigation and opening the Detail overlay.
-    struct RowRef { bool selectable = false; QString key; };
+    // row is a cursor-landable target, whether it's a group header, its stable
+    // identity key (flows) and the group key it belongs to. Drives cursor
+    // navigation, the Detail overlay, and group collapse/expand.
+    struct RowRef {
+        bool    selectable = false; // cursor may land here (headers AND members)
+        bool    header     = false; // true for a group header row
+        QString key;                // flow identity (members only)
+        QString groupKey;           // owning group key (headers and members)
+    };
     QList<RowRef> m_rowRefs;
-    void moveCursor(int delta);   // move selection over selectable rows only
+    void moveCursor(int delta);   // move selection over landable rows
+
+    // Group keys the user has collapsed (Connections view, when grouped). Keyed
+    // by the same group key buildFrame buckets on, so collapse survives the
+    // per-tick frame rebuild. Cleared when the grouping mode changes.
+    QSet<QString> m_collapsedGroups;
+    // When set, after the next buildFrame the cursor is moved onto this group's
+    // header row (used so collapsing keeps the cursor on the folded header).
+    // A separate validity flag is needed because the empty string is itself a
+    // valid group key (the "(unattributed)" / "(no container)" bucket).
+    QString m_cursorTargetGroup;
+    bool    m_cursorTargetValid = false;
+    void collapseAtCursor();      // h/Left: fold the cursor's group
+    void expandAtCursor();        // l/Right on a collapsed header: unfold
+    void toggleCollapseAtCursor();// Enter/Space on a header: fold/unfold
+    [[nodiscard]] bool cursorOnHeader() const;
 
     // Detail overlay target: the stable key + view of the row whose details are
     // shown. Rebuilt live each frame from the current rows so rates stay fresh.
@@ -143,6 +166,8 @@ private:
     // Filter (Connections view): a live ConnectionFilter mini-language query.
     bool                  m_filterEditing = false;
     QString               m_filterDraft;   // text being typed
+    bool                  m_exportPrompt  = false; // "save as" filename prompt (W)
+    QString               m_exportDraft;   // filename being typed
     QString               m_filterText;    // committed text
     qiftop::filter::ExprPtr m_filterExpr;  // parsed (null = match-all)
     QString               m_filterError;   // last parse error (empty = ok)

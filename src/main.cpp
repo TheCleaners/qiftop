@@ -22,6 +22,11 @@
 #include "backend/linux/NetlinkMonitor.h"
 #endif
 
+#ifdef BACKEND_BSD
+#include "backend/bsd/BsdConnectionMonitor.h"
+#include "backend/bsd/BsdNetworkMonitor.h"
+#endif
+
 // QIFTOP_VERSION is injected by CMake (project() version, single source of
 // truth). Fall back to a sentinel only if someone builds without it so the
 // translation unit still compiles.
@@ -174,6 +179,10 @@ int main(int argc, char *argv[])
         qCInfo(lcVerbose) << "main: DBus agent unavailable, using in-process backend";
         netMonitor  = std::make_unique<NetlinkMonitor>();
         connMonitor = std::make_unique<ConntrackMonitor>();
+#elif defined(BACKEND_BSD)
+        qCInfo(lcVerbose) << "main: DBus agent unavailable, using in-process BSD backend";
+        netMonitor  = std::make_unique<qiftop::backend::bsd::BsdNetworkMonitor>();
+        connMonitor = std::make_unique<qiftop::backend::bsd::BsdConnectionMonitor>();
 #else
 #       error "No backend available"
 #endif

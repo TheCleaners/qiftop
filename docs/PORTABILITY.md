@@ -1,10 +1,12 @@
 # Portability — multi-OS / multi-datapath roadmap
 
-> Status: **exploratory**. qiftop 0.2.2 is still a Linux product, but the
+> Status: **exploratory**. qiftop is primarily a Linux product, but the
 > tree now has a reusable Widgets-free `libqiftop`, the Qt Widgets GUI
-> (`qiftop`), and the ncurses terminal frontend (`nqiftop`). This document
-> records the current portability boundary and the backend-abstraction rules
-> to preserve for future ports.
+> (`qiftop`), and the ncurses terminal frontend (`nqiftop`) — and, as of the
+> BSD experiment, a real (interface-only) `backend/bsd` that builds and runs
+> the GUI/TUI/library + monitoring plugin on NetBSD 11 (and, by construction,
+> the other BSDs). This document records the current portability boundary and
+> the backend-abstraction rules to preserve for future ports.
 
 ---
 
@@ -25,6 +27,7 @@
 | `backend/dbus/` | Client-side DBus proxy monitors | 🟡 Portable wherever Qt DBus and a suitable bus are available. |
 | `backend/PlatformInfo` | Local address / uid-name / group helpers with `Q_OS_*` guards | 🟡 Compiles with fallbacks; richer data on Unix/Linux. |
 | `backend/linux/` | libnl-3, libnetfilter_conntrack, sock_diag, cgroup and netns attribution | 🔴 Linux-only. |
+| `backend/bsd/` | getifaddrs(3) AF_LINK per-interface counters + libpcap/BPF per-flow capture + per-OS sysctl process attribution + FreeBSD jail attribution (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS) | 🟡 Interface + per-flow + process attribution work on NetBSD 11 and FreeBSD 14/15; FreeBSD flows from jails are tagged as containers. |
 | `agent/` | DBus daemon wrapping the abstract monitors/resolver | 🟡 Service logic is mostly Qt Core/DBus; production data sources and install model are Linux. |
 | `dist/systemd/`, `dist/dbus/`, `dist/debian/`, RPM/Pages repo rules | systemd, system DBus policy, Debian/Fedora packaging | 🔴 Linux-distro-specific. |
 
@@ -68,18 +71,34 @@ would need.
 
 ### 2.2 FreeBSD / OpenBSD / NetBSD
 
-| Need | API |
-|------|-----|
-| Per-interface counters | `sysctl net.link.generic.ifdata.*` or `getifaddrs()` AF_LINK |
-| Per-flow counters | `pfctl -ss` parse, **libpfctl** (FreeBSD 13+), or BPF + userspace accounting |
-| Local addresses | `getifaddrs()` |
-| Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` |
-| Socket → PID | `sysctl net.inet.tcp.pcblist` plus `kvm_*` / `procstat` |
-| Container attribution | Jails via `jail_get(2)`; OCI runtime attribution is platform-specific |
-| Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed |
+| Need | API | Status |
+|------|-----|--------|
+| Per-interface counters | `getifaddrs()` AF_LINK `struct if_data` (or `sysctl net.link.generic.ifdata.*`) | ✅ Implemented in `backend/bsd` (`BsdNetworkWorker`); verified on NetBSD 11. |
+| Per-flow counters | libpcap/BPF + userspace 5-tuple flow table (the iftop model). Alternatives: `pfctl -ss`, **libpfctl** (FreeBSD 13+), NetBSD `npf` | ✅ Implemented in `backend/bsd` (`BsdConnectionWorker`); verified on NetBSD 11. |
+| Local addresses | `getifaddrs()` | ✅ Folded into the interface snapshot (AF_INET/AF_INET6 CIDRs). |
+| Ephemeral port range | `sysctl net.inet.ip.portrange.first/last` | ✅ Read by `BsdConnectionWorker` for direction inference. |
+| Socket → PID | `KERN_FILE2` ⋈ `net.inet.*.pcblist` ⋈ `KERN_PROC2` (the sockstat join; pure sysctl, no kvm) | ✅ Implemented in `backend/bsd` (`BsdSocketResolver`); flows carry comm/pid/uid on NetBSD. |
+| Container attribution | Jails via `kinfo_proc.ki_jid` + `jail_get(2)` (name); OCI runtime attribution is platform-specific | ✅ FreeBSD: jailed flows tagged `ContainerInfo{runtime="jail", id=jid, name}`. |
+| Privilege model | Setuid/helper daemon or capsicum-sandboxed service; DBus not assumed | ⬜ Agent is Linux-only today; BSD runs the in-process backend (capture needs root for `/dev/bpf`). |
 
-Verdict: **moderate** lift for interface counters and basic flows, larger if
-we want a DBus-free transport and rich attribution.
+What works today (validated on NetBSD 11 and FreeBSD 14/15): `libqiftop.so`, the
+`qiftop` GUI, the `nqiftop` TUI, and the `check_qiftop` monitoring plugin all
+build and run. The Interfaces view shows live per-interface rates, totals, MTU,
+and oper-state from `getifaddrs(3)`; the Connections view shows live per-flow
+TCP/UDP rates, totals, SYN-observed direction, and **per-flow process
+attribution** (comm/pid/uid, with group-by-process) captured via libpcap/BPF
+plus a pure-sysctl socket→PID resolver (run with elevated privileges for
+`/dev/bpf` access). On FreeBSD, flows owned by a **jailed** process are tagged
+as containers (`runtime="jail"`), so group-by-container and the `runtime:jail`
+filter work. The `backend/bsd` code is shared across the whole BSD family; only
+the process/jail-attribution sysctl layer is per-OS (NetBSD and FreeBSD
+implemented; OpenBSD/DragonFly build with attribution stubbed). Remaining gap:
+a privileged agent. The `qiftop-agent` remains Linux-only; on BSD the
+in-process backend is the natural, DBus-free path.
+
+Verdict: interface, per-flow, process, **and** FreeBSD jail attribution are
+working on BSD; the next lifts are an optional privileged-agent / non-DBus
+transport and OpenBSD/DragonFly attribution.
 
 ### 2.3 macOS / Darwin
 
@@ -137,10 +156,16 @@ for real-time byte accounting and packaging.
    sources in or out; resolver `initialize()` and `capabilities()` decide what
    is actually available at runtime.
 6. **Adding a platform requires a real backend clause.** The root
-   `CMakeLists.txt` currently errors on non-Linux because no concrete backend
-   exists. A future port should add `src/backend/<platform>/`, link the target
-   into `qiftoplib`, define `BACKEND_<PLATFORM>`, and update the few frontend
-   factory branches that instantiate the concrete monitors.
+   `CMakeLists.txt` detects a platform *family* into `QIFTOP_PLATFORM`
+   (`linux`, `bsd`, or empty → `FATAL_ERROR`). A port adds
+   `src/backend/<family>/`, links the static `backend_<family>` target into
+   `qiftoplib`, defines `BACKEND_<FAMILY>`, sets `QIFTOP_BACKEND_TARGET` /
+   `QIFTOP_BACKEND_DEFINE`, and adds the matching `#ifdef BACKEND_<FAMILY>`
+   construction branch in `src/main.cpp` and `src/tui/main.cpp`. The `bsd`
+   family is the worked example: one `getifaddrs(3)` backend shared by every
+   BSD, with `__has_include`-based curses selection (`src/tui/Curses.h`) and a
+   `getpeereid(3)` fallback for the handoff peer-credential check. The
+   `qiftop-agent` target is gated to `QIFTOP_PLATFORM STREQUAL "linux"`.
 
 ---
 
@@ -203,10 +228,258 @@ backend interfaces.
 
 ## 6. What's not planned for 0.2.x
 
-* macOS, Windows, or BSD support.
+* Full macOS / Windows support.
+* **BSD beyond NetBSD/FreeBSD** — interface, per-flow (libpcap/BPF), process,
+  and FreeBSD jail attribution all work on NetBSD and FreeBSD, but BSD support
+  is a byproduct of the portability experiment, not a shipped/packaged target
+  yet. Process attribution is implemented for NetBSD and FreeBSD (FreeBSD also
+  tags jails as containers); OpenBSD/DragonFly build with attribution stubbed.
 * A non-DBus production transport.
 * A macOS Network Extension / notarized collector.
 * A Windows packet driver integration.
+* A BSD `qiftop-agent` (privileged daemon + attribution); BSD runs the
+  in-process backend only (capture needs root for `/dev/bpf`).
 * Shipping in-process privileged capture to third-party `libqiftop`
   consumers; installed library consumers are expected to stream from the
   agent via the DBus proxies.
+
+---
+
+## 7. BSD port — implementation notes & hard-won lessons
+
+This section is the field guide for anyone extending the BSD backend (or
+porting qiftop, or a similar Qt6/libpcap tool, to another BSD or macOS). It
+records the things that cost trial-and-error so you don't repeat them. The
+code lives in `src/backend/bsd/` and is shared across the BSD family; only the
+process-attribution sysctl struct layouts are currently NetBSD-specific.
+
+### 7.1 Build environment (NetBSD 11, validated)
+
+* Toolchain: base GCC (12.x) is fine; `cmake`, `ninja`, `pkg-config` from
+  pkgsrc. Non-login shells do **not** have pkgsrc/base sbin on `PATH` — export
+  `PATH=/usr/pkg/bin:/usr/pkg/sbin:/usr/sbin:/sbin:$PATH` before building or
+  running, or `sysctl`/`ldconfig`/etc. "command not found" will bite you.
+* Qt6: `pkgsrc` `qt6-qtbase` installs under `/usr/pkg/qt6` with the
+  `netbsd-g++` mkspec. CMake finds it without hints once `/usr/pkg` is on the
+  prefix path. Widgets/Network/DBus/Test are all present.
+* Curses: NetBSD **base** curses (`/usr/lib/libcurses`) is wide-capable but is
+  NOT named `ncursesw`, so CMake's `find_package(Curses)` with
+  `CURSES_NEED_WIDE` misses it. We drop `CURSES_NEED_WIDE` on the BSD family
+  and use base curses (see `CMakeLists.txt`). Installing pkgsrc `ncurses` is
+  unnecessary and actively unhelpful (its headers live under
+  `/usr/pkg/include/ncurses/` and self-reference `<ncurses/ncurses_dll.h>`,
+  which needs `-I/usr/pkg/include` too — easier to just use base curses).
+* libpcap: in base (`/usr/lib/libpcap`, `pcap.h`). No pkgsrc dependency
+  needed. `pcap-config --libs` exists.
+
+### 7.2 CMake platform abstraction
+
+`QIFTOP_PLATFORM` (`linux`|`bsd`|empty) is derived from `CMAKE_SYSTEM_NAME`
+(`NetBSD|FreeBSD|OpenBSD|DragonFly` → `bsd`). It drives `add_subdirectory`,
+the `BACKEND_<FAMILY>` compile define, and `QIFTOP_BACKEND_TARGET` /
+`QIFTOP_BACKEND_DEFINE` (reused by `nqiftop`, which links a backend directly).
+`qiftop-agent` is gated to `linux` (its attribution layer pulls in
+`backend/linux/` headers). When you gate a target out, also guard its
+`install(TARGETS ...)` and any `add_custom_command(TARGET ...)` — CMake errors
+at configure time on a missing target, not just at build.
+
+### 7.3 Interface counters — `getifaddrs(3)` AF_LINK
+
+Portable across every BSD and macOS. Per-interface counters hang off the
+`AF_LINK` entry's `ifa_data` as `struct if_data`: `ifi_ibytes/obytes`,
+`ifi_ipackets/opackets`, `ifi_ierrors/oerrors`, `ifi_iqdrops` (there is no
+output-drop counter — leave `txDropped` 0), `ifi_mtu`, `ifi_type` (IFT_*),
+`ifi_link_state` (`LINK_STATE_{UNKNOWN,DOWN,UP}` → map to RFC 2863 oper-state).
+Walk AF_INET/AF_INET6 entries separately for addresses. `IFT_*` constants vary
+by OS — guard the less-common ones with `#ifdef`.
+
+### 7.4 ncurses wide-character rendering (the garbled-frames trap)
+
+Symptom: box-drawing frames render as garbage on BSD but fine on Linux.
+Cause: the narrow `addstr()`/`mvaddstr()` family takes a `char*`; Linux
+ncurses decodes the multibyte UTF-8 into cells, but BSD base curses places
+each *byte* in its own cell. Fix: render through the **wide** API
+(`mvaddwstr`, `wchar_t`). `QString::toWCharArray` emits UCS-4 where `wchar_t`
+is 4 bytes (Linux/BSD), so the conversion is a one-liner. Two more
+requirements:
+* Request wide prototypes before including curses: define
+  `_XOPEN_SOURCE_EXTENDED` and `NCURSES_WIDECHAR` (see `src/tui/Curses.h`,
+  which also picks `<ncurses.h>` vs `<curses.h>` via `__has_include`).
+* Wide output needs a UTF-8 `LC_CTYPE`. `setlocale(LC_ALL, "")` honours the
+  environment, but over SSH that is often `C`/`POSIX` (ASCII), and then
+  `wcrtomb` can't encode the glyphs. After `setlocale`, check
+  `nl_langinfo(CODESET)` and fall back to `C.UTF-8`/`en_US.UTF-8` if it isn't
+  UTF-8 (see `Screen::init`). This fix also helps marginal Linux locales.
+
+### 7.4a TUI input model: read raw bytes, not `wgetch()`
+
+nqiftop drives input from the Qt event loop via a
+`QSocketNotifier(STDIN_FILENO, Read)`. The original design drained ncurses
+`wgetch()` (under `nodelay`) in the callback, which turned out to be fragile
+across curses implementations and is now **replaced by reading raw bytes
+directly** (`read(STDIN_FILENO, …)`), decoding keys ourselves in
+`Screen::pollKey` from a byte buffer (`Screen::feedInput`). ncurses is used for
+OUTPUT only. The two reasons this matters:
+
+* **`wgetch()` + an external event loop spins at 100% CPU on EOF (all
+  platforms).** `wgetch()` returns `ERR` for BOTH "no input pending" and EOF,
+  so a closed/redirected stdin (pipe/pty hangup, or `</dev/null`) stays
+  *readable* forever while yielding no key — the level-triggered notifier
+  re-fires endlessly and the TUI can never be quit by a keystroke. With a raw
+  `read()`, EOF is unambiguous (`n == 0`): disable the notifier and quit (an
+  interactive TUI whose input closed should exit, like top/htop). No POLLHUP
+  heuristics or wakeup counting needed.
+* **FreeBSD ncursesw simply does not return typed keys via `wgetch()` in this
+  model** — the notifier fires, but `wgetch()` yields `ERR` and never consumes
+  the byte (which then echoes once the tty is restored), so the TUI was
+  unusable on FreeBSD and span the CPU. NetBSD (base curses) and Linux
+  (ncursesw) worked with the same code; reading raw bytes ourselves sidesteps
+  the difference entirely and FreeBSD is now fully interactive.
+
+The terminal still needs `cbreak()` + `noecho()` (done in `Screen::init`) so
+the kernel delivers bytes immediately and unechoed; `Screen::pollKey` hand-
+assembles CSI/SS3 escape sequences (arrows, Home/End, PgUp/PgDn) from the
+buffer, returning the same `KEY_*` codes the rest of the app expects. A partial
+sequence split across `read()` bursts is held in the buffer until the rest
+arrives. Verified interactive (tab switch, navigation, quit) and EOF-clean on
+Linux, NetBSD, and FreeBSD.
+
+### 7.5 Peer credentials — `getpeereid(3)` not `SO_PEERCRED`
+
+Linux's `SO_PEERCRED` / `struct ucred` does not exist on the BSDs. Use
+`getpeereid(fd, &euid, &egid)` (NetBSD/FreeBSD/OpenBSD/DragonFly/macOS) when
+you only need the peer uid (as the handoff credential gate does). See the
+`#if defined(__linux__)` split in `src/util/HandoffServer.cpp`.
+
+### 7.6 Per-flow capture — libpcap/BPF (there is no conntrack)
+
+This is the iftop model and the portable BSD/macOS datapath. Worker thread
+opens one `pcap_open_live` handle per up interface (non-promiscuous, snaplen
+~128 — enough for L2+IPv6+TCP headers), non-blocking, with a `QSocketNotifier`
+on `pcap_get_selectable_fd` so capture is event-driven, not polled. Gotchas:
+
+* **Link-layer header length is per-DLT and per-OS.** Switch on
+  `pcap_datalink()`: `DLT_EN10MB` = 14 (handle one `0x8100` VLAN tag → 18),
+  `DLT_NULL`/`DLT_LOOP` = 4-byte address-family header, `DLT_RAW` = 0. **Do
+  not hardcode `DLT_RAW`'s numeric value** — it differs across BSDs (14 on
+  NetBSD, 12 elsewhere); always use the macro. We sniff the IP version nibble
+  after the header rather than trusting the AF word, which sidesteps
+  `DLT_NULL` host/network byte-order ambiguity.
+* **IPv6 extension headers are not chased.** We read `next header` and assume
+  L4 at +40; if it isn't TCP/UDP we simply don't read ports. Good enough for a
+  rate monitor; revisit if you need exact ports through ext-header chains.
+* **Orientation & flow merging.** Compare src/dst against the local interface
+  address set to decide tx vs rx and to merge both half-flows into one entry.
+  Normalise both-local (loopback) and forwarded flows by a deterministic
+  endpoint ordering (higher port = "local") so the two directions collapse to
+  one key. The flow key (see `BsdFlowKey.h`) is shared with the resolver so a
+  captured flow and its owning PCB hash identically.
+* **Direction from the TCP SYN.** A SYN-without-ACK identifies the initiator:
+  SYN-from-local ⇒ outbound, SYN-from-remote ⇒ inbound. This beats the
+  ephemeral-port heuristic (which misfires when peers use different local port
+  ranges — e.g. a Linux client's 33xxx port looks non-ephemeral to NetBSD's
+  49152+ range) and is *more* accurate than qiftop's Linux in-process path
+  (which leaves direction Unknown). Fall back to `inferDirection()` when no
+  SYN was observed (capture started mid-connection). This logic is
+  platform-neutral and is the prime candidate to offer as a Linux pcap capture
+  path too.
+* **Use `pcap_create` + `pcap_set_immediate_mode(p, 1)` + `pcap_activate`, NOT
+  `pcap_open_live`.** On the BSDs, BPF buffers captured packets and only makes
+  the `pcap_get_selectable_fd()` readable once the buffer fills or the read
+  timeout expires. Driving pcap from an event loop (`QSocketNotifier` on the
+  selectable fd) therefore sees NO packets on FreeBSD until a buffer fills —
+  effectively never for light flows, so the Connections view stays empty.
+  Immediate mode delivers each packet as it arrives, which is what makes the
+  notifier fire; `pcap_open_live` can't request it. (NetBSD's BPF + the read
+  timeout happened to flush often enough to mostly work, but immediate mode is
+  the correct, portable choice for all BSDs/macOS.)
+* **Bounded caches.** Cap the flow table (we use 16384; drop *new* flows at
+  the cap so existing rates stay correct, never clear) and the emitted
+  snapshot (top-N by bytes, 4096) per AGENTS §8a rule 8. Prune by a last-seen
+  TTL each tick.
+* Capture needs read access to `/dev/bpf*` — root on the BSDs. Degrade to a
+  one-shot `accountingUnavailable` signal when no handle opens.
+
+### 7.7 Process attribution — per-OS socket→PID (sysctl, no kvm)
+
+Both BSDs map sockets to PIDs **without kvm**, but the mechanism differs per
+OS, so `BsdSocketResolver::refresh()` is `#if defined(__NetBSD__)` /
+`#elif defined(__FreeBSD__)` / `#else` (stub). Both build an exact 4-tuple map
+plus a local 2-tuple fallback (listeners / unconnected UDP, mirroring the Linux
+sock_diag 2-tuple path), keyed identically to the capture worker via
+`BsdFlowKey.h`. Reading other processes' sockets/fds needs privilege; qiftop's
+capture already runs as root, so the resolver sees everything.
+
+**NetBSD** — the `sockstat(1)` join (`usr.bin/sockstat/sockstat.c`):
+1. `KERN_FILE2` / `KERN_FILE_BYPID` → `struct kinfo_file[]`: for each
+   `DTYPE_SOCKET` fd, `ki_fdata` is the `struct socket *` and `ki_pid` the
+   owner. Use **BYPID** (BYFILE doesn't populate `ki_pid`).
+2. `net.inet.{tcp,udp}.pcblist` / `net.inet6.{tcp6,udp6}.pcblist` →
+   `struct kinfo_pcb[]`: `ki_sockaddr` is the same `struct socket *` (join key),
+   `ki_src`/`ki_dst` the sockaddrs.
+3. `KERN_PROC2` / `KERN_PROC_ALL` → `kinfo_proc2`: `p_pid` → `p_comm` + `p_ruid`.
+   Join `pcb.ki_sockaddr == file.ki_fdata`.
+   * The MIB needs trailing args appended after `sysctlnametomib`: for
+     `pcblist`, `{ PCB_ALL, 0, sizeof(struct kinfo_pcb), INT_MAX }` (`PCB_ALL`
+     is `0`, in `<sys/socket.h>`). A bare
+     `sysctlbyname("net.inet.tcp.pcblist", …)` returns `EINVAL` — the symptom
+     of the missing trailing elements.
+
+**FreeBSD** — do **NOT** use the `xinpcb`/`pcblist` join: `struct xinpcb` and
+`struct xsocket` are NOT ABI-stable and drift between the running kernel and
+the installed headers (observed on a FreeBSD 14 image: kernel `xinpcb` 744 B
+vs header 400 B, `xsocket` 400 vs 240 — every field read garbage). Instead use
+the length-prefixed, offset-stable `kinfo_file` path that `libprocstat`/
+`sockstat` use:
+1. `KERN_PROC` / `KERN_PROC_PROC` → `struct kinfo_proc[]` (stride by
+   `ki_structsize`): `ki_pid` → `ki_comm` + `ki_ruid`.
+2. Per pid, `KERN_PROC` / `KERN_PROC_FILEDESC` → `struct kinfo_file[]` (stride
+   by `kf_structsize`): for `KF_TYPE_SOCKET` fds with `kf_sock_domain` AF_INET/
+   INET6 and `kf_sock_protocol` TCP/UDP, `kf_sa_local` / `kf_sa_peer` already
+   carry the 5-tuple — no socket-pointer join needed, and we know the pid from
+   the per-pid query. `kf_structsize` self-describes the record, so a newer
+   kernel stays parseable with older headers (the whole point of `kinfo_file`).
+   Note the older header field names are `kf_sock_domain`/`kf_sock_type`/
+   `kf_sock_protocol` (newer trees add `…0` suffixed variants).
+3. Jail (container) attribution: `kinfo_proc.ki_jid` gives each process's jail
+   id; `jail_get(2)` (walked with a `lastjid` in-param, like `jls`) maps jid →
+   name. A jailed process's flows are tagged
+   `ContainerInfo{runtime="jail", id=jid, name}`, which lights up
+   group-by-container and the `runtime:jail` / `container:` filters. The shared
+   resolver returns a combined `Attribution{process, container}` so NetBSD
+   (no container model) and FreeBSD use one code path.
+
+**Two traps shared by both (both fixed in `suckMib`):**
+
+* **A sysctl size-probe (`oldp == NULL`) returns 0, not `-1`/`ENOMEM`.** A fetch
+  loop that breaks on the first `rc == 0` yields a correctly-*sized* but
+  **zero-filled** buffer and silently attributes nothing.
+* **A 0-byte result must terminate the grow loop.** `KERN_PROC_FILEDESC` for a
+  process with no open files (kernel threads, pid 0) returns `sz == 0`; if the
+  loop only stops once it has read into a non-null buffer, `buf.resize(0)`
+  leaves the buffer empty and it **spins forever**. Break when
+  `rc == 0 && (haveBuffer || sz == 0)`. (NetBSD's queries always returned data,
+  so this only surfaced on FreeBSD's per-pid filedesc walk.)
+
+The resolver sysctls themselves work non-root; only the pcap capture needs
+root. Refresh once per snapshot tick — cheap, no per-flow cost (FreeBSD's
+per-pid filedesc walk is O(processes) sysctls but fine at a 1 s cadence, same
+as `sockstat`). OpenBSD/DragonFly will need their own branch (different
+`kinfo_*` layouts); until then they build with attribution stubbed.
+
+### 7.8 DBus is optional on BSD
+
+On BSD the in-process backend is the natural, first-class path; do **not**
+require a running DBus bus. The frontends probe for the agent and fall back
+cleanly to in-process when no bus/agent is present (verified: no DBus warnings
+on a NetBSD box with no session/system bus). A future BSD privileged agent
+should consider a non-DBus IPC (or make DBus strictly optional).
+
+### 7.9 What's portable vs OS-specific (for the next BSD)
+
+* Portable as-is across all BSDs: the `getifaddrs` interface backend, the
+  libpcap capture + parsing + flow accounting + SYN-direction, the curses and
+  `getpeereid` shims, the CMake plumbing.
+* Per-OS work for FreeBSD/OpenBSD/DragonFly: the process-attribution sysctl
+  layer (different `kinfo_*` structs / MIBs) and, eventually, jail/container
+  attribution (`jail_get(2)` on FreeBSD) and a privileged agent.

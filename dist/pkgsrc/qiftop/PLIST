@@ -1,0 +1,81 @@
+@comment $NetBSD$
+@comment
+@comment SCAFFOLDING — regenerate with `make print-PLIST` once this builds in a
+@comment real pkgsrc tree. Captured from a staged `cmake --install` of the BSD
+@comment client build on NetBSD 11 (prefix /usr/pkg). The Linux/agent-only
+@comment install rules (D-Bus policy, systemd unit, nftables shim, agent man
+@comment pages + completions) are gated on the agent target in CMakeLists.txt
+@comment and so are correctly absent here.
+@comment
+@comment Known remaining issue to resolve during verification: man pages are
+@comment installed pre-gzipped (.gz) by upstream CMake, whereas pkgsrc normally
+@comment compresses them itself. Either teach CMake to install uncompressed man
+@comment pages or reconcile the .gz entries with pkgsrc's man handling.
+@comment
+bin/nqiftop
+bin/qiftop
+include/qiftop/aggregate/ConnectionAggregator.h
+include/qiftop/aggregate/InterfaceAggregator.h
+include/qiftop/backend/CompositeResolver.h
+include/qiftop/backend/Connection.h
+include/qiftop/backend/ConnectionMonitor.h
+include/qiftop/backend/NetworkMonitor.h
+include/qiftop/backend/PlatformInfo.h
+include/qiftop/backend/ProcessDetails.h
+include/qiftop/backend/ProcessResolver.h
+include/qiftop/backend/ProcessResolverFactory.h
+include/qiftop/backend/bsd/BsdConnectionMonitor.h
+include/qiftop/backend/bsd/BsdConnectionWorker.h
+include/qiftop/backend/bsd/BsdFlowKey.h
+include/qiftop/backend/bsd/BsdNetworkMonitor.h
+include/qiftop/backend/bsd/BsdNetworkWorker.h
+include/qiftop/backend/bsd/BsdSocketResolver.h
+include/qiftop/backend/dbus/DBusConnectionMonitor.h
+include/qiftop/backend/dbus/DBusNetworkMonitor.h
+include/qiftop/backend/null/NullProcessResolver.h
+include/qiftop/config/Settings.h
+include/qiftop/dbus/Types.h
+include/qiftop/dns/DnsResolver.h
+include/qiftop/dns/QtDnsResolver.h
+include/qiftop/util/Autostart.h
+include/qiftop/util/ConnectionFilter.h
+include/qiftop/util/ConnectionHeuristics.h
+include/qiftop/util/Exportable.h
+include/qiftop/util/Exporter.h
+include/qiftop/util/HandoffClient.h
+include/qiftop/util/HandoffServer.h
+include/qiftop/util/Logging.h
+include/qiftop/util/PrivilegeEscalator.h
+include/qiftop/util/Units.h
+lib/cmake/qiftop/qiftopConfig.cmake
+lib/cmake/qiftop/qiftopConfigVersion.cmake
+lib/libqiftop.so
+lib/libqiftop.so.0
+lib/libqiftop.so.0.2.5
+lib/pkgconfig/qiftop.pc
+libexec/qiftop/check_qiftop
+man/man1/check_qiftop.1.gz
+man/man1/nqiftop.1.gz
+man/man1/qiftop.1.gz
+share/applications/io.github.thecleaners.qiftop.desktop
+share/applications/io.github.thecleaners.qiftop.nqiftop.desktop
+share/bash-completion/completions/check_qiftop
+share/bash-completion/completions/nqiftop
+share/bash-completion/completions/qiftop
+share/doc/qiftop/LICENSE
+share/doc/qiftop/README.md
+share/fish/vendor_completions.d/check_qiftop.fish
+share/fish/vendor_completions.d/nqiftop.fish
+share/fish/vendor_completions.d/qiftop.fish
+share/icons/hicolor/128x128/apps/io.github.thecleaners.qiftop.png
+share/icons/hicolor/16x16/apps/io.github.thecleaners.qiftop.png
+share/icons/hicolor/24x24/apps/io.github.thecleaners.qiftop.png
+share/icons/hicolor/256x256/apps/io.github.thecleaners.qiftop.png
+share/icons/hicolor/32x32/apps/io.github.thecleaners.qiftop.png
+share/icons/hicolor/48x48/apps/io.github.thecleaners.qiftop.png
+share/icons/hicolor/64x64/apps/io.github.thecleaners.qiftop.png
+share/icons/hicolor/scalable/apps/io.github.thecleaners.qiftop.svg
+share/metainfo/io.github.thecleaners.qiftop.metainfo.xml
+share/zsh/site-functions/_check_qiftop
+share/zsh/site-functions/_nqiftop
+share/zsh/site-functions/_qiftop
