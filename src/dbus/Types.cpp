@@ -68,7 +68,9 @@ QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c)
       // v0.4 attribution (append-only)
       << c.pid << c.uid << c.comm
       << c.containerRuntime << c.containerId << c.containerName
-      << c.containerChain;
+      << c.containerChain
+      // v0.5 attribution reason (append-only)
+      << c.reason;
     a.endStructure();
     return a;
 }
@@ -85,7 +87,8 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c)
       >> c.ifIndex >> c.tcpState
       >> c.pid >> c.uid >> c.comm
       >> c.containerRuntime >> c.containerId >> c.containerName
-      >> c.containerChain;
+      >> c.containerChain
+      >> c.reason;
     // Clamp wire-sourced chain length; an over-long chain from a
     // malicious/buggy agent must not be retained on the receiver.
     if (c.containerChain.size() > kMaxContainerChainDepth)
@@ -190,6 +193,7 @@ ConnectionDto toDto(const Connection &c)
     for (const auto &ci : c.containerChain) {
         d.containerChain << ContainerInfoDto{ci.runtime, ci.id, ci.name};
     }
+    d.reason = quint8(c.reason);
     return d;
 }
 
@@ -230,6 +234,11 @@ Connection fromDto(const ConnectionDto &d)
         const auto &ci = d.containerChain.at(i);
         c.containerChain << qiftop::backend::ContainerInfo{ci.runtime, ci.id, ci.name};
     }
+    // Clamp the attribution reason; unknown future values fold into the
+    // generic NoLocalSocket rather than UB-casting an out-of-range enum.
+    c.reason = (d.reason <= quint8(AttributionReason::Forwarded))
+               ? static_cast<AttributionReason>(d.reason)
+               : AttributionReason::NoLocalSocket;
     return c;
 }
 

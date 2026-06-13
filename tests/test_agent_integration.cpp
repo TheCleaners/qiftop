@@ -6,7 +6,7 @@
 // DBus contract:
 //
 //   • org.qiftop.NetworkAgent1 registers within a few seconds
-//   • Properties.Get(Version)      → "0.5"
+//   • Properties.Get(Version)      → "0.6"
 //   • Properties.Get(Capabilities) → contains the stable contract tokens
 //   • GetInterfaces() returns quickly without error
 //   • SetDesiredIntervalMs(200) raises StatsChanged emission rate well
@@ -130,7 +130,7 @@ private slots:
             QString::fromLatin1(kIfacesIface),
             QStringLiteral("Version"));
         QVERIFY2(vReply.isValid(), qPrintable(vReply.error().message()));
-        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.5"));
+        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.6"));
 
         QDBusReply<QDBusVariant> cReply = props.call(
             QStringLiteral("Get"),
@@ -146,7 +146,8 @@ private slots:
                                 "snapshot-cap", "iana-proto",
                                 "direction-on-wire", "snapshot-timestamp",
                                 "ifindex", "oper-state", "link-errors",
-                                "tcp-state", "on-demand-process-details"}) {
+                                "tcp-state", "attribution-reason",
+                                "on-demand-process-details"}) {
             QVERIFY2(caps.contains(QString::fromLatin1(tok)),
                      qPrintable(QStringLiteral("missing capability '%1'; got: [%2]")
                                     .arg(QString::fromLatin1(tok),

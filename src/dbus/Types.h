@@ -101,6 +101,11 @@ struct ConnectionDto {
     // OR the flow has no container ancestry. Leaf entry equals
     // (containerRuntime, containerId, containerName) when both populated.
     ContainerInfoDtoList containerChain;
+    // v0.5 addition — why the flow is / isn't attributed (AttributionReason).
+    // 0=Resolved, 1=NoLocalSocket, 2=Orphaned, 3=Forwarded. Populated
+    // server-side; gated by the `attribution-reason` capability token.
+    // Clients without the token derive it via heuristics::attributionReason.
+    quint8 reason = 0;
 };
 using ConnectionDtoList = QList<ConnectionDto>;
 

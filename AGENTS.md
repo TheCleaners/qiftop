@@ -198,12 +198,12 @@ restarts.
 
 DTOs live in `src/dbus/Types.h`.
 
-**Connection wire signature** (22 outer fields + nested chain):
-`a(yysqysqttttsyuyuussssa(sss))` =
+**Connection wire signature** (23 outer fields + nested chain):
+`a(yysqysqttttsyuyuussssa(sss)y)` =
 `(proto, localFamily, localAddress, localPort, remoteFamily, remoteAddress,
 remotePort, rxBytes, txBytes, rxPackets, txPackets, iface, direction,
 ifIndex, tcpState, pid, uid, comm, containerRuntime, containerId,
-containerName, containerChain[a(sss)])`.
+containerName, containerChain[a(sss)], reason)`.
 
 Each `containerChain` entry is `(runtime, id, name)` — outer-to-inner
 nesting, leaf entry equals `(containerRuntime, containerId, containerName)`
@@ -274,10 +274,22 @@ Per-field notes:
   `[{"kubernetes", "<pod-uid>", ""}, {"containerd", "<cid>", ""}]`
   (depth 2); a flow inside docker-in-docker can reach depth 3.
   Capability: `container-chain-wire`.
+* `reason` — Why the flow is / isn't attributed to a local process
+  (`AttributionReason`): `0=Resolved` (pid > 0), `1=NoLocalSocket`
+  (local endpoint is ours but no live socket was found — a closed UDP
+  flow still in conntrack, a kernel socket, or a genuine miss),
+  `2=Orphaned` (TCP teardown state — the owning socket is gone), `3=
+  Forwarded` (routed/NAT/masquerade: neither endpoint is a host
+  address, so there is no local process by design). Computed
+  server-side after attribution via `heuristics::attributionReason`
+  (reuses the same host-address context as direction inference).
+  `fromDto` clamps unknown values to `NoLocalSocket`. Clients without
+  the token derive it locally via the same shared heuristic.
+  Capability: `attribution-reason`.
 
 ### Contract version & capabilities
 
-`Version` is a free-form string (currently `"0.5"`) bumped only for
+`Version` is a free-form string (currently `"0.6"`) bumped only for
 *additive* changes to the agent surface that clients may care about.
 **Breaking** changes (DTO signature, method removal/rename) still require
 a fresh `org.qiftop.NetworkAgent2` interface per §8.
@@ -292,9 +304,12 @@ a fresh `org.qiftop.NetworkAgent2` interface per §8.
 > bulk process + container attribution. The 0.4 → 0.5 bump added the
 > on-demand `Connections.GetProcessDetails(pid)` RPC for fetching
 > `exe`/`cmdline`/`cwd`/`startTime` lazily — additive (no DTO
-> change). Since only pre-release alphas existed in those windows we
-> reshaped in place rather than branching `NetworkAgent2`. Older
-> alpha clients failing to unmarshal fall back cleanly to the
+> change). The 0.5 → 0.6 bump appended a `reason` byte
+> (`AttributionReason`) to `ConnectionDto` so consumers can tell a
+> forwarded/orphaned flow (no local process by design) from a genuine
+> attribution miss. Since only pre-release alphas existed in those
+> windows we reshaped in place rather than branching `NetworkAgent2`.
+> Older alpha clients failing to unmarshal fall back cleanly to the
 > in-process backend via the existing probe. Post-v0.1 stable
 > release, breaking changes MUST go through `NetworkAgent2`.
 
@@ -317,6 +332,7 @@ older agents. Tokens currently emitted:
 | `oper-state`          | `InterfaceStatsDto.operState` populated with `IF_OPER_*` per RFC 2863. |
 | `link-errors`         | `InterfaceStatsDto` carries `rxErrors` / `txErrors` / `rxDropped` / `txDropped`. |
 | `tcp-state`           | `ConnectionDto.tcpState` populated for TCP flows.           |
+| `attribution-reason`  | `ConnectionDto.reason` populated server-side (`AttributionReason`: Resolved/NoLocalSocket/Orphaned/Forwarded) so clients can distinguish "no local process by design" (routed/NAT, torn-down socket) from a genuine attribution miss. Advertised unconditionally — the reason is derivable even with no resolver wired. |
 | `process-attribution` | Resolver chain provides per-flow PID / comm / uid (Linux `SockDiagResolver`). UI-visible once `ConnectionDtoV2` lands. |
 | `container-attribution` | Resolver chain provides per-PID container runtime + id + name (Linux `CgroupClassifier`). |
 | `container-chain`     | Resolver chain exposes the full OUTER→INNER container nesting via `ProcessResolver::resolveContainerChainForPid` (Linux `CgroupClassifier`). Single-attribution consumers can ignore this and keep calling `resolveContainerForPid`. |
@@ -533,7 +549,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | Test                       | Subject                                                           |
 |----------------------------|-------------------------------------------------------------------|
 | `test_direction`           | `inferDirection` (ephemeral-port + local-end fallback)            |
-| `test_forwarded`           | `isForwardedFlow` heuristic                                       |
+| `test_forwarded`           | `isForwardedFlow` + `attributionReason` heuristics (Resolved/Forwarded/Orphaned/NoLocalSocket; PID always wins) |
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
 | `test_interface_aggregator` | `InterfaceAggregator` row identity, sorted snapshots, and per-interface rate computation without Qt model/view. |
 | `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, and copy helpers. |
@@ -550,13 +566,13 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_agent_integration`   | Spawns real `qiftop-agent --session`, drives Version/Capabilities/GetInterfaces/SetDesiredIntervalMs end-to-end |
 | `test_units`               | `util::formatBytes` / `formatByteRate` IEC unit boundaries + precision |
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
-| `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults. |
+| `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults; v0.5 `reason` round-trip + out-of-range clamp to NoLocalSocket. |
 | `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
 | `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
 | `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. |
 | `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). Uses a tiny stub source model — no real ConnectionModel needed. |
-| `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. |
+| `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. v0.5: `reason` (resolved/forwarded/orphaned/nosocket). |
 | `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
 | `test_resolver_factory`    | `qiftop::backend::createDefaultProcessResolver` — env-gated composite construction; `InterfacesService::capabilities()` aggregation: `process-attribution-wire` / `container-attribution-wire` / `container-chain-wire` mirror tokens emitted iff the underlying resolver advertises the producer-side token; `container-chain-wire` requires BOTH `container-attribution` AND `container-chain`. |
 | `test_sockdiag_parse`      | `qiftop::backend::sockDiagParse` — netlink dump message parsing edge cases (IPv4/IPv6, multi-message dumps, truncated tail); plus the local 2-tuple key ambiguity guard (a local key with two distinct inodes must not yield a confident PID). Pure parser, no socket. |

@@ -302,6 +302,26 @@ private slots:
         QVERIFY(!matches(QStringLiteral("chain_has:docker"),     ctx));
     }
 
+    void reasonField()
+    {
+        // `reason` matches the attribution-outcome string set server-side
+        // (resolved/forwarded/orphaned/nosocket).
+        Connection c = mkConn(L4Proto::Udp, "10.42.0.122", 9994, "84.17.53.155", 9993);
+        c.reason = AttributionReason::Forwarded;
+        Context ctx{c};
+
+        QVERIFY( matches(QStringLiteral("reason:forwarded"), ctx));
+        QVERIFY( matches(QStringLiteral("reason=forwarded"), ctx));
+        QVERIFY( matches(QStringLiteral("reason=FORWARDED"), ctx)); // case-insensitive
+        QVERIFY(!matches(QStringLiteral("reason=resolved"), ctx));
+        QVERIFY( matches(QStringLiteral("reason!=resolved"), ctx));
+
+        // Default Connection reports "resolved" (the neutral default).
+        Connection d = mkConn(L4Proto::Tcp, "10.0.0.5", 8080, "1.2.3.4", 443);
+        Context ctxd{d};
+        QVERIFY(matches(QStringLiteral("reason=resolved"), ctxd));
+    }
+
     void attributionFieldsDefaultToEmpty()
     {
         // Unattributed flow (default Connection): nothing matches any of

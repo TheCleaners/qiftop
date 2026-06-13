@@ -29,6 +29,35 @@ namespace qiftop::heuristics {
     return !isOurs(c.local.address) && !isOurs(c.remote.address);
 }
 
+// Explain why a flow is / isn't attributed to a local process. Mirrors
+// the server-side computation so clients can derive the reason when the
+// agent doesn't advertise the `attribution-reason` capability (older
+// agents, or the in-process backend). Order matters: a flow with a PID is
+// always Resolved; otherwise forwarded beats teardown beats generic.
+[[nodiscard]] inline AttributionReason attributionReason(
+    const Connection &c,
+    const QSet<QHostAddress> &localAddrs,
+    const QSet<QHostAddress> &loopbackAddrs)
+{
+    if (c.process.pid > 0)
+        return AttributionReason::Resolved;
+    if (isForwardedFlow(c, localAddrs, loopbackAddrs))
+        return AttributionReason::Forwarded;
+    if (c.proto == L4Proto::Tcp) {
+        switch (c.tcpState) {
+        case TcpState::FinWait:
+        case TcpState::CloseWait:
+        case TcpState::LastAck:
+        case TcpState::TimeWait:
+        case TcpState::Close:
+            return AttributionReason::Orphaned;
+        default:
+            break;
+        }
+    }
+    return AttributionReason::NoLocalSocket;
+}
+
 // Client-side direction inference. Two-stage:
 //   1. Ephemeral-port heuristic (/proc/sys/net/ipv4/ip_local_port_range):
 //      whichever side's port is in the ephemeral range initiated.
