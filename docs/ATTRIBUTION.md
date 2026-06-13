@@ -188,6 +188,35 @@ precise peer identity. The local-only key lives in a distinct tagged
 namespace (`sockdiag::makeLocalKey`) so it cannot collide with a full
 4-tuple cache entry.
 
+### Dual-stack (v4-mapped IPv6) sockets
+
+A process that opens an `AF_INET6` socket and accepts/connects to an
+IPv4 peer (the dual-stack default for most servers, JVMs, and desktop
+daemons like `kdeconnectd`/`sshd`) appears in the **AF_INET6** sock_diag
+dump with a **v4-mapped** address (`::ffff:a.b.c.d`) — and a v6-wildcard
+listener appears as `::`. But conntrack/pcap report the very same flow
+as **pure IPv4** (`a.b.c.d`). The 16-byte v6 key the socket is indexed
+under can therefore never equal the 4-byte v4 key a v4 conntrack flow
+produces, so without normalisation *every* dual-stack daemon's v4
+traffic falls through to `pid=0`.
+
+`parseDumpChunk` fixes this at index time: when a v6 socket's address is
+v4-representable (`QHostAddress::toIPv4Address` reports ok — true for
+`::ffff:a.b.c.d` and `::`, false for genuine global v6 / `::1`), it is
+**additionally** indexed under the IPv4 4-tuple and IPv4 local keys.
+Genuine IPv6 sockets are untouched. This mirrors how `ss(8)`/the kernel
+attribute a v4 flow to a v6-mapped socket, and on a host running
+dual-stack daemons it recovers a large class of previously-unattributed
+local flows (e.g. it took one test host from ~47% to ~73% attribution).
+
+> Not fixable by this path, and correctly left as `pid=0`: flows whose
+> owning socket is gone (TCP `TIME_WAIT`/`CLOSE`, inode 0), ephemeral
+> UDP request sockets (DNS) already closed by the time of the /proc
+> walk, `AF_PACKET` raw sockets (DHCP `:67`/`:68`), and genuinely
+> **forwarded** flows on a router/NAT host — traffic whose local
+> address is not one of this host's addresses has no local owner by
+> design.
+
 ---
 
 ## 5. Data source #2 — `/proc/<pid>/cgroup`

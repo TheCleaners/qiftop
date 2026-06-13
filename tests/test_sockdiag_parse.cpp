@@ -182,6 +182,80 @@ private slots:
         QCOMPARE(out.value(full2, 0), quint64(2222));
     }
 
+    // A dual-stack AF_INET6 socket bound to a v4-mapped address
+    // (::ffff:a.b.c.d) carries PURE IPv4 wire traffic that conntrack
+    // reports as plain IPv4. The parser MUST additionally index it under
+    // the IPv4 4-tuple + local keys, or every dual-stack daemon's v4
+    // flows go unattributed (pid=0). Regression for the kdeconnectd /
+    // sshd / JVM v4-on-v6-socket attribution gap.
+    void dumpChunkNormalisesV4MappedIpv6()
+    {
+        using namespace qiftop::backend::sockdiag;
+        inet_diag_msg m{};
+        m.idiag_family = AF_INET6;
+        m.idiag_inode  = 7777;
+        const Q_IPV6ADDR s6 =
+            QHostAddress(QStringLiteral("::ffff:10.0.0.5")).toIPv6Address();
+        const Q_IPV6ADDR d6 =
+            QHostAddress(QStringLiteral("::ffff:203.0.113.7")).toIPv6Address();
+        std::memcpy(m.id.idiag_src, &s6, sizeof(s6));
+        std::memcpy(m.id.idiag_dst, &d6, sizeof(d6));
+        m.id.idiag_sport = qToBigEndian(quint16(43210));
+        m.id.idiag_dport = qToBigEndian(quint16(443));
+
+        QByteArray buf;
+        appendNlMsg(buf, SOCK_DIAG_BY_FAMILY, &m, sizeof(m));
+
+        QHash<QByteArray, quint64> out;
+        QCOMPARE(parseDumpChunk(buf.constData(), buf.size(), IPPROTO_TCP, out),
+                 DumpChunkResult::NeedMore);
+
+        // The pure-IPv4 4-tuple key (what a conntrack v4 flow produces)
+        // must resolve to the socket inode.
+        const QByteArray k4 = makeFlowKey(
+            IPPROTO_TCP,
+            QHostAddress(QStringLiteral("10.0.0.5")),     43210,
+            QHostAddress(QStringLiteral("203.0.113.7")),  443);
+        QCOMPARE(out.value(k4, 0), quint64(7777));
+        // ...and the IPv4 local key (for the UDP/unconnected fallback).
+        const QByteArray l4 = makeLocalKey(
+            IPPROTO_TCP, QHostAddress(QStringLiteral("10.0.0.5")), 43210);
+        QCOMPARE(out.value(l4, 0), quint64(7777));
+    }
+
+    // Genuine (non-mapped) IPv6 sockets must NOT acquire spurious IPv4
+    // keys — toIPv4Address reports ok=false for a global v6 / ::1, so the
+    // normalisation path is skipped.
+    void dumpChunkLeavesGenuineIpv6Alone()
+    {
+        using namespace qiftop::backend::sockdiag;
+        inet_diag_msg m{};
+        m.idiag_family = AF_INET6;
+        m.idiag_inode  = 8888;
+        const Q_IPV6ADDR s6 =
+            QHostAddress(QStringLiteral("2001:db8::1")).toIPv6Address();
+        const Q_IPV6ADDR d6 =
+            QHostAddress(QStringLiteral("2001:db8::2")).toIPv6Address();
+        std::memcpy(m.id.idiag_src, &s6, sizeof(s6));
+        std::memcpy(m.id.idiag_dst, &d6, sizeof(d6));
+        m.id.idiag_sport = qToBigEndian(quint16(50000));
+        m.id.idiag_dport = qToBigEndian(quint16(443));
+
+        QByteArray buf;
+        appendNlMsg(buf, SOCK_DIAG_BY_FAMILY, &m, sizeof(m));
+
+        QHash<QByteArray, quint64> out;
+        QCOMPARE(parseDumpChunk(buf.constData(), buf.size(), IPPROTO_TCP, out),
+                 DumpChunkResult::NeedMore);
+        // Exactly the v6 4-tuple + v6 local key — no v4 normalisation.
+        QCOMPARE(out.size(), 2);
+        const QByteArray v6key = makeFlowKey(
+            IPPROTO_TCP,
+            QHostAddress(QStringLiteral("2001:db8::1")), 50000,
+            QHostAddress(QStringLiteral("2001:db8::2")), 443);
+        QCOMPARE(out.value(v6key, 0), quint64(8888));
+    }
+
     void dumpChunkDoneAndAck()
     {
         using namespace qiftop::backend::sockdiag;
