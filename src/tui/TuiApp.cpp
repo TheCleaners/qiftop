@@ -391,9 +391,11 @@ void TuiApp::handleKey(int key)
         moveCursor(-bodyH / 2);
         break;
     case KEY_PPAGE:
+    case 2:                         // Ctrl-B: page up (vim/less pager)
         moveCursor(-bodyH);
         break;
     case KEY_NPAGE:
+    case 6:                         // Ctrl-F: page down (vim/less pager)
         moveCursor(bodyH);
         break;
     case KEY_HOME:
@@ -718,7 +720,7 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("Tab / 1 / 2"), QStringLiteral("Switch view (Interfaces / Connections)")),
             row(QStringLiteral("↑↓ / j k"),    QStringLiteral("Move the current-line cursor")),
             row(QStringLiteral("Enter / Space"), QStringLiteral("Open the row detail inspector")),
-            row(QStringLiteral("PgUp/PgDn ^U/^D"), QStringLiteral("Move cursor by a page / half page")),
+            row(QStringLiteral("PgUp/PgDn ^F/^B ^U/^D"), QStringLiteral("Page up/down (^F/^B) · half page (^U/^D)")),
             row(QStringLiteral("Home/End  G"),  QStringLiteral("Jump to top / bottom")),
             row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
             row(QStringLiteral("f"),            QStringLiteral("Fields: pick sort column & direction")),
