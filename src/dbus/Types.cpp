@@ -30,11 +30,19 @@ QDBusArgument &operator<<(QDBusArgument &a, const InterfaceStatsDto &s)
 const QDBusArgument &operator>>(const QDBusArgument &a, InterfaceStatsDto &s)
 {
     a.beginStructure();
+    // Base fields (≤ v0.2). Everything from ifIndex on was appended later;
+    // guard each with atEnd() so a newer client reading an older agent's
+    // shorter struct degrades to defaults instead of reading past the end
+    // (which aborts under QtDBus). See the ConnectionDto reader for rationale.
     a >> s.name >> s.type >> s.mtu >> s.addresses
       >> s.rxBytes >> s.txBytes >> s.rxPackets >> s.txPackets
-      >> s.isUp   >> s.isLoopback
-      >> s.ifIndex >> s.operState
-      >> s.rxErrors >> s.txErrors >> s.rxDropped >> s.txDropped;
+      >> s.isUp   >> s.isLoopback;
+    if (!a.atEnd()) a >> s.ifIndex;     // v0.3
+    if (!a.atEnd()) a >> s.operState;   // v0.3
+    if (!a.atEnd()) a >> s.rxErrors;    // v0.3
+    if (!a.atEnd()) a >> s.txErrors;    // v0.3
+    if (!a.atEnd()) a >> s.rxDropped;   // v0.3
+    if (!a.atEnd()) a >> s.txDropped;   // v0.3
     a.endStructure();
     return a;
 }
@@ -78,17 +86,29 @@ QDBusArgument &operator<<(QDBusArgument &a, const ConnectionDto &c)
 const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c)
 {
     a.beginStructure();
+    // Base fields (≤ v0.2) — every agent we've ever shipped emits these.
     a >> c.proto
       >> c.localFamily  >> c.localAddress  >> c.localPort
       >> c.remoteFamily >> c.remoteAddress >> c.remotePort
       >> c.rxBytes >> c.txBytes >> c.rxPackets >> c.txPackets
       >> c.iface
-      >> c.direction
-      >> c.ifIndex >> c.tcpState
-      >> c.pid >> c.uid >> c.comm
-      >> c.containerRuntime >> c.containerId >> c.containerName
-      >> c.containerChain
-      >> c.reason;
+      >> c.direction;
+    // Everything after is append-only across agent versions. Guard EACH
+    // trailing field with atEnd() so a NEWER client reading an OLDER agent's
+    // shorter struct degrades to defaults instead of reading past the end of
+    // the structure (which aborts the process under QtDBus). The leftover
+    // fields keep their member defaults; clients gate on capability tokens
+    // (e.g. attribution-reason) and recompute locally when a token is absent.
+    if (!a.atEnd()) a >> c.ifIndex;           // v0.3
+    if (!a.atEnd()) a >> c.tcpState;          // v0.3
+    if (!a.atEnd()) a >> c.pid;               // v0.4
+    if (!a.atEnd()) a >> c.uid;               // v0.4
+    if (!a.atEnd()) a >> c.comm;              // v0.4
+    if (!a.atEnd()) a >> c.containerRuntime;  // v0.4
+    if (!a.atEnd()) a >> c.containerId;       // v0.4
+    if (!a.atEnd()) a >> c.containerName;     // v0.4
+    if (!a.atEnd()) a >> c.containerChain;    // v0.4
+    if (!a.atEnd()) a >> c.reason;            // v0.6
     // Clamp wire-sourced chain length; an over-long chain from a
     // malicious/buggy agent must not be retained on the receiver.
     if (c.containerChain.size() > kMaxContainerChainDepth)

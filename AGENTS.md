@@ -368,6 +368,25 @@ over re-deriving them each time:
   fields at the END of the DTO. The `<<`/`>>` operators must list
   fields in declaration order; mismatch = silent off-by-one on the
   wire.
+* **Demarshallers MUST tolerate a SHORTER struct (new client ↔ old
+  agent).** Append-only protects old-client/new-agent, but the reverse
+  — a NEWER client whose reader expects the latest field reading an
+  OLDER agent's shorter struct — will read PAST the end of the
+  structure and `Aborted` the process under QtDBus (`type invalid 0
+  not a basic type`). A real user hit this (new `nqiftop` vs a v0.5
+  agent). Two rules, both in `src/dbus/Types.cpp`:
+  (1) guard every trailing (post-base) field in `operator>>` with
+  `if (!a.atEnd()) a >> field;` so missing tail fields keep their
+  member defaults; (2) on the CLIENT, demarshal the RAW reply message
+  (`watcher->reply()` → `args.at(0).value<QDBusArgument>() >> list`),
+  NOT `QDBusPendingReply<DtoList>` — the typed reply is rejected
+  wholesale on a signature mismatch (`unexpected reply signature`)
+  before our tolerant `operator>>` ever runs (see
+  `DBus{Connection,Network}Monitor`). The signal path already takes
+  the raw `QDBusMessage`, so it only needs rule (1). Pinned by
+  `test_wire_compat` (a real session-bus round-trip: an old-shaped
+  service struct decoded by the production reader; aborts without the
+  guards).
 * **Capability tokens are append-only too.** Once a token is shipped,
   it must keep its name forever (clients use presence as a feature
   flag). Add new tokens for new behaviour; never delete or rename.
@@ -567,6 +586,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_units`               | `util::formatBytes` / `formatByteRate` IEC unit boundaries + precision |
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults; v0.5 `reason` round-trip + out-of-range clamp to NoLocalSocket. |
+| `test_wire_compat`         | Forward-compat: a real session-bus service returns OLD-shaped (shorter) `ConnectionDto`/`InterfaceStatsDto` structs (no `reason` / no v0.3 iface tail); the PRODUCTION `operator>>` must decode them via its `atEnd()` guards (missing tail fields default) instead of reading past the struct end and aborting — the new-client-vs-old-agent crash. |
 | `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
 | `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |

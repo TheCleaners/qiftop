@@ -301,6 +301,26 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
     case Qt::ForegroundRole:
         if (row.stale)
             return QVariant::fromValue(QApplication::palette().color(QPalette::Disabled, QPalette::Text));
+        // Colour-code the synthetic reason label on unattributed flows so a
+        // forwarded/orphaned flow reads as "no owner by design" at a glance,
+        // distinct from a real process name.
+        if (col == Column::Process && c.process.pid <= 0) {
+            const bool dark =
+                QApplication::palette().color(QPalette::Base).lightness() < 128;
+            switch (c.reason) {
+            case AttributionReason::Forwarded:      // informational — routed/NAT
+                return QVariant::fromValue(dark ? QColor(120, 170, 235)
+                                                : QColor(40, 100, 190));
+            case AttributionReason::Orphaned:       // transient — socket gone
+                return QVariant::fromValue(dark ? QColor(215, 170, 90)
+                                                : QColor(160, 110, 20));
+            case AttributionReason::NoLocalSocket:  // muted — unknown owner
+                return QVariant::fromValue(dark ? QColor(150, 150, 150)
+                                                : QColor(120, 120, 120));
+            case AttributionReason::Resolved:
+                break;
+            }
+        }
         return {};
 
     case Qt::BackgroundRole:
