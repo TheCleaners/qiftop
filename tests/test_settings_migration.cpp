@@ -7,6 +7,7 @@
 #include <QtTest/QtTest>
 
 #include "config/Settings.h"
+#include "backend/PlatformInfo.h"
 
 namespace {
 
@@ -175,6 +176,27 @@ private slots:
         }
         Settings s2;
         QCOMPARE(s2.connectionViewMode(), Settings::ConnectionViewMode::Flat);
+    }
+
+    // Unprivileged contract: settingsWriteWouldEscalate() must be false for a
+    // normal (non-root) process, so persistence behaves exactly as before.
+    // The positive (euid-0-foreign-home) branch needs root and is covered by
+    // the live verification documented in the commit; here we pin that the
+    // common path never trips the guard and that writes round-trip.
+    void unprivileged_persistence_unaffected()
+    {
+        QVERIFY(!qiftop::platform::settingsWriteWouldEscalate());
+
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        redirectSettings(dir.path());
+
+        {
+            Settings s;
+            s.setPollIntervalMs(4242);
+        }
+        Settings reopened;
+        QCOMPARE(reopened.pollIntervalMs(), 4242);
     }
 };
 

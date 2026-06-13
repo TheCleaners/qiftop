@@ -59,4 +59,20 @@ namespace qiftop::platform {
 // admin-configured group allowlist (e.g. "wheel"). Cheap + cached.
 [[nodiscard]] bool userInGroup(uint uid, const QString &groupName);
 
+// True when this process runs with elevated privileges (effective uid 0)
+// but the per-user config directory QSettings would write to belongs to a
+// DIFFERENT, unprivileged user — i.e. persisting settings now would create
+// root-owned files inside someone else's $HOME.
+//
+// This happens whenever qiftop/nqiftop is run privileged with a foreign
+// $HOME: `sudo -E nqiftop`, a pkexec/su variant that preserves HOME, or the
+// GUI self-elevation re-exec (which forwards HOME so Qt finds the user's
+// theme/font config — see util/PrivilegeEscalator). Callers MUST treat a
+// true result as "read settings, but do NOT write them back" so the
+// unprivileged owner's config tree is never polluted with root-owned files.
+//
+// Returns false for any unprivileged process (the common case) and on
+// platforms without a POSIX uid/ownership model.
+[[nodiscard]] bool settingsWriteWouldEscalate();
+
 } // namespace qiftop::platform

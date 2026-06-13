@@ -179,6 +179,11 @@ private:
 
     QSettings m_store;
 
+    // False when running privileged with a config dir owned by another user
+    // (sudo -E / GUI self-elevation): settings are loaded but never written,
+    // so we don't litter the invoking user's ~/.config with root-owned files.
+    bool m_persist = true;
+
     int  m_pollIntervalMs   = 1000;
     bool m_showLoopback     = false;
     bool m_showDown         = true;

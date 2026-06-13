@@ -2,6 +2,7 @@
 
 #include "aggregate/ConnectionAggregator.h"
 #include "aggregate/InterfaceAggregator.h"
+#include "backend/PlatformInfo.h"
 #include "util/Exportable.h"
 #include "util/Exporter.h"
 
@@ -1097,6 +1098,19 @@ void TuiApp::loadSettings()
 
 void TuiApp::saveSettings() const
 {
+    // Don't write into another user's ~/.config when run privileged
+    // (e.g. `sudo -E nqiftop`): it would leave a root-owned nqiftop.conf
+    // in the invoking user's home. Settings were still loaded at startup.
+    if (qiftop::platform::settingsWriteWouldEscalate()) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            qWarning("nqiftop: running privileged with a config directory "
+                     "owned by another user; not writing settings (would "
+                     "create root-owned files in their home directory).");
+        }
+        return;
+    }
     QSettings s;
     s.beginGroup(QStringLiteral("nqiftop"));
     s.setValue(QStringLiteral("view"), int(m_view));

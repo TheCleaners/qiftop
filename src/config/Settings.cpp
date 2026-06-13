@@ -1,5 +1,6 @@
 #include "Settings.h"
 
+#include "backend/PlatformInfo.h"
 #include "util/Autostart.h"
 
 #include <QRegularExpression>
@@ -54,6 +55,18 @@ constexpr auto kChipColorDetail  = "connections/chipColorDetail";
 Settings::Settings(QObject *parent)
     : QObject(parent)
 {
+    // Refuse to write QSettings into another user's $HOME when running
+    // privileged (e.g. `sudo -E nqiftop`, or the GUI self-elevation re-exec
+    // which forwards HOME). Otherwise every exit leaves root-owned .conf
+    // files in the invoking user's ~/.config. We still LOAD the user's
+    // settings below — only persistence is suppressed.
+    m_persist = !qiftop::platform::settingsWriteWouldEscalate();
+    if (!m_persist) {
+        qWarning("Settings: running privileged with a config directory owned "
+                 "by another user (%s); settings will be read but NOT written "
+                 "to avoid creating root-owned files in their home directory.",
+                 qUtf8Printable(m_store.fileName()));
+    }
     load();
 }
 
@@ -97,10 +110,12 @@ void Settings::load()
         const int legacy = m_store.value(kRateSmoothingSecsLegacy).toInt();
         if (legacy > 0) {
             m_rateSmoothingMs = legacy * 1000;
-            m_store.setValue(QString::fromLatin1(kRateSmoothingMs),
-                             m_rateSmoothingMs);
+            if (m_persist)
+                m_store.setValue(QString::fromLatin1(kRateSmoothingMs),
+                                 m_rateSmoothingMs);
         }
-        m_store.remove(QString::fromLatin1(kRateSmoothingSecsLegacy));
+        if (m_persist)
+            m_store.remove(QString::fromLatin1(kRateSmoothingSecsLegacy));
     }
     m_showStatusInTitle            = m_store.value(kShowStatusInTitle,
                                                 m_showStatusInTitle).toBool();
@@ -131,6 +146,7 @@ void Settings::load()
 
 void Settings::store(const char *key, const QVariant &value)
 {
+    if (!m_persist) return;   // privileged-for-another-user: never write
     m_store.setValue(QString::fromLatin1(key), value);
 }
 
