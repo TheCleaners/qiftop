@@ -212,6 +212,30 @@ inline DumpChunkResult parseDumpChunk(const char *buf, qsizetype n,
         // ambiguous (SO_REUSEPORT / wildcard+specific binds), so mark them and
         // let the resolver return pid=0 rather than a last-writer-wins pid.
         insertLocalKey(outMap, makeLocalKey(proto, local, lport), inode);
+
+        // Dual-stack (AF_INET6) sockets serving IPv4 peers appear in this v6
+        // dump with v4-mapped (::ffff:a.b.c.d) or v6-wildcard (::) addresses,
+        // but conntrack/pcap report those same flows as PURE IPv4. Without an
+        // IPv4-normalised key the v4 flow can never join the v6 socket, so
+        // EVERY dual-stack daemon's v4 traffic (kdeconnect, sshd, most JVM and
+        // many server processes) reports pid=0. Re-index such sockets under
+        // IPv4 keys too. Genuine IPv6 addresses (global, ::1) return
+        // toIPv4Address ok=false and are left untouched. This mirrors how the
+        // kernel/ss(8) attribute v4 flows to v6-mapped sockets.
+        if (m->idiag_family == AF_INET6) {
+            bool lok = false, rok = false;
+            const QHostAddress l4(local.toIPv4Address(&lok));
+            const QHostAddress r4(remote.toIPv4Address(&rok));
+            if (lok) {
+                if (rok) {
+                    const auto k4 = makeFlowKey(proto, l4, lport, r4, rport);
+                    if (!(outMap.size() >= kMaxSocketEntries
+                          && !outMap.contains(k4)))
+                        outMap.insert(k4, inode);
+                }
+                insertLocalKey(outMap, makeLocalKey(proto, l4, lport), inode);
+            }
+        }
     }
     return DumpChunkResult::NeedMore;
 }
