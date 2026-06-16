@@ -439,6 +439,13 @@ GUI never has to deal with a million-row table. The cap is a compile-time
 constant in `src/agent/ConnectionsService.cpp` — bump it (and the §4
 contract note) if a real use case appears.
 
+The **in-process** `ConntrackMonitor` (GUI self-elevation / no-agent
+fallback) applies the **same** cap (`kMaxInProcessFlows = 4096`, keep in
+sync with the agent's `kMaxConnections`), but collects the top-N via a
+K-bounded min-heap by bytes (`backend/linux/FlowTopK.h::admitFlowTopK`)
+so the transient memory is O(K), not O(table). Same one-time `qWarning`
+on overflow. Pinned by `test_flow_topk`.
+
 ### Access control
 
 The system-bus policy (`dist/dbus/org.qiftop.NetworkAgent1.conf`) restricts
@@ -597,6 +604,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_resolver_factory`    | `qiftop::backend::createDefaultProcessResolver` — env-gated composite construction; `InterfacesService::capabilities()` aggregation: `process-attribution-wire` / `container-attribution-wire` / `container-chain-wire` mirror tokens emitted iff the underlying resolver advertises the producer-side token; `container-chain-wire` requires BOTH `container-attribution` AND `container-chain`. |
 | `test_sockdiag_parse`      | `qiftop::backend::sockDiagParse` — netlink dump message parsing edge cases (IPv4/IPv6, multi-message dumps, truncated tail); plus the local 2-tuple key ambiguity guard (a local key with two distinct inodes must not yield a confident PID). Pure parser, no socket. |
 | `test_conntrack_orient`    | `qiftop::backend::linux::orientConntrackFlow` — pure per-flow local/remote orientation + tx/rx-from-ORIG/REPL mapping: outbound (src local), inbound (dst local), forwarded (neither local → ORIG tuple kept), both-local edge. No live conntrack handle. |
+| `test_flow_topk`           | `qiftop::backend::linux::admitFlowTopK` (FlowTopK.h) — the bounded top-K-by-bytes min-heap that caps the in-process `ConntrackMonitor` snapshot at the loudest 4096 (mirrors the agent cap): below-cap keeps all, at-cap keeps the loudest regardless of arrival order, ranks by rx+tx total, strictly-greater admission (ties keep the incumbent), `cap<=0` is unbounded, and the min-heap front invariant holds after every op. Pure — no live conntrack handle. |
 | `test_services`            | `ConnectionsService` / `InterfacesService` driven in-process via the fake monitors (no real D-Bus bus): snapshot cap (4099→4096 top-by-bytes), dropped-flow skip, process/container/chain attribution, server-side direction; interface-stat caching. |
 | `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
 | `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
