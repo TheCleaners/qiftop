@@ -591,7 +591,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
 | `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. |
-| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). Uses a tiny stub source model — no real ConnectionModel needed. |
+| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). **sortWithinGroups** (default true): a header click sorts only each group's children and leaves the group order at first-appearance order; toggling to classic (false) re-orders the groups by aggregated value (and back freezes at the current arrangement) — both via the persistent-index-preserving resort. Uses a tiny stub source model — no real ConnectionModel needed. |
 | `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. v0.5: `reason` (resolved/forwarded/orphaned/nosocket). |
 | `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
 | `test_resolver_factory`    | `qiftop::backend::createDefaultProcessResolver` — env-gated composite construction; `InterfacesService::capabilities()` aggregation: `process-attribution-wire` / `container-attribution-wire` / `container-chain-wire` mirror tokens emitted iff the underlying resolver advertises the producer-side token; `container-chain-wire` requires BOTH `container-attribution` AND `container-chain`. |
@@ -930,7 +930,15 @@ can be dropped with `vagrant destroy default`.
   `m_connProxy->mapToSource(filter)`) and skip group rows via
   `m_connGroupProxy->isGroupIndex(view)`. Adding a new grouping mode
   = extend the `Settings::ConnectionViewMode` enum + `groupKeyFor()`
-  + `groupLabelFor()`; the rest is automatic.
+  + `groupLabelFor()`; the rest is automatic. **Header-click sort
+  behaviour is gated by `Settings::sortWithinGroups`** (default true):
+  when set, a header click sorts only each group's child rows and keeps
+  the group order frozen at first-appearance order; when cleared, the
+  classic global sort orders the groups by aggregated value too.
+  `applySettingsToUi()` pushes it via
+  `ConnectionGroupProxy::setSortWithinGroups()`, which re-sorts with
+  full persistent-index preservation (no model reset → expansion/
+  selection survive).
 * **Process / Container columns are capability-gated, not always-on.**
   `Column::Process` and `Column::Container` are hidden by default; the
   Settings dialog's "Process & Container Attribution" sub-section

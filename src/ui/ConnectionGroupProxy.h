@@ -54,6 +54,20 @@ public:
     void setShowGroupDetails(bool on);
     [[nodiscard]] bool showGroupDetails() const { return m_showGroupDetails; }
 
+    // Header-click sort behaviour in grouped modes:
+    //   true  (default) — "sort within groups": a header click sorts each
+    //                     group's child rows by the clicked column/order but
+    //                     leaves the GROUP order fixed (first-appearance
+    //                     order). The groupings stay put; only their contents
+    //                     reorder.
+    //   false           — classic: a header click sorts the group order (by
+    //                     each group's aggregated value) AND every group's
+    //                     children, as a single global sort.
+    // No effect in Flat mode. Gated by Settings::sortWithinGroups; applied
+    // immediately (re-sorts with full persistent-index preservation).
+    void setSortWithinGroups(bool on);
+    [[nodiscard]] bool sortWithinGroups() const { return m_sortWithinGroups; }
+
     // On-demand process-detail enrichment (exe / cmdline / cwd). The
     // cache is owned by MainWindow and populated asynchronously from the
     // agent's GetProcessDetails RPC; the group-header tooltip reads from
@@ -202,6 +216,9 @@ private:
     QHash<int, QPair<int, int>> m_srcIndex;
     int m_sortColumn = -1;     // -1 = no sort applied yet
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
+    // Header-click sort behaviour (see setSortWithinGroups). Default true:
+    // sort children within groups, keep group order frozen.
+    bool m_sortWithinGroups = true;
     // True while the Flat branch of sort() drives m_src->sort(): the
     // manual layout signals + persistent-index remap in sort() are the
     // single source of truth there, so the source-layout forwarding

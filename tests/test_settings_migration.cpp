@@ -134,11 +134,13 @@ private slots:
             QCOMPARE(s.showProcessColumn(),   false);
             QCOMPARE(s.showContainerColumn(), false);
             QCOMPARE(s.showContainerChainInTooltip(), true);
+            QCOMPARE(s.sortWithinGroups(), true);   // new default: within-group sort
 
             s.setConnectionViewMode(Settings::ConnectionViewMode::ByContainer);
             s.setShowProcessColumn(true);
             s.setShowContainerColumn(true);
             s.setShowContainerChainInTooltip(false);
+            s.setSortWithinGroups(false);
         }
         {
             // Persisted across reconstruction.
@@ -147,6 +149,7 @@ private slots:
             QCOMPARE(s.showProcessColumn(),   true);
             QCOMPARE(s.showContainerColumn(), true);
             QCOMPARE(s.showContainerChainInTooltip(), false);
+            QCOMPARE(s.sortWithinGroups(), false);
         }
     }
 
