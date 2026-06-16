@@ -4,6 +4,7 @@
 [![Release](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml/badge.svg)](https://github.com/TheCleaners/qiftop/actions/workflows/release.yml)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
 ![Qt](https://img.shields.io/badge/Qt-6-41cd52)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20FreeBSD%20%7C%20NetBSD-555)
 ![License](https://img.shields.io/badge/license-GPL--2.0--or--later-orange)
 
 Qt6 iftop-style network monitor for Linux, with desktop, terminal and library
@@ -82,6 +83,22 @@ a pure-`sysctl` socket→PID join (no `kvm`), and on **FreeBSD** jailed flows ar
 attributed to their jail as a container (`runtime:jail`). See
 [`docs/PORTABILITY.md`](docs/PORTABILITY.md) §7 for the BSD field guide and build
 notes; packaging there is pkgsrc-stage (not yet a finished port).
+
+### Support matrix
+
+| Platform | Tested versions | `qiftop-agent` | GUI · TUI · `libqiftop` | Verified by | Status |
+|----------|-----------------|:--------------:|:-----------------------:|-------------|--------|
+| **Linux** (glibc) | Ubuntu 24.04 · Ubuntu 26.04 · Fedora 44 | ✅ | ✅ ✅ ✅ | CI (build + tests) | ![supported](https://img.shields.io/badge/full-brightgreen) |
+| **Linux** (musl) | Alpine (latest) | ✅ | ✅ ✅ ✅ | CI (build + tests) | ![supported](https://img.shields.io/badge/full-brightgreen) |
+| **FreeBSD** | 14.0 · 15.0 | ➖ | ✅ ✅ ✅ | VM (build + runtime) | ![client](https://img.shields.io/badge/client%20builds-blue) |
+| **NetBSD** | 11.0 | ➖ | ✅ ✅ ✅ | VM (build + runtime) | ![client](https://img.shields.io/badge/client%20builds-blue) |
+
+<sub>✅ built & working · ➖ not applicable (the privileged agent is Linux-only) ·
+**full** = agent + clients, exercised by the GitHub Actions test suite ·
+**client builds** = GUI/TUI/`libqiftop` build and run from the same tree with
+in-process capture; verified on a VM but not in CI. Other BSDs (OpenBSD,
+DragonFly) and other Linux distros are likely to work from source but are
+not regularly tested.</sub>
 
 ## Install
 
