@@ -16,6 +16,7 @@
 #include "aggregate/ConnectionAggregator.h"
 #include "aggregate/InterfaceAggregator.h"
 #include "backend/Connection.h"
+#include "backend/ProcessDetails.h"
 #include "tui/TuiTheme.h"
 #include "util/Units.h"
 
@@ -222,8 +223,25 @@ inline QString unattributedLabel(AttributionReason reason)
     return QStringLiteral("(unattributed)");
 }
 
+// Shared helper: append Exe / Cmdline / Cwd rows from on-demand process
+// details (the agent's GetProcessDetails RPC). No-op when pd is null or the
+// fields are empty, so the panel only grows once the async reply lands.
+inline void appendProcessDetailRows(QList<SettingRow> &rows,
+                                    const qiftop::backend::ProcessDetails *pd)
+{
+    if (!pd || !pd->valid())
+        return;
+    if (!pd->exe.isEmpty())
+        rows << SettingRow{QStringLiteral("Exe"), pd->exe, {}};
+    if (!pd->cmdline.isEmpty())
+        rows << SettingRow{QStringLiteral("Cmdline"), pd->cmdline, {}};
+    if (!pd->cwd.isEmpty())
+        rows << SettingRow{QStringLiteral("Cwd"), pd->cwd, {}};
+}
+
 inline QList<SettingRow> connectionDetailRows(const aggregate::ConnectionAggregator &agg,
-                                              const aggregate::ConnectionAggregator::Row &r)
+                                              const aggregate::ConnectionAggregator::Row &r,
+                                              const qiftop::backend::ProcessDetails *pd = nullptr)
 {
     const Connection &c = r.current;
     QList<SettingRow> rows;
@@ -249,6 +267,7 @@ inline QList<SettingRow> connectionDetailRows(const aggregate::ConnectionAggrega
                                  .arg(c.process.comm.isEmpty() ? QStringLiteral("?") : c.process.comm)
                                  .arg(c.process.pid).arg(c.process.uid)
                            : unattributedLabel(c.reason), {}};
+    appendProcessDetailRows(rows, pd);   // exe/cmdline/cwd once fetched
     if (c.container.valid())
         rows << SettingRow{QStringLiteral("Container"),
                            QStringLiteral("%1 %2 (%3)")
@@ -432,6 +451,102 @@ inline QString groupLabelFor(GroupBy g, const Connection &c)
         break;
     }
     return QString();
+}
+
+// Group-info window (Enter on a group header): the group's shared attribution
+// plus its aggregate throughput and flow count. `rep` is a representative
+// member (all flows in a Process / Container group share their attribution);
+// `pd` carries on-demand exe/cmdline/cwd for a Process group once fetched.
+inline QList<SettingRow> groupDetailRows(GroupBy mode, const Connection &rep,
+                                         double rxRate, double txRate,
+                                         quint64 rxBytes, quint64 txBytes,
+                                         int flowCount,
+                                         const qiftop::backend::ProcessDetails *pd = nullptr)
+{
+    QList<SettingRow> rows;
+    rows << SettingRow{QStringLiteral("Grouping"), groupByName(mode), {}};
+    switch (mode) {
+    case GroupBy::Interface:
+        rows << SettingRow{QStringLiteral("Interface"),
+                           QStringLiteral("%1 (ifindex %2)")
+                               .arg(rep.iface.isEmpty() ? QStringLiteral("(unattributed)") : rep.iface)
+                               .arg(rep.ifIndex), {}};
+        break;
+    case GroupBy::Process:
+        if (rep.process.valid()) {
+            rows << SettingRow{QStringLiteral("Process"),
+                               rep.process.comm.isEmpty() ? QStringLiteral("?")
+                                                          : rep.process.comm, {}};
+            rows << SettingRow{QStringLiteral("PID"),
+                               QString::number(rep.process.pid), {}};
+            rows << SettingRow{QStringLiteral("UID"),
+                               QString::number(rep.process.uid), {}};
+            appendProcessDetailRows(rows, pd);   // exe/cmdline/cwd once fetched
+        } else {
+            rows << SettingRow{QStringLiteral("Process"),
+                               QStringLiteral("(unattributed)"), {}};
+        }
+        break;
+    case GroupBy::Container:
+        if (rep.container.valid()) {
+            rows << SettingRow{QStringLiteral("Runtime"), rep.container.runtime, {}};
+            rows << SettingRow{QStringLiteral("Container"),
+                               rep.container.name.isEmpty() ? rep.container.id
+                                                            : rep.container.name, {}};
+            rows << SettingRow{QStringLiteral("Id"), rep.container.id, {}};
+        } else {
+            rows << SettingRow{QStringLiteral("Container"),
+                               QStringLiteral("(no container)"), {}};
+        }
+        break;
+    case GroupBy::None:
+    case GroupBy::Count:
+        break;
+    }
+    // Container scope is interesting on a Process group too.
+    if (mode == GroupBy::Process && rep.container.valid())
+        rows << SettingRow{QStringLiteral("Container"),
+                           QStringLiteral("%1 %2")
+                               .arg(rep.container.runtime,
+                                    rep.container.name.isEmpty() ? rep.container.id
+                                                                 : rep.container.name), {}};
+    rows << SettingRow{QStringLiteral("Flows"), QString::number(flowCount), {}};
+    rows << SettingRow{QStringLiteral("RX rate"), util::formatByteRate(rxRate), {}};
+    rows << SettingRow{QStringLiteral("TX rate"), util::formatByteRate(txRate), {}};
+    rows << SettingRow{QStringLiteral("RX total"), util::formatBytes(rxBytes), {}};
+    rows << SettingRow{QStringLiteral("TX total"), util::formatBytes(txBytes), {}};
+    return rows;
+}
+
+// Word-wrap `text` to `width` columns: break on spaces, but hard-break any
+// single token longer than the width so a long path / cmdline / key-help
+// description never overflows a dialog (and never garbles the column
+// alignment). Returns at least one line (possibly empty). Width clamps to >= 1.
+// Pure + header-only so it's unit-tested without an ncurses screen.
+inline QStringList wrapToWidth(const QString &text, int width)
+{
+    width = std::max(1, width);
+    QStringList out;
+    if (text.isEmpty()) { out << QString(); return out; }
+    QString line;
+    const QStringList words = text.split(QLatin1Char(' '));
+    const auto flush = [&] { out << line; line.clear(); };
+    for (const QString &w : words) {
+        QString word = w;
+        while (word.size() > width) {          // hard-break an over-long token
+            if (!line.isEmpty()) flush();
+            out << word.left(width);
+            word = word.mid(width);
+        }
+        if (line.isEmpty())
+            line = word;
+        else if (line.size() + 1 + word.size() <= width)
+            line += QLatin1Char(' ') + word;
+        else { flush(); line = word; }
+    }
+    flush();
+    if (out.isEmpty()) out << QString();
+    return out;
 }
 
 // --- settings model ---------------------------------------------------------

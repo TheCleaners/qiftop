@@ -406,8 +406,15 @@ void TuiApp::handleKey(int key)
     case '\n':
     case '\r':
     case KEY_ENTER:
+        // On a group header, open the group-info window; on a flow row, the
+        // per-flow inspector. (Fold/unfold stays on h/l and Space.)
+        if (cursorOnHeader())
+            openGroupDetail();
+        else
+            openDetail();
+        break;
     case ' ':
-        // On a group header, toggle collapse; on a flow row, open the inspector.
+        // Space is the quick fold toggle on a header; the inspector on a flow.
         if (cursorOnHeader())
             toggleCollapseAtCursor();
         else
@@ -674,6 +681,40 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.visible    = true;
         f.modal.selectable = false;
         f.modal.footer     = QStringLiteral("↑↓ next/prev · any other key closes");
+        // Group-info window (Enter on a group header): aggregate the group's
+        // live members and show the shared attribution + on-demand details.
+        if (!m_detailGroupKey.isEmpty() && m_connAgg) {
+            double grx = 0.0, gtx = 0.0;
+            quint64 grb = 0, gtb = 0;
+            Connection rep;
+            int flows = 0;
+            bool found = false;
+            for (const auto &r : (m_paused ? m_frozenConnRows : m_connAgg->rows())) {
+                if (groupKeyFor(m_detailGroupBy, r.current) != m_detailGroupKey)
+                    continue;
+                if (!found) { rep = r.current; found = true; }
+                grx += r.rxRate;
+                gtx += r.txRate;
+                grb += r.current.rxBytes;
+                gtb += r.current.txBytes;
+                ++flows;
+            }
+            if (found) {
+                const qiftop::backend::ProcessDetails *pd = nullptr;
+                if (m_detailGroupBy == GroupBy::Process && rep.process.valid()) {
+                    auto it = m_procDetails.constFind(rep.process.pid);
+                    if (it != m_procDetails.constEnd()) pd = &it.value();
+                }
+                f.modal.title = QStringLiteral("Group — %1")
+                                    .arg(groupLabelFor(m_detailGroupBy, rep));
+                f.modal.items = groupDetailRows(m_detailGroupBy, rep,
+                                                grx, gtx, grb, gtb, flows, pd);
+                return;
+            }
+            f.modal.title = QStringLiteral("Group");
+            f.modal.items = { SettingRow{QStringLiteral("(no longer present)"), {}, {}} };
+            return;
+        }
         if (m_detailView == View::Interfaces) {
             for (const auto &r : (m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows()))
                 if (interfaceKey(r) == m_detailKey) {
@@ -684,8 +725,13 @@ void TuiApp::buildModal(Frame &f) const
         } else {
             for (const auto &r : (m_paused ? m_frozenConnRows : m_connAgg->rows()))
                 if (connectionKey(r) == m_detailKey) {
+                    const qiftop::backend::ProcessDetails *pd = nullptr;
+                    if (r.current.process.valid()) {
+                        auto it = m_procDetails.constFind(r.current.process.pid);
+                        if (it != m_procDetails.constEnd()) pd = &it.value();
+                    }
                     f.modal.title = QStringLiteral("Connection — %1").arg(m_connAgg->protoLabel(r.current));
-                    f.modal.items = connectionDetailRows(*m_connAgg, r);
+                    f.modal.items = connectionDetailRows(*m_connAgg, r, pd);
                     return;
                 }
         }
@@ -710,9 +756,9 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.selected = m_fieldsSel;
         f.modal.footer   = QStringLiteral("↑↓ move · Enter/Space sort · r reverse · f/Esc close");
     } else if (m_overlay == Overlay::Help) {
-        // Pre-format "key   description" into the label (read-only panel).
+        // key → label (Accent column), description → value (wrapped column).
         const auto row = [](const QString &key, const QString &desc) {
-            return SettingRow{key.leftJustified(14) + desc, QString(), QString()};
+            return SettingRow{key, desc, QString()};
         };
         f.modal.visible    = true;
         f.modal.selectable = false;
@@ -720,7 +766,8 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.items = {
             row(QStringLiteral("Tab / 1 / 2"), QStringLiteral("Switch view (Interfaces / Connections)")),
             row(QStringLiteral("↑↓ / j k"),    QStringLiteral("Move the current-line cursor")),
-            row(QStringLiteral("Enter / Space"), QStringLiteral("Open the row detail inspector")),
+            row(QStringLiteral("Enter"),        QStringLiteral("On a flow: open the detail inspector. On a group header: open the group-info window (process/container details, aggregate)")),
+            row(QStringLiteral("Space"),        QStringLiteral("On a flow: detail inspector. On a group header: fold / unfold")),
             row(QStringLiteral("PgUp/PgDn ^F/^B ^U/^D"), QStringLiteral("Page up/down (^F/^B) · half page (^U/^D)")),
             row(QStringLiteral("Home/End  G"),  QStringLiteral("Jump to top / bottom")),
             row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
@@ -825,10 +872,72 @@ void TuiApp::openDetail()
     const RowRef &ref = m_rowRefs[cursor];
     if (!ref.selectable || ref.key.isEmpty())
         return;                           // group header / empty — nothing to inspect
-    m_detailKey  = ref.key;
-    m_detailView = m_view;
-    m_overlay    = Overlay::Detail;
+    m_detailKey      = ref.key;
+    m_detailView     = m_view;
+    m_detailGroupKey.clear();             // a per-flow / interface detail
+    m_detailGroupBy  = GroupBy::None;
+    m_overlay        = Overlay::Detail;
+    // Warm on-demand process details for the flow's pid (filled live on reply).
+    if (m_view == View::Connections && m_connAgg) {
+        for (const auto &r : (m_paused ? m_frozenConnRows : m_connAgg->rows()))
+            if (connectionKey(r) == m_detailKey) {
+                if (r.current.process.valid())
+                    ensureProcessDetails(r.current.process.pid);
+                break;
+            }
+    }
     requestRedraw();
+}
+
+void TuiApp::openGroupDetail()
+{
+    // Enter on a group header → a group-info overlay (aggregate + the
+    // representative attribution; for a process group, on-demand exe/cmdline).
+    if (m_view != View::Connections || m_groupBy == GroupBy::None)
+        return;
+    const int cursor = m_connCursor;
+    if (cursor < 0 || cursor >= m_rowRefs.size() || !m_rowRefs[cursor].header)
+        return;
+    m_detailGroupKey = m_rowRefs[cursor].groupKey;
+    m_detailGroupBy  = m_groupBy;
+    m_detailView     = View::Connections;
+    m_overlay        = Overlay::Detail;
+    // For a process group, warm the representative pid's details.
+    if (m_groupBy == GroupBy::Process && m_connAgg) {
+        for (const auto &r : (m_paused ? m_frozenConnRows : m_connAgg->rows()))
+            if (groupKeyFor(m_groupBy, r.current) == m_detailGroupKey
+                && r.current.process.valid()) {
+                ensureProcessDetails(r.current.process.pid);
+                break;
+            }
+    }
+    requestRedraw();
+}
+
+void TuiApp::ensureProcessDetails(qint32 pid)
+{
+    if (pid <= 0 || !m_requestDetails)
+        return;
+    if (m_procDetails.contains(pid) || m_detailsRequested.contains(pid))
+        return;                           // cached or already in flight
+    m_detailsRequested.insert(pid);
+    m_requestDetails(pid);
+}
+
+void TuiApp::onProcessDetails(const qiftop::backend::ProcessDetails &d)
+{
+    if (d.pid <= 0)
+        return;
+    m_procDetails.insert(d.pid, d);
+    m_detailsRequested.remove(d.pid);
+    // Repaint if an overlay that could show these details is open.
+    if (m_overlay == Overlay::Detail)
+        requestRedraw();
+}
+
+void TuiApp::setProcessDetailsRequester(std::function<void(qint32)> fn)
+{
+    m_requestDetails = std::move(fn);
 }
 
 bool TuiApp::cursorOnHeader() const
@@ -990,16 +1099,30 @@ void TuiApp::handleDetailKey(int key)
     case 'j':
     case KEY_DOWN:
     case 'k':
-    case KEY_UP:
+    case KEY_UP: {
         moveCursor(key == 'j' || key == KEY_DOWN ? 1 : -1);
-        if (const int c = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
-            c >= 0 && c < m_rowRefs.size() && m_rowRefs[c].selectable)
-            m_detailKey = m_rowRefs[c].key;
+        const int c = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
+        if (c >= 0 && c < m_rowRefs.size() && m_rowRefs[c].selectable) {
+            if (m_rowRefs[c].header) {
+                // Landed on a group header → show the group-info window.
+                m_detailGroupKey = m_rowRefs[c].groupKey;
+                m_detailGroupBy  = m_groupBy;
+                m_detailKey.clear();
+            } else {
+                // Landed on a flow → show the per-flow inspector.
+                m_detailKey = m_rowRefs[c].key;
+                m_detailGroupKey.clear();
+                m_detailGroupBy = GroupBy::None;
+            }
+        }
         break;
+    }
     case KEY_RESIZE:
         break;
     default:
         m_overlay = Overlay::None;        // Esc / Enter / q / l / any → close
+        m_detailGroupKey.clear();
+        m_detailGroupBy = GroupBy::None;
         break;
     }
     requestRedraw();

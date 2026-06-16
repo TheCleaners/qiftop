@@ -197,6 +197,78 @@ private slots:
         QCOMPARE(groupByFromName(QStringLiteral("bogus")), GroupBy::Count); // unrecognised
     }
 
+    // wrapToWidth: word-wrap with hard-break for over-long tokens (the helper
+    // behind the modal dialogs' wrapped value column).
+    void wrapToWidthWordWrap()
+    {
+        // Simple word wrap at a boundary.
+        QCOMPARE(wrapToWidth(QStringLiteral("the quick brown fox"), 9),
+                 (QStringList{QStringLiteral("the quick"), QStringLiteral("brown fox")}));
+        // Fits on one line → single element.
+        QCOMPARE(wrapToWidth(QStringLiteral("short"), 20),
+                 (QStringList{QStringLiteral("short")}));
+        // Empty → one empty line (so a spacer renders as a blank row).
+        QCOMPARE(wrapToWidth(QString(), 10), (QStringList{QString()}));
+        // Every line is within the width.
+        for (const QString &l : wrapToWidth(
+                 QStringLiteral("page up down half page navigation keys here"), 12))
+            QVERIFY(l.size() <= 12);
+    }
+
+    void wrapToWidthHardBreaksLongToken()
+    {
+        // A token longer than the width (e.g. a long path / cmdline) is split
+        // across lines rather than overflowing.
+        const QString path = QStringLiteral("/usr/lib/x86_64-linux-gnu/very/long/path/binary");
+        const QStringList lines = wrapToWidth(path, 10);
+        for (const QString &l : lines)
+            QVERIFY(l.size() <= 10);
+        // Reassembling the (space-free) token reproduces it.
+        QCOMPARE(lines.join(QString()), path);
+        // Width <= 0 is clamped to 1, not a crash / infinite loop.
+        QVERIFY(!wrapToWidth(QStringLiteral("ab"), 0).isEmpty());
+    }
+
+    // groupDetailRows: the group-info window content (Enter on a header).
+    void groupDetailRowsContent()
+    {
+        Connection rep;
+        rep.process = {4242, QStringLiteral("postgres"), {}, {}, 0};
+        rep.process.uid = 70;
+        const auto labels = [](const QList<SettingRow> &rs) {
+            QStringList out; for (const auto &r : rs) out << r.label; return out;
+        };
+        // Process group, no on-demand details yet: bulk fields + aggregates.
+        auto rows = groupDetailRows(GroupBy::Process, rep,
+                                    1000.0, 500.0, 4096, 2048, 7, nullptr);
+        const QStringList l = labels(rows);
+        QVERIFY(l.contains(QStringLiteral("Process")));
+        QVERIFY(l.contains(QStringLiteral("PID")));
+        QVERIFY(l.contains(QStringLiteral("UID")));
+        QVERIFY(l.contains(QStringLiteral("Flows")));
+        QVERIFY(l.contains(QStringLiteral("RX rate")));
+        QVERIFY(!l.contains(QStringLiteral("Exe")));   // not fetched yet
+
+        // With on-demand details, exe/cmdline/cwd appear.
+        qiftop::backend::ProcessDetails pd;
+        pd.pid = 4242; pd.exe = QStringLiteral("/usr/lib/postgresql/bin/postgres");
+        pd.cmdline = QStringLiteral("postgres -D /var/lib/pg");
+        pd.cwd = QStringLiteral("/var/lib/pg");
+        rows = groupDetailRows(GroupBy::Process, rep,
+                               1000.0, 500.0, 4096, 2048, 7, &pd);
+        const QStringList l2 = labels(rows);
+        QVERIFY(l2.contains(QStringLiteral("Exe")));
+        QVERIFY(l2.contains(QStringLiteral("Cmdline")));
+        QVERIFY(l2.contains(QStringLiteral("Cwd")));
+
+        // Interface group: shows the interface + aggregates, no process fields.
+        Connection eth; eth.iface = QStringLiteral("eth0"); eth.ifIndex = 2;
+        const QStringList li = labels(groupDetailRows(GroupBy::Interface, eth,
+                                                      0, 0, 0, 0, 3, nullptr));
+        QVERIFY(li.contains(QStringLiteral("Interface")));
+        QVERIFY(!li.contains(QStringLiteral("PID")));
+    }
+
     void detailRows()
     {
         // Interface detail: a label/value row per field; optional fields still
