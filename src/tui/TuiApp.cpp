@@ -498,35 +498,57 @@ Frame TuiApp::buildFrame()
                 m_rowRefs << RowRef{true, false, connectionKey(row), QString()};
             }
         } else {
-            // Bucket by group key, preserving first-appearance order (which is
-            // the sort order — so loudest-first when sorting by rate desc).
-            QList<QString> groupOrder;
+            // Bucket by group key. Members within a bucket inherit `matched`'s
+            // order, so rows inside a group are always sorted by the active
+            // column regardless of the group-ordering policy below.
+            QList<QString> firstSeen;          // keys in matched (sorted) order
             QHash<QString, QList<int>> buckets;
             for (int i : matched) {
                 const QString k = groupKeyFor(m_groupBy, rows[i].current);
                 if (!buckets.contains(k))
-                    groupOrder << k;
+                    firstSeen << k;
                 buckets[k] << i;
             }
-            for (const QString &k : std::as_const(groupOrder)) {
+
+            // Per-group aggregates + the smallest source index (its stable
+            // first-appearance position — the source list is key-sorted, so
+            // this order is independent of the active row sort). Built in
+            // firstSeen order; orderedGroupIndices() then picks the display
+            // order per the sortWithinGroups policy.
+            QList<GroupSummary> summaries;
+            summaries.reserve(firstSeen.size());
+            for (const QString &k : std::as_const(firstSeen)) {
                 const QList<int> &members = buckets[k];
-                double grx = 0, gtx = 0;
-                quint64 grb = 0, gtb = 0;
+                GroupSummary gs;
+                gs.minSrc = members.first();
                 for (int i : members) {
-                    grx += rows[i].rxRate;
-                    gtx += rows[i].txRate;
-                    grb += rows[i].current.rxBytes;
-                    gtb += rows[i].current.txBytes;
+                    gs.rxRate  += rows[i].rxRate;
+                    gs.txRate  += rows[i].txRate;
+                    gs.rxBytes += rows[i].current.rxBytes;
+                    gs.txBytes += rows[i].current.txBytes;
+                    gs.minSrc   = std::min(gs.minSrc, i);
                 }
+                gs.label = groupLabelFor(m_groupBy, rows[members.first()].current);
+                summaries << gs;
+            }
+
+            const QList<int> gorder = orderedGroupIndices(
+                summaries, m_connSortCol, m_connSortDesc, m_sortWithinGroups);
+
+            for (int oi : gorder) {
+                const QString &k = firstSeen[oi];
+                const QList<int> &members = buckets[k];
+                const GroupSummary &gs = summaries[oi];
+                const double grx = gs.rxRate, gtx = gs.txRate;
+                const quint64 grb = gs.rxBytes, gtb = gs.txBytes;
                 // Group header row: aggregated, and a landable cursor target so
                 // it can be folded/unfolded. A ▸ (collapsed) / ▾ (expanded)
                 // marker leads the label.
                 const bool collapsed = m_collapsedGroups.contains(k);
-                const QString label = groupLabelFor(m_groupBy, rows[members.first()].current);
                 const QString marker = collapsed ? QStringLiteral("\u25b8")  // ▸
                                                  : QStringLiteral("\u25be"); // ▾
                 f.rows << QStringList{
-                    QStringLiteral("%1 %2  (%3)").arg(marker, label).arg(members.size()),
+                    QStringLiteral("%1 %2  (%3)").arg(marker, gs.label).arg(members.size()),
                     util::formatByteRate(grx), util::formatByteRate(gtx),
                     util::formatBytes(grb), util::formatBytes(gtb)};
                 f.rowRoles << Role::GroupHeader;
@@ -1075,6 +1097,7 @@ void TuiApp::loadSettings()
     m_udpAggregate  = s.value(QStringLiteral("udpAggregate"), m_udpAggregate).toBool();
     m_smoothing     = s.value(QStringLiteral("smoothing"), m_smoothing).toBool();
     m_directionColors = s.value(QStringLiteral("directionColors"), m_directionColors).toBool();
+    m_sortWithinGroups = s.value(QStringLiteral("sortWithinGroups"), m_sortWithinGroups).toBool();
     m_pollMs        = std::clamp(s.value(QStringLiteral("pollMs"), m_pollMs).toInt(), 100, 10000);
     {
         const int g = s.value(QStringLiteral("groupBy"), int(m_groupBy)).toInt();
@@ -1125,6 +1148,7 @@ void TuiApp::saveSettings() const
     s.setValue(QStringLiteral("udpAggregate"), m_udpAggregate);
     s.setValue(QStringLiteral("smoothing"), m_smoothing);
     s.setValue(QStringLiteral("directionColors"), m_directionColors);
+    s.setValue(QStringLiteral("sortWithinGroups"), m_sortWithinGroups);
     s.setValue(QStringLiteral("pollMs"), m_pollMs);
     s.setValue(QStringLiteral("groupBy"), int(m_groupBy));
     if (!m_themes.isEmpty())
@@ -1249,6 +1273,14 @@ void TuiApp::buildSettingItems()
         QStringLiteral("EMA-smooth the displayed rates so they ease between polls."),
         [this] { return onOff(m_smoothing); },
         [this](int) { m_smoothing = !m_smoothing; }});
+
+    // Sort within groups on/off.
+    m_settings.append({
+        QStringLiteral("Sort within groups"),
+        QStringLiteral("When grouped, sort rows inside each group and keep the group "
+                       "order fixed; off = order groups by their total."),
+        [this] { return onOff(m_sortWithinGroups); },
+        [this](int) { m_sortWithinGroups = !m_sortWithinGroups; requestRedraw(); }});
 }
 
 void TuiApp::applyPollInterval()

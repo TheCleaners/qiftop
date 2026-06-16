@@ -145,6 +145,11 @@ private:
     bool m_smoothing      = true;
     GroupBy m_groupBy     = GroupBy::None;
     bool m_directionColors = true;   // colour rows by flow direction
+    // When true (default), changing the sort sorts rows WITHIN each group and
+    // keeps the group order fixed at first-appearance order; when false, groups
+    // are ordered by the sort column's aggregate (loudest group first). Mirrors
+    // the GUI's Settings::sortWithinGroups.
+    bool m_sortWithinGroups = true;
     int  m_pollMs         = 1000;
     std::function<void(int)> m_applyPollMs;  // set by main (owns the monitors)
     QList<SettingItem> m_settings;           // declarative settings model
