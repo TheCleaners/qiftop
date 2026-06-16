@@ -438,9 +438,15 @@ void Screen::renderModal(const ModalPanel &s) const
     QList<VLine> vlines;
     int labelColW = 0;
     if (!s.selectable) {
+        // Width of the label column = 2-space indent + the widest VALUE-bearing
+        // label (headings/spacers span the whole row, so they don't count) +
+        // a 2-space gutter so the longest label never touches its value.
+        int maxLabel = 0;
         for (const SettingRow &it : s.items)
-            labelColW = std::max<int>(labelColW, it.label.size());
-        labelColW = std::min(labelColW, innerW / 2) + 2;   // gutter
+            if (!it.value.isEmpty())
+                maxLabel = std::max<int>(maxLabel, it.label.size());
+        constexpr int kIndent = 2, kGutter = 2;
+        labelColW = kIndent + std::min(maxLabel, innerW / 2) + kGutter;
         const int valueColW = std::max(8, innerW - labelColW);
         for (const SettingRow &it : s.items) {
             if (it.value.isEmpty()) {                      // heading / pre-formatted
@@ -528,9 +534,12 @@ void Screen::renderModal(const ModalPanel &s) const
             QString row = QStringLiteral("  ");
             if (!vl.label.isEmpty())
                 row += vl.label;
-            // Pad to the value column, then the (already width-bounded) value.
+            // Pad to the value column; if a label is unexpectedly wider than
+            // the column, still keep one space so it never touches the value.
             if (row.size() < labelColW)
                 row += QString(labelColW - row.size(), QLatin1Char(' '));
+            else if (!vl.value.isEmpty())
+                row += QLatin1Char(' ');
             row += vl.value;
             put(y, row, normal, false);
             // Overpaint the label span (first line of an item only) in Accent.
