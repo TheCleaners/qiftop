@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QHash>
 #include <QSet>
 
 #include <functional>
@@ -10,6 +11,7 @@
 #include "util/ConnectionFilter.h"
 #include "aggregate/InterfaceAggregator.h"
 #include "aggregate/ConnectionAggregator.h"
+#include "backend/ProcessDetails.h"
 
 class QTimer;
 
@@ -48,6 +50,14 @@ public:
     void setPollApplier(std::function<void(int)> fn);
     [[nodiscard]] int pollIntervalMs() const { return m_pollMs; }
 
+    // Install a callback that requests on-demand process details (exe / cmdline
+    // / cwd) for a pid from the agent — the monitor lives in main, mirroring
+    // setPollApplier. main feeds replies back via onProcessDetails().
+    void setProcessDetailsRequester(std::function<void(qint32)> fn);
+    // Async reply from the agent's GetProcessDetails(pid): cache + repaint so
+    // an open Detail / group-info overlay fills in exe/cmdline/cwd live.
+    void onProcessDetails(const qiftop::backend::ProcessDetails &d);
+
 private:
     // A single declarative, runtime-adjustable preference. value() renders the
     // current value; adjust(dir) changes it (dir = -1 left, +1 right/activate).
@@ -69,6 +79,9 @@ private:
     void  handleInfoKey(int key);              // key routing while Help/About open
     void  handleDetailKey(int key);            // key routing while a row Detail is open
     void  openDetail();                        // open the Detail overlay for the cursor row
+    void  openGroupDetail();                   // open the group-info overlay for a header
+    // Ensure on-demand details for `pid` are requested (once) if not cached.
+    void  ensureProcessDetails(qint32 pid);
     void  exportCurrentView(const QString &explicitPath = QString()); // write CSV
     void  promptExportFilename();              // start the "save as" prompt (W)
     void  flashMessage(const QString &msg);    // transient footer status (cleared on a timer)
@@ -128,6 +141,11 @@ private:
     // shown. Rebuilt live each frame from the current rows so rates stay fresh.
     QString m_detailKey;
     View    m_detailView = View::Connections;
+    // When the Detail overlay shows a GROUP header (Enter on a header) rather
+    // than a flow: the group key + the grouping mode it was opened in. Empty
+    // m_detailGroupKey ⇒ the overlay is a per-flow/interface detail.
+    QString m_detailGroupKey;
+    GroupBy m_detailGroupBy = GroupBy::None;
 
     // Modal overlays (only one open at a time). Settings = runtime toggles,
     // Fields = top-style sort-column selector, Help/About = read-only info,
@@ -152,6 +170,11 @@ private:
     bool m_sortWithinGroups = true;
     int  m_pollMs         = 1000;
     std::function<void(int)> m_applyPollMs;  // set by main (owns the monitors)
+    // On-demand process details (exe/cmdline/cwd), fetched lazily from the
+    // agent and cached by pid. Requester set by main (owns the monitor).
+    std::function<void(qint32)> m_requestDetails;
+    QHash<qint32, qiftop::backend::ProcessDetails> m_procDetails;
+    QSet<qint32> m_detailsRequested;         // de-dup in-flight requests
     QList<SettingItem> m_settings;           // declarative settings model
 
     // Pause: freeze live updates so the snapshot can be read.

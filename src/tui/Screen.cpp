@@ -436,10 +436,43 @@ void Screen::renderModal(const ModalPanel &s) const
 
     const int innerW = std::min(W - 4, std::max(40, contentW));
     const int boxW   = innerW + 2;                       // + side borders
-    // Inner content rows (between the borders): blank, N items, blank,
+
+    // For read-only info panels, lay the items out as a wrapped definition
+    // list: a fixed label column, then the value WORD-WRAPPED into the
+    // remaining width (continuation lines indented under the value). This is
+    // what keeps a long key-help description / exe path / cmdline from
+    // overflowing the dialog and garbling the column alignment.
+    struct VLine { QString label; QString value; bool labelStart; };
+    QList<VLine> vlines;
+    int labelColW = 0;
+    if (!s.selectable) {
+        // Width of the label column = 2-space indent + the widest VALUE-bearing
+        // label (headings/spacers span the whole row, so they don't count) +
+        // a 2-space gutter so the longest label never touches its value.
+        int maxLabel = 0;
+        for (const SettingRow &it : s.items)
+            if (!it.value.isEmpty())
+                maxLabel = std::max<int>(maxLabel, it.label.size());
+        constexpr int kIndent = 2, kGutter = 2;
+        labelColW = kIndent + std::min(maxLabel, innerW / 2) + kGutter;
+        const int valueColW = std::max(8, innerW - labelColW);
+        for (const SettingRow &it : s.items) {
+            if (it.value.isEmpty()) {                      // heading / pre-formatted
+                for (const QString &l : wrapToWidth(it.label, innerW - 2))
+                    vlines << VLine{l, QString(), true};
+                continue;
+            }
+            const QStringList wrapped = wrapToWidth(it.value, valueColW);
+            for (int k = 0; k < wrapped.size(); ++k)
+                vlines << VLine{k == 0 ? it.label : QString(), wrapped[k], k == 0};
+        }
+    }
+
+    // Inner content rows (between the borders): blank, N content lines, blank,
     // [help (selectable only)], footer. The title lives in the top border.
     const int helpLines = s.selectable ? 1 : 0;
-    const int innerH = 1 + s.items.size() + 1 + helpLines + 1;
+    const int contentLines = s.selectable ? int(s.items.size()) : int(vlines.size());
+    const int innerH = 1 + contentLines + 1 + helpLines + 1;
     const int boxH   = innerH + 2;
     const int x0 = (W - boxW) / 2;
     const int y0 = std::max(0, (H - boxH) / 2);
@@ -494,21 +527,40 @@ void Screen::renderModal(const ModalPanel &s) const
     }
     ++y;
     put(y++, QString(), normal, false);                   // blank
+    if (!s.selectable) {
+        // Read-only info panel: render the wrapped definition-list lines. The
+        // label column is drawn in the Accent role (bold/colour) so field
+        // names stand out; continuation lines are indented under the value.
+        const long labelAttr = attrFor(Role::Accent);
+        for (const VLine &vl : vlines) {
+            if (vl.value.isEmpty() && vl.labelStart) {
+                // Heading / pre-formatted line — whole line in Accent.
+                put(y, QStringLiteral("  ") + vl.label, labelAttr, false);
+                ++y;
+                continue;
+            }
+            QString row = QStringLiteral("  ");
+            if (!vl.label.isEmpty())
+                row += vl.label;
+            // Pad to the value column; if a label is unexpectedly wider than
+            // the column, still keep one space so it never touches the value.
+            if (row.size() < labelColW)
+                row += QString(labelColW - row.size(), QLatin1Char(' '));
+            else if (!vl.value.isEmpty())
+                row += QLatin1Char(' ');
+            row += vl.value;
+            put(y, row, normal, false);
+            // Overpaint the label span (first line of an item only) in Accent.
+            if (vl.labelStart && !vl.label.isEmpty()) {
+                attrset(labelAttr);
+                putAt(y, x0 + 1, QStringLiteral("  ") + vl.label);
+                attrset(A_NORMAL);
+            }
+            ++y;
+        }
+    } else
     for (int i = 0; i < s.items.size(); ++i) {
         const SettingRow &it = s.items[i];
-        if (!s.selectable) {
-            // Read-only info panel: left-aligned "label   value", no marker,
-            // no highlight (label is usually pre-formatted; value optional).
-            QString row = QStringLiteral("  ") + it.label;
-            if (!it.value.isEmpty()) {
-                const int gap = innerW - row.size() - it.value.size();
-                if (gap > 0)
-                    row += QString(gap, QLatin1Char(' '));
-                row += it.value;
-            }
-            put(y++, row, normal, false);
-            continue;
-        }
         const bool selected = (i == s.selected);
         const QString marker = selected ? QStringLiteral("\u25b8 ") : QStringLiteral("  "); // ▸
         // "▸ Label" left, "[value]" right.

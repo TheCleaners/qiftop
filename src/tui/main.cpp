@@ -231,6 +231,15 @@ int main(int argc, char *argv[])
         connMon->setDesiredIntervalMs(ms);
     });
 
+    // On-demand process details (exe/cmdline/cwd) for the Detail / group-info
+    // window: bridge TuiApp → the monitor's GetProcessDetails RPC, and feed
+    // async replies back into the controller's cache.
+    tui.setProcessDetailsRequester([&connMon](qint32 pid) {
+        connMon->requestProcessDetails(pid);
+    });
+    QObject::connect(connMon.get(), &ConnectionMonitor::processDetailsReady,
+                     &tui, &qiftop::tui::TuiApp::onProcessDetails);
+
     // Input: read raw bytes from stdin ourselves and let Screen decode keys,
     // rather than draining ncurses wgetch() from the notifier. wgetch() under
     // an external event loop is fragile — it returns ERR for both "no input"
