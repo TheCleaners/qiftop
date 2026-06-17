@@ -11,7 +11,7 @@
 # clean apart from spelling false-positives (ncurses/Nagios/libqiftop/perfdata).
 
 Name:           qiftop
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Qt6 iftop-style network monitor
 

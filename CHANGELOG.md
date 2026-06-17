@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-17
+
 ### Added
 - **Agent attribution knobs** — `/etc/qiftop/agent.conf` now has an
   `[attribution]` section for startup-only resolver tuning:
