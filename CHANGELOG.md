@@ -79,7 +79,10 @@ gracefully against older agents.
   `process-attribution-wire` / `container-attribution-wire` capabilities) —
   the data is already on the wire, so surfacing it costs nothing. They stay
   hidden against an agent (or in-process backend) that doesn't provide
-  attribution, and the per-column toggle still persists your choice.
+  attribution, and the per-column toggle still persists your choice. When the
+  view is grouped *by process* the Process column is auto-hidden (and *by
+  container* the Container column), since the value already appears in the
+  group header.
 - D-Bus contract `Version` → **0.6** (additive: `ConnectionDto.reason`,
   capability `attribution-reason`). `org.qiftop.NetworkAgent1` is unchanged
   otherwise; no `NetworkAgent2`.

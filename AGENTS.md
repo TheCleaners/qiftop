@@ -963,7 +963,13 @@ can be dropped with `vagrant destroy default`.
   agent. `applySettingsToUi()` is the single point where the
   user-pref AND the wire-token are AND-ed together to (un)hide each
   column — never `setColumnHidden()` either column outside that
-  helper. The header right-click menu's Process / Container entries
+  helper. The same helper ALSO suppresses the column that the active
+  grouping makes redundant: grouping `ByProcess` hides the Process
+  column and `ByContainer` hides the Container column (the value lives
+  in the group header), so the AND-gate is
+  `wireToken && userPref && !groupedByThatKey`. Changing the grouping
+  re-runs `applySettingsToUi()` (via `Settings::changed`), so the
+  column hides/restores live. The header right-click menu's Process / Container entries
   are routed through `Settings::setShowProcessColumn` /
   `setShowContainerColumn` (the menu interceptor at
   `MainWindow::showConnHeaderMenu`), so toggling them updates the

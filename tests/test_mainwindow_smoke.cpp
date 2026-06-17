@@ -326,6 +326,32 @@ private slots:
         QTest::qWait(20);
         QVERIFY2(!connView->isColumnHidden(processCol),
                  "Process column still hidden after wire cap advertised");
+
+        // Grouping by process makes the Process column redundant (the value
+        // lives in the group header), so it must hide even with cap + pref on;
+        // switching away restores it.
+        const int containerCol =
+            static_cast<int>(ConnectionModel::Column::Container);
+        settings.setConnectionViewMode(Settings::ConnectionViewMode::ByProcess);
+        QTest::qWait(20);
+        QVERIFY2(connView->isColumnHidden(processCol),
+                 "Process column visible while grouped by process");
+        QVERIFY2(!connView->isColumnHidden(containerCol),
+                 "Container column hidden while grouped by process (should stay)");
+
+        settings.setConnectionViewMode(Settings::ConnectionViewMode::ByContainer);
+        QTest::qWait(20);
+        QVERIFY2(connView->isColumnHidden(containerCol),
+                 "Container column visible while grouped by container");
+        QVERIFY2(!connView->isColumnHidden(processCol),
+                 "Process column hidden while grouped by container (should stay)");
+
+        settings.setConnectionViewMode(Settings::ConnectionViewMode::Flat);
+        QTest::qWait(20);
+        QVERIFY2(!connView->isColumnHidden(processCol),
+                 "Process column not restored after leaving the process grouping");
+        QVERIFY2(!connView->isColumnHidden(containerCol),
+                 "Container column not restored after leaving the container grouping");
     }
 
     // Unattributed flows carry a server-side reason; the Process column must
