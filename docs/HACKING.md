@@ -102,7 +102,15 @@ Useful overrides:
 | `QIFTOP_BUILD_TUI`              | `ON`    | Build `nqiftop` when ncursesw is found (`libncurses-dev` / `ncurses-devel`). |
 | `QIFTOP_BUILD_DEMO`             | `OFF`   | Build the synthetic GUI/TUI demo harnesses under `docs/demo/`. |
 | `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION` | `OFF` | Build Tier-2 runtime attribution tests. Requires root + container runtimes; leave off for normal dev. |
+| `QIFTOP_BUILD_BENCHMARKS`       | `OFF`   | Build the opt-in `bench/` QBENCHMARK harness (see §5.8). Build these in `Release` — unoptimized numbers are meaningless. |
+| `QIFTOP_ENABLE_LTO`            | `OFF`   | Enable link-time optimization (IPO/LTO) where the toolchain supports it. Longer link times; for release/benchmark performance. Warns and builds without it on an unsupported toolchain. |
 | `QIFTOP_AUTO_PACKAGE`           | `ON`    | Run `cpack -G DEB` automatically after each agent re-link. |
+
+> **Editor / language-server setup:** the build always emits
+> `<build-dir>/compile_commands.json` (`CMAKE_EXPORT_COMPILE_COMMANDS` is on
+> by default). Point clangd / VS Code at it, e.g.
+> `ln -s build/compile_commands.json .` at the repo root. This same file is
+> what `clang-tidy` and other compilation-database tools consume.
 
 The normal "build everything useful for development" configure is:
 
@@ -753,6 +761,10 @@ cmake -B build-bench -DCMAKE_BUILD_TYPE=Release -DQIFTOP_BUILD_BENCHMARKS=ON
 cmake --build build-bench --target benchmarks -j$(nproc)
 QT_QPA_PLATFORM=offscreen ./build-bench/bench/bench_connection_aggregator
 ```
+
+**Always benchmark an optimized build.** `Release` gives `-O3`; an
+unoptimized (`Debug`) build produces meaningless numbers. Add
+`-DQIFTOP_ENABLE_LTO=ON` for the most representative release-grade figures.
 
 Conventions (mirror `tests/`):
 * Each `bench/bench_*.cpp` is its own executable via `qiftop_add_benchmark()`
