@@ -27,13 +27,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ pkg-config \
-            clang-tidy \
+            wget lsb-release software-properties-common gnupg \
             qt6-base-dev qt6-base-dev-tools \
             libgl1-mesa-dev \
             libnl-3-dev libnl-route-3-dev \
             libnetfilter-conntrack-dev \
             libncurses-dev \
             dbus-x11
+
+      # Pin clang-tidy to a known LLVM version via apt.llvm.org so the gate
+      # matches local dev and doesn't drift with whatever the runner ships.
+      - name: Install pinned clang-tidy (apt.llvm.org)
+        env:
+          LLVM_VERSION: "22"
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh "${LLVM_VERSION}"
+          sudo apt-get install -y clang-tidy-"${LLVM_VERSION}"
+          # Let the wrapper find the parallel runner + the pinned binary.
+          if command -v "run-clang-tidy-${LLVM_VERSION}" >/dev/null; then
+            sudo ln -sf "$(command -v run-clang-tidy-${LLVM_VERSION})" /usr/local/bin/run-clang-tidy
+          fi
+          echo "CLANG_TIDY=clang-tidy-${LLVM_VERSION}" >> "$GITHUB_ENV"
+          clang-tidy-"${LLVM_VERSION}" --version
 
       - name: Configure compilation database
         run: |
