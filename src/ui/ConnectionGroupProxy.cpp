@@ -457,7 +457,12 @@ void ConnectionGroupProxy::sortGroups(QList<Group> &groups) const
                   });
     }
 
-    // Sort groups by their aggregated SortRole value.
+    // "Sort within groups" (default): leave the group order fixed
+    // (first-appearance order) — the user asked for a clicked column to
+    // reorder a group's CONTENTS without shuffling the groupings. Classic
+    // mode additionally orders the groups by their aggregated SortRole.
+    if (m_sortWithinGroups)
+        return;
     std::sort(groups.begin(), groups.end(),
               [&](const Group &lhs, const Group &rhs) {
                   const QVariant a = aggregateData(lhs, m_sortColumn,
@@ -748,6 +753,18 @@ void ConnectionGroupProxy::setShowGroupDetails(bool on)
     // detail + tooltip appear/disappear immediately.
     const int lastCol = columnCount() - 1;
     emit dataChanged(index(0, 0), index(m_groups.size() - 1, lastCol));
+}
+
+void ConnectionGroupProxy::setSortWithinGroups(bool on)
+{
+    if (m_sortWithinGroups == on) return;
+    m_sortWithinGroups = on;
+    // Re-apply the current sort under the new policy with full persistent-
+    // index preservation: switching to classic re-orders the groups by their
+    // aggregated value; switching to within-groups freezes the group order at
+    // its current (first-appearance) arrangement and only the children stay
+    // sorted. No-op in Flat mode or before a sort column is chosen.
+    resortGroupsPreservingIndexes();
 }
 
 qint32 ConnectionGroupProxy::representativePid(const QModelIndex &groupIdx) const

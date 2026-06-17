@@ -197,6 +197,52 @@ private slots:
         QCOMPARE(groupByFromName(QStringLiteral("bogus")), GroupBy::Count); // unrecognised
     }
 
+    // orderedGroupIndices: the group-display-order policy behind
+    // m_sortWithinGroups (default vs classic).
+    void groupOrderingPolicy()
+    {
+        // Three groups. minSrc = first-appearance position (stable, source
+        // order). Aggregates differ so the two policies diverge.
+        QList<GroupSummary> g;
+        g << GroupSummary{ 10.0, 0.0, 100, 0, /*minSrc*/0, QStringLiteral("eth0")  };
+        g << GroupSummary{500.0, 0.0, 700, 0, /*minSrc*/1, QStringLiteral("wlan0") };
+        g << GroupSummary{ 70.0, 0.0, 300, 0, /*minSrc*/2, QStringLiteral("lo")    };
+
+        const int rxRateCol = 1;
+
+        // sortWithinGroups (default): group order FROZEN at first-appearance
+        // (minSrc) regardless of sort column/direction.
+        QCOMPARE(orderedGroupIndices(g, rxRateCol, /*desc*/true,  /*within*/true),
+                 (QList<int>{0, 1, 2}));
+        QCOMPARE(orderedGroupIndices(g, rxRateCol, /*desc*/false, /*within*/true),
+                 (QList<int>{0, 1, 2}));
+
+        // Classic: order groups by the sort column's aggregate.
+        // RX rate desc → wlan0(500), lo(70), eth0(10).
+        QCOMPARE(orderedGroupIndices(g, rxRateCol, /*desc*/true,  /*within*/false),
+                 (QList<int>{1, 2, 0}));
+        // RX rate asc → eth0(10), lo(70), wlan0(500).
+        QCOMPARE(orderedGroupIndices(g, rxRateCol, /*desc*/false, /*within*/false),
+                 (QList<int>{0, 2, 1}));
+
+        // Classic on the Flow column (0) orders by label (case-insensitive).
+        // asc → eth0, lo, wlan0.
+        QCOMPARE(orderedGroupIndices(g, /*Flow*/0, /*desc*/false, /*within*/false),
+                 (QList<int>{0, 2, 1}));
+    }
+
+    // Equal aggregates fall back to the stable minSrc tiebreak (no shuffling).
+    void groupOrderingStableTiebreak()
+    {
+        QList<GroupSummary> g;
+        g << GroupSummary{100.0, 0.0, 0, 0, 0, QStringLiteral("a")};
+        g << GroupSummary{100.0, 0.0, 0, 0, 1, QStringLiteral("b")};
+        g << GroupSummary{100.0, 0.0, 0, 0, 2, QStringLiteral("c")};
+        // All equal on RX rate → keep first-appearance order in both directions.
+        QCOMPARE(orderedGroupIndices(g, 1, true,  false), (QList<int>{0, 1, 2}));
+        QCOMPARE(orderedGroupIndices(g, 1, false, false), (QList<int>{0, 1, 2}));
+    }
+
     void detailRows()
     {
         // Interface detail: a label/value row per field; optional fields still

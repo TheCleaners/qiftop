@@ -85,6 +85,7 @@ public:
     [[nodiscard]] bool showContainerColumn() const { return m_showContainerColumn; }
     [[nodiscard]] bool showContainerChainInTooltip() const { return m_showContainerChainInTooltip; }
     [[nodiscard]] bool showGroupHeaderDetails() const { return m_showGroupHeaderDetails; }
+    [[nodiscard]] bool sortWithinGroups() const { return m_sortWithinGroups; }
 
     // --- Group-header chip palette (configurable; distinct from the
     //     peer src/dst colours used in the flow column). Four semantic
@@ -162,6 +163,7 @@ public:
     void setShowContainerColumn(bool v);
     void setShowContainerChainInTooltip(bool v);
     void setShowGroupHeaderDetails(bool v);
+    void setSortWithinGroups(bool v);
 
     void setChipColorPrimary(const QString &hex);
     void setChipColorUser(const QString &hex);
@@ -214,6 +216,9 @@ private:
     // attribution detail inline on the group header rows (pid, user,
     // container id, etc). On by default — it's the point of grouping.
     bool m_showGroupHeaderDetails        = true;
+    // When true (default), header clicks sort rows within each group and keep
+    // the group order fixed; when false, the classic global group+row sort.
+    bool m_sortWithinGroups              = true;
     QString m_chipColorPrimary = defaultChipColorPrimary();
     QString m_chipColorUser    = defaultChipColorUser();
     QString m_chipColorId      = defaultChipColorId();

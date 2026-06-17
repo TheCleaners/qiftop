@@ -46,6 +46,7 @@ constexpr auto kShowProcessColumn         = "connections/showProcessColumn";
 constexpr auto kShowContainerColumn       = "connections/showContainerColumn";
 constexpr auto kShowContainerChainInTooltip = "connections/showContainerChainInTooltip";
 constexpr auto kShowGroupHeaderDetails      = "connections/showGroupHeaderDetails";
+constexpr auto kSortWithinGroups            = "connections/sortWithinGroups";
 constexpr auto kChipColorPrimary = "connections/chipColorPrimary";
 constexpr auto kChipColorUser    = "connections/chipColorUser";
 constexpr auto kChipColorId      = "connections/chipColorId";
@@ -133,6 +134,8 @@ void Settings::load()
                                                   m_showContainerChainInTooltip).toBool();
     m_showGroupHeaderDetails = m_store.value(kShowGroupHeaderDetails,
                                              m_showGroupHeaderDetails).toBool();
+    m_sortWithinGroups       = m_store.value(kSortWithinGroups,
+                                             m_sortWithinGroups).toBool();
 
     const auto loadColor = [this](const char *key, const QString &def) {
         const QString s = m_store.value(QString::fromLatin1(key), def).toString();
@@ -391,6 +394,14 @@ void Settings::setShowGroupHeaderDetails(bool v)
     if (v == m_showGroupHeaderDetails) return;
     m_showGroupHeaderDetails = v;
     store(kShowGroupHeaderDetails, v);
+    emit changed();
+}
+
+void Settings::setSortWithinGroups(bool v)
+{
+    if (v == m_sortWithinGroups) return;
+    m_sortWithinGroups = v;
+    store(kSortWithinGroups, v);
     emit changed();
 }
 

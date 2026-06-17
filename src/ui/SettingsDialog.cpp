@@ -309,6 +309,17 @@ SettingsDialog::SettingsDialog(Settings *settings,
         "the grouped view modes."));
     displayForm->addRow(m_showGroupHeaderDetailsBox);
 
+    m_sortWithinGroupsBox =
+        new QCheckBox(tr("Sort within groups (keep group order fixed)"));
+    m_sortWithinGroupsBox->setChecked(m_settings->sortWithinGroups());
+    m_sortWithinGroupsBox->setToolTip(tr(
+        "When the Connections view is grouped, a column-header click sorts "
+        "the rows inside each group while leaving the groups themselves in "
+        "place. Uncheck to use the classic behaviour, where a header click "
+        "also reorders the groups by their aggregated value. Applies only in "
+        "the grouped view modes."));
+    displayForm->addRow(m_sortWithinGroupsBox);
+
     addNavPage(displayTab, tr("Display"));
 
     // --- DNS tab ---
@@ -456,6 +467,7 @@ void SettingsDialog::apply()
     m_settings->setShowContainerColumn(m_showContainerColumnBox->isChecked());
     m_settings->setShowContainerChainInTooltip(m_showChainInTooltipBox->isChecked());
     m_settings->setShowGroupHeaderDetails(m_showGroupHeaderDetailsBox->isChecked());
+    m_settings->setSortWithinGroups(m_sortWithinGroupsBox->isChecked());
     m_settings->setChipColorPrimary(m_chipPrimary.name());
     m_settings->setChipColorUser(m_chipUser.name());
     m_settings->setChipColorId(m_chipId.name());

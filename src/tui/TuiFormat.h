@@ -434,7 +434,56 @@ inline QString groupLabelFor(GroupBy g, const Connection &c)
     return QString();
 }
 
-// --- settings model ---------------------------------------------------------
+// Per-group summary used to decide group display order in grouped views.
+struct GroupSummary {
+    double  rxRate  = 0.0;
+    double  txRate  = 0.0;
+    quint64 rxBytes = 0;
+    quint64 txBytes = 0;
+    int     minSrc  = 0;     // stable first-appearance position (source index)
+    QString label;
+};
+
+// Decide the display order of groups (returns indices into `g`).
+//   sortWithinGroups == true  → group order FROZEN at first-appearance
+//        (minSrc ascending); re-sorting the rows never shuffles the groupings.
+//   sortWithinGroups == false → classic: order groups by the sort column's
+//        aggregate — connSortCol 1=rxRate, 2=txRate, 3=rxBytes, 4=txBytes;
+//        column 0 (Flow) orders by label — honouring `sortDesc`, with minSrc
+//        as a stable tiebreak. Mirrors the GUI ConnectionGroupProxy behaviour.
+inline QList<int> orderedGroupIndices(const QList<GroupSummary> &g,
+                                      int connSortCol, bool sortDesc,
+                                      bool sortWithinGroups)
+{
+    QList<int> order(g.size());
+    std::iota(order.begin(), order.end(), 0);
+    if (sortWithinGroups) {
+        std::stable_sort(order.begin(), order.end(),
+                         [&](int a, int b) { return g[a].minSrc < g[b].minSrc; });
+        return order;
+    }
+    const auto aggVal = [&](int i) -> double {
+        switch (connSortCol) {
+        case 1:  return g[i].rxRate;
+        case 2:  return g[i].txRate;
+        case 3:  return double(g[i].rxBytes);
+        case 4:  return double(g[i].txBytes);
+        default: return 0.0;          // Flow (col 0) handled by label below
+        }
+    };
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        if (connSortCol == 0) {       // Flow: lexicographic by label
+            const int c = g[a].label.compare(g[b].label, Qt::CaseInsensitive);
+            if (c != 0) return sortDesc ? c > 0 : c < 0;
+            return g[a].minSrc < g[b].minSrc;
+        }
+        const double va = aggVal(a), vb = aggVal(b);
+        if (va == vb) return g[a].minSrc < g[b].minSrc;   // stable tiebreak
+        return sortDesc ? va > vb : va < vb;
+    });
+    return order;
+}
+
 // onOff() is the common bool formatter. The settings list itself is built
 // imperatively in TuiApp (each row carries value()/adjust() closures) so
 // adding a preference is a one-liner there, not a switch case here.
