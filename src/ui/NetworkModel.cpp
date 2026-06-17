@@ -82,6 +82,8 @@ QVariant NetworkModel::data(const QModelIndex &index, int role) const
             parts << row.current.addresses.join(QStringLiteral(", "));
         return parts.join(QStringLiteral(", "));
     }
+    default:
+        break;
     }
 
     return {};

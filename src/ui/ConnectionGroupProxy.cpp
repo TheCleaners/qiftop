@@ -998,7 +998,8 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
             const double v = sumMaxRefs(Col::TxMax);
             return v > 0.0 ? util::formatByteRate(v) : QStringLiteral("—");
         }
-        case Col::Process: return QStringLiteral("—");
+        // Grouped rows don't aggregate process/container; both show a dash.
+        case Col::Process:
         case Col::Container: return QStringLiteral("—");
         case Col::ColumnCount: break;
         }
@@ -1014,7 +1015,7 @@ QVariant ConnectionGroupProxy::aggregateData(const Group &g, int column, int rol
         case Col::TxTotal: return static_cast<qulonglong>(txBytes);
         case Col::RxMax:   return sumMaxRefs(Col::RxMax);
         case Col::TxMax:   return sumMaxRefs(Col::TxMax);
-        case Col::Process: return QString();
+        case Col::Process:
         case Col::Container: return QString();
         case Col::ColumnCount: break;
         }

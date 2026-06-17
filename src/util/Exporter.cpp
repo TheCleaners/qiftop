@@ -64,7 +64,7 @@ static QString csvSanitise(const QString &field)
 
 QString csvEscape(const QString &raw)
 {
-    const QString field = csvSanitise(raw);
+    QString field = csvSanitise(raw);
     const bool needsQuoting = field.contains(QLatin1Char(','))
                               || field.contains(QLatin1Char('"'))
                               || field.contains(QLatin1Char('\n'))

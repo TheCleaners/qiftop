@@ -130,8 +130,10 @@ void IdleManager::evaluate()
     // to `elapsed >= 0` which is always true, so e.g. idle.timeout_secs=0
     // silently paused polling on the very first tick.)
     int target;
-    if      (m_cfg.idleTimeoutMs  > 0 && elapsed >= m_cfg.idleTimeoutMs)  target = 0;
-    else if (m_cfg.slow2WindowMs  > 0 && elapsed >= m_cfg.slow2WindowMs)  target = 0;
+    // idle.timeout and slow2 both collapse to "pause polling" (target 0);
+    // fold them into one condition so they don't read as a copy-paste bug.
+    if      ((m_cfg.idleTimeoutMs > 0 && elapsed >= m_cfg.idleTimeoutMs)
+          || (m_cfg.slow2WindowMs  > 0 && elapsed >= m_cfg.slow2WindowMs))  target = 0;
     else if (m_cfg.slow1WindowMs  > 0 && elapsed >= m_cfg.slow1WindowMs)  target = qMax(m_cfg.slow2IntervalMs, active);
     else if (m_cfg.activeWindowMs > 0 && elapsed >= m_cfg.activeWindowMs) target = qMax(m_cfg.slow1IntervalMs, active);
     else                                                                  target = active;

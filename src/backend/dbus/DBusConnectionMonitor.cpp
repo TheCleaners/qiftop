@@ -31,7 +31,7 @@ DBusConnectionMonitor::DBusConnectionMonitor(bool useSessionBus, QObject *parent
 {
 }
 
-DBusConnectionMonitor::~DBusConnectionMonitor() { stop(); }
+DBusConnectionMonitor::~DBusConnectionMonitor() { DBusConnectionMonitor::stop(); }
 
 void DBusConnectionMonitor::start()
 {

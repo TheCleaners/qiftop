@@ -506,7 +506,7 @@ void ConnectionAggregator::advanceSmoothing()
     });
 }
 
-void ConnectionAggregator::onResolved(QHostAddress addr, QString /*hostname*/)
+void ConnectionAggregator::onResolved(const QHostAddress &addr, const QString & /*hostname*/)
 {
     if (!m_resolveEnabled || m_rows.isEmpty())
         return;

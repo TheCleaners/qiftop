@@ -23,7 +23,7 @@ DBusNetworkMonitor::DBusNetworkMonitor(bool useSessionBus, QObject *parent)
 {
 }
 
-DBusNetworkMonitor::~DBusNetworkMonitor() { stop(); }
+DBusNetworkMonitor::~DBusNetworkMonitor() { DBusNetworkMonitor::stop(); }
 
 static QDBusConnection bus(bool session)
 {

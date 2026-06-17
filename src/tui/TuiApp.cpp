@@ -153,10 +153,10 @@ TuiApp::TuiApp(Screen *screen,
                aggregate::InterfaceAggregator  *ifaceAgg,
                aggregate::ConnectionAggregator *connAgg,
                QString sourceLabel,
-               QString themeName,
+               const QString &themeName,
                int pollMs,
-               QString viewName,
-               QString groupName,
+               const QString &viewName,
+               const QString &groupName,
                QObject *parent)
     : QObject(parent)
     , m_screen(screen)
