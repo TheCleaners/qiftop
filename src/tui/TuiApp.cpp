@@ -459,15 +459,34 @@ Frame TuiApp::buildFrame()
 
     m_rowRefs.clear();
 
+    // Deferred cell formatting (PERF #12): build a lightweight PLAN of the
+    // displayed rows and accumulate the cheap per-row data (rates, roles,
+    // refs, gauge) for ALL of them — the gauge scale and the scrollbar need
+    // the full list — but format the expensive cells for ONLY the visible
+    // window once the scroll offset is known. cellsForConnection() /
+    // cellsForInterface() (per-row rate/address/DNS formatting) are the hot
+    // part; on a list far taller than the viewport this skips thousands of
+    // format calls per redraw. Output is byte-identical to formatting every
+    // row: Screen only ever reads f.rows[scrollOffset .. +bodyHeight).
+    struct PlannedRow {
+        int         src = -1;       // index into *iRows / *cRows; -1 = group header
+        bool        indent = false; // grouped member row (leading "  ")
+        QStringList groupCells;     // precomputed header cells (used when src < 0)
+    };
+    QList<PlannedRow> plan;
+    const QList<aggregate::InterfaceAggregator::Row>*  iRows = nullptr;
+    const QList<aggregate::ConnectionAggregator::Row>* cRows = nullptr;
+
     if (m_view == View::Interfaces) {
         f.sortCol  = m_ifaceSortCol;
         f.sortDesc = m_ifaceSortDesc;
         const auto &rows = m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows();
+        iRows = &rows;
         const QList<int> order =
             sortedInterfaceIndices(rows, m_ifaceSortCol, m_ifaceSortDesc);
         for (int i : order) {
             const auto &row = rows[i];
-            f.rows     << cellsForInterface(row);
+            plan       << PlannedRow{i, false, {}};
             f.rowRoles << rowRoleForInterface(row);
             const double cr = combinedRate(row);
             rates << cr;
@@ -480,6 +499,7 @@ Frame TuiApp::buildFrame()
         f.sortCol  = m_connSortCol;
         f.sortDesc = m_connSortDesc;
         const auto &rows = m_paused ? m_frozenConnRows : m_connAgg->rows();
+        cRows = &rows;
         const QList<int> matched =
             displayedConnectionIndices(rows, *m_connAgg, m_connSortCol,
                                        m_connSortDesc, m_filterExpr);
@@ -495,7 +515,7 @@ Frame TuiApp::buildFrame()
         if (m_groupBy == GroupBy::None) {
             for (int i : matched) {
                 const auto &row = rows[i];
-                f.rows     << cellsForConnection(*m_connAgg, row);
+                plan       << PlannedRow{i, false, {}};
                 f.rowRoles << connRole(row);
                 const double cr = combinedRate(row);
                 rates << cr;
@@ -505,37 +525,60 @@ Frame TuiApp::buildFrame()
                 m_rowRefs << RowRef{true, false, connectionKey(row), QString()};
             }
         } else {
-            // Bucket by group key, preserving first-appearance order (which is
-            // the sort order — so loudest-first when sorting by rate desc).
-            QList<QString> groupOrder;
+            // Bucket by group key. Members within a bucket inherit `matched`'s
+            // order, so rows inside a group are always sorted by the active
+            // column regardless of the group-ordering policy below.
+            QList<QString> firstSeen;          // keys in matched (sorted) order
             QHash<QString, QList<int>> buckets;
             for (int i : matched) {
                 const QString k = groupKeyFor(m_groupBy, rows[i].current);
                 if (!buckets.contains(k))
-                    groupOrder << k;
+                    firstSeen << k;
                 buckets[k] << i;
             }
-            for (const QString &k : std::as_const(groupOrder)) {
+
+            // Per-group aggregates + the smallest source index (its stable
+            // first-appearance position — the source list is key-sorted, so
+            // this order is independent of the active row sort). Built in
+            // firstSeen order; orderedGroupIndices() then picks the display
+            // order per the sortWithinGroups policy.
+            QList<GroupSummary> summaries;
+            summaries.reserve(firstSeen.size());
+            for (const QString &k : std::as_const(firstSeen)) {
                 const QList<int> &members = buckets[k];
-                double grx = 0, gtx = 0;
-                quint64 grb = 0, gtb = 0;
+                GroupSummary gs;
+                gs.minSrc = members.first();
                 for (int i : members) {
-                    grx += rows[i].rxRate;
-                    gtx += rows[i].txRate;
-                    grb += rows[i].current.rxBytes;
-                    gtb += rows[i].current.txBytes;
+                    gs.rxRate  += rows[i].rxRate;
+                    gs.txRate  += rows[i].txRate;
+                    gs.rxBytes += rows[i].current.rxBytes;
+                    gs.txBytes += rows[i].current.txBytes;
+                    gs.minSrc   = std::min(gs.minSrc, i);
                 }
+                gs.label = groupLabelFor(m_groupBy, rows[members.first()].current);
+                summaries << gs;
+            }
+
+            const QList<int> gorder = orderedGroupIndices(
+                summaries, m_connSortCol, m_connSortDesc, m_sortWithinGroups);
+
+            for (int oi : gorder) {
+                const QString &k = firstSeen[oi];
+                const QList<int> &members = buckets[k];
+                const GroupSummary &gs = summaries[oi];
+                const double grx = gs.rxRate, gtx = gs.txRate;
+                const quint64 grb = gs.rxBytes, gtb = gs.txBytes;
                 // Group header row: aggregated, and a landable cursor target so
                 // it can be folded/unfolded. A ▸ (collapsed) / ▾ (expanded)
-                // marker leads the label.
+                // marker leads the label. Header cells are cheap aggregates, so
+                // they're built here in phase A (only per-flow cells defer).
                 const bool collapsed = m_collapsedGroups.contains(k);
-                const QString label = groupLabelFor(m_groupBy, rows[members.first()].current);
                 const QString marker = collapsed ? QStringLiteral("\u25b8")  // ▸
                                                  : QStringLiteral("\u25be"); // ▾
-                f.rows << QStringList{
-                    QStringLiteral("%1 %2  (%3)").arg(marker, label).arg(members.size()),
+                plan << PlannedRow{-1, false, QStringList{
+                    QStringLiteral("%1 %2  (%3)").arg(marker, gs.label).arg(members.size()),
                     util::formatByteRate(grx), util::formatByteRate(gtx),
-                    util::formatBytes(grb), util::formatBytes(gtb)};
+                    util::formatBytes(grb), util::formatBytes(gtb)}};
                 f.rowRoles << Role::GroupHeader;
                 const double gcr = grx + gtx;
                 rates << gcr;
@@ -548,9 +591,7 @@ Frame TuiApp::buildFrame()
                     continue;
                 for (int i : members) {
                     const auto &row = rows[i];
-                    QStringList mc = cellsForConnection(*m_connAgg, row);
-                    mc[0] = QStringLiteral("  ") + mc[0];
-                    f.rows     << mc;
+                    plan       << PlannedRow{i, true, {}};
                     f.rowRoles << connRole(row);
                     const double cr = combinedRate(row);
                     rates << cr;
@@ -586,7 +627,7 @@ Frame TuiApp::buildFrame()
     // Current-line cursor: clamp to the row count, then derive the viewport
     // scroll so the cursor stays visible (scroll follows selection).
     const int body  = m_screen ? m_screen->bodyHeight() : 0;
-    const int total = static_cast<int>(f.rows.size());
+    const int total = static_cast<int>(plan.size());
     int &cursor = (m_view == View::Interfaces) ? m_ifaceCursor : m_connCursor;
     int &scroll = (m_view == View::Interfaces) ? m_ifaceScroll : m_connScroll;
     // After a collapse, snap the cursor onto the folded group's header row so
@@ -628,6 +669,35 @@ Frame TuiApp::buildFrame()
         f.cursor = cursor;
     }
     f.scrollOffset = scroll;
+
+    // PERF #12 phase B: now that the scroll window is known, format the cells
+    // for ONLY the visible rows. Off-screen rows get an empty placeholder so
+    // f.rows stays index-aligned with rowRoles / rowGauge / rowRefs and
+    // f.rows.size() == total (Screen reads content only inside the window).
+    // When there's no screen yet (body == 0) we format everything, preserving
+    // the original behaviour for any non-interactive caller.
+    {
+        const int fmtBegin = (body > 0) ? std::max(0, scroll) : 0;
+        const int fmtEnd   = (body > 0) ? std::min(total, scroll + body) : total;
+        f.rows.reserve(total);
+        for (int i = 0; i < total; ++i) {
+            if (i < fmtBegin || i >= fmtEnd) {
+                f.rows << QStringList();          // off-screen placeholder
+                continue;
+            }
+            const PlannedRow &p = plan[i];
+            if (p.src < 0) {                       // group header (precomputed)
+                f.rows << p.groupCells;
+                continue;
+            }
+            QStringList cells = (m_view == View::Interfaces)
+                ? cellsForInterface((*iRows)[p.src])
+                : cellsForConnection(*m_connAgg, (*cRows)[p.src]);
+            if (p.indent && !cells.isEmpty())
+                cells[0] = QStringLiteral("  ") + cells[0];
+            f.rows << cells;
+        }
+    }
 
     if (m_filterEditing) {
         // The menu bar becomes the filter input line while editing.
@@ -1198,6 +1268,7 @@ void TuiApp::loadSettings()
     m_udpAggregate  = s.value(QStringLiteral("udpAggregate"), m_udpAggregate).toBool();
     m_smoothing     = s.value(QStringLiteral("smoothing"), m_smoothing).toBool();
     m_directionColors = s.value(QStringLiteral("directionColors"), m_directionColors).toBool();
+    m_sortWithinGroups = s.value(QStringLiteral("sortWithinGroups"), m_sortWithinGroups).toBool();
     m_pollMs        = std::clamp(s.value(QStringLiteral("pollMs"), m_pollMs).toInt(), 100, 10000);
     {
         const int g = s.value(QStringLiteral("groupBy"), int(m_groupBy)).toInt();
@@ -1248,6 +1319,7 @@ void TuiApp::saveSettings() const
     s.setValue(QStringLiteral("udpAggregate"), m_udpAggregate);
     s.setValue(QStringLiteral("smoothing"), m_smoothing);
     s.setValue(QStringLiteral("directionColors"), m_directionColors);
+    s.setValue(QStringLiteral("sortWithinGroups"), m_sortWithinGroups);
     s.setValue(QStringLiteral("pollMs"), m_pollMs);
     s.setValue(QStringLiteral("groupBy"), int(m_groupBy));
     if (!m_themes.isEmpty())
@@ -1372,6 +1444,14 @@ void TuiApp::buildSettingItems()
         QStringLiteral("EMA-smooth the displayed rates so they ease between polls."),
         [this] { return onOff(m_smoothing); },
         [this](int) { m_smoothing = !m_smoothing; }});
+
+    // Sort within groups on/off.
+    m_settings.append({
+        QStringLiteral("Sort within groups"),
+        QStringLiteral("When grouped, sort rows inside each group and keep the group "
+                       "order fixed; off = order groups by their total."),
+        [this] { return onOff(m_sortWithinGroups); },
+        [this](int) { m_sortWithinGroups = !m_sortWithinGroups; requestRedraw(); }});
 }
 
 void TuiApp::applyPollInterval()

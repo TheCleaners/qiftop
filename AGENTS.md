@@ -439,6 +439,13 @@ GUI never has to deal with a million-row table. The cap is a compile-time
 constant in `src/agent/ConnectionsService.cpp` — bump it (and the §4
 contract note) if a real use case appears.
 
+The **in-process** `ConntrackMonitor` (GUI self-elevation / no-agent
+fallback) applies the **same** cap (`kMaxInProcessFlows = 4096`, keep in
+sync with the agent's `kMaxConnections`), but collects the top-N via a
+K-bounded min-heap by bytes (`backend/linux/FlowTopK.h::admitFlowTopK`)
+so the transient memory is O(K), not O(table). Same one-time `qWarning`
+on overflow. Pinned by `test_flow_topk`.
+
 ### Access control
 
 The system-bus policy (`dist/dbus/org.qiftop.NetworkAgent1.conf`) restricts
@@ -572,7 +579,7 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
 | `test_interface_aggregator` | `InterfaceAggregator` row identity, sorted snapshots, and per-interface rate computation without Qt model/view. |
 | `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, and copy helpers. |
-| `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. Includes `wrapToWidth` (word-wrap + hard-break for the modal dialogs' wrapped value column) and `groupDetailRows` (the Enter-on-header group-info window: bulk fields + aggregates, plus exe/cmdline/cwd once on-demand details arrive). |
+| `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. Includes `orderedGroupIndices` (the group-display-order policy behind nqiftop's `sortWithinGroups`: frozen first-appearance vs classic aggregate order + stable tiebreak), `wrapToWidth` (word-wrap + hard-break for the modal dialogs' wrapped value column), and `groupDetailRows` (the Enter-on-header group-info window: bulk fields + aggregates, plus exe/cmdline/cwd once on-demand details arrive). |
 | `test_tui_theme`           | Built-in `nqiftop` themes, case-insensitive lookup, fallback, and direction colour/attribute separation. |
 | `test_settings_migration`  | `Settings` legacy-key migration logic; chip-colour + v0.2 attribution view settings (view mode, process/container column toggles, chain-in-tooltip) round-trip + out-of-range view-mode clamp |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
@@ -591,12 +598,13 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
 | `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. |
-| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). Uses a tiny stub source model — no real ConnectionModel needed. |
+| `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). **sortWithinGroups** (default true): a header click sorts only each group's children and leaves the group order at first-appearance order; toggling to classic (false) re-orders the groups by aggregated value (and back freezes at the current arrangement) — both via the persistent-index-preserving resort. Uses a tiny stub source model — no real ConnectionModel needed. |
 | `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. v0.5: `reason` (resolved/forwarded/orphaned/nosocket). |
 | `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
 | `test_resolver_factory`    | `qiftop::backend::createDefaultProcessResolver` — env-gated composite construction; `InterfacesService::capabilities()` aggregation: `process-attribution-wire` / `container-attribution-wire` / `container-chain-wire` mirror tokens emitted iff the underlying resolver advertises the producer-side token; `container-chain-wire` requires BOTH `container-attribution` AND `container-chain`. |
 | `test_sockdiag_parse`      | `qiftop::backend::sockDiagParse` — netlink dump message parsing edge cases (IPv4/IPv6, multi-message dumps, truncated tail); plus the local 2-tuple key ambiguity guard (a local key with two distinct inodes must not yield a confident PID). Pure parser, no socket. |
 | `test_conntrack_orient`    | `qiftop::backend::linux::orientConntrackFlow` — pure per-flow local/remote orientation + tx/rx-from-ORIG/REPL mapping: outbound (src local), inbound (dst local), forwarded (neither local → ORIG tuple kept), both-local edge. No live conntrack handle. |
+| `test_flow_topk`           | `qiftop::backend::linux::admitFlowTopK` (FlowTopK.h) — the bounded top-K-by-bytes min-heap that caps the in-process `ConntrackMonitor` snapshot at the loudest 4096 (mirrors the agent cap): below-cap keeps all, at-cap keeps the loudest regardless of arrival order, ranks by rx+tx total, strictly-greater admission (ties keep the incumbent), `cap<=0` is unbounded, and the min-heap front invariant holds after every op. Pure — no live conntrack handle. |
 | `test_services`            | `ConnectionsService` / `InterfacesService` driven in-process via the fake monitors (no real D-Bus bus): snapshot cap (4099→4096 top-by-bytes), dropped-flow skip, process/container/chain attribution, server-side direction; interface-stat caching. |
 | `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
 | `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
@@ -930,7 +938,15 @@ can be dropped with `vagrant destroy default`.
   `m_connProxy->mapToSource(filter)`) and skip group rows via
   `m_connGroupProxy->isGroupIndex(view)`. Adding a new grouping mode
   = extend the `Settings::ConnectionViewMode` enum + `groupKeyFor()`
-  + `groupLabelFor()`; the rest is automatic.
+  + `groupLabelFor()`; the rest is automatic. **Header-click sort
+  behaviour is gated by `Settings::sortWithinGroups`** (default true):
+  when set, a header click sorts only each group's child rows and keeps
+  the group order frozen at first-appearance order; when cleared, the
+  classic global sort orders the groups by aggregated value too.
+  `applySettingsToUi()` pushes it via
+  `ConnectionGroupProxy::setSortWithinGroups()`, which re-sorts with
+  full persistent-index preservation (no model reset → expansion/
+  selection survive).
 * **Process / Container columns are capability-gated, not always-on.**
   `Column::Process` and `Column::Container` are hidden by default; the
   Settings dialog's "Process & Container Attribution" sub-section

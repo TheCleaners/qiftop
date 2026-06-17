@@ -422,6 +422,7 @@ private slots:
         ConnectionGroupProxy p;
         p.setSourceModel(&src);
         p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        p.setSortWithinGroups(false);   // classic: header sorts group order too
 
         const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
         p.sort(rxCol, Qt::DescendingOrder);
@@ -461,6 +462,70 @@ private slots:
         QCOMPARE(p.index(2, rxCol, eth).data(ConnectionModel::RxRateRole).toDouble(),  50.0);
     }
 
+    // --- per-group / within-group sorting (sortWithinGroups) ----------------
+
+    // Default mode is "sort within groups": a header click reorders each
+    // group's CHILDREN but leaves the group order at first-appearance order.
+    void sortWithinGroupsKeepsGroupOrderFixed()
+    {
+        StubFlows src;
+        // First-appearance order of interfaces: eth0 (sum 10), wlan0 (sum 800).
+        // Classic descending-RX would put wlan0 first; within-group mode must
+        // keep eth0 first (first-appearance) while sorting each group's rows.
+        src.replace({mk("eth0",  "", "", 0, "",  10, 0),
+                     mk("wlan0", "", "", 0, "", 500, 0),
+                     mk("wlan0", "", "", 0, "", 300, 0),
+                     mk("wlan0", "", "", 0, "",  20, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        QVERIFY(p.sortWithinGroups());          // default
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+
+        // Group order unchanged: eth0 first, wlan0 second.
+        QCOMPARE(p.rowCount(), 2);
+        const QModelIndex g0 = p.index(0, 0);
+        const QModelIndex g1 = p.index(1, 0);
+        QVERIFY(p.isGroupIndex(g0));
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 10.0);   // eth0 agg
+        QCOMPARE(p.index(1, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 820.0);  // wlan0 agg
+        // But wlan0's CHILDREN are sorted descending: 500, 300, 20.
+        QCOMPARE(p.rowCount(g1), 3);
+        QCOMPARE(p.index(0, rxCol, g1).data(ConnectionModel::RxRateRole).toDouble(), 500.0);
+        QCOMPARE(p.index(1, rxCol, g1).data(ConnectionModel::RxRateRole).toDouble(), 300.0);
+        QCOMPARE(p.index(2, rxCol, g1).data(ConnectionModel::RxRateRole).toDouble(),  20.0);
+    }
+
+    // Toggling sortWithinGroups OFF (classic) reorders the groups by their
+    // aggregated value; toggling back ON freezes the order at its current
+    // arrangement. The switch preserves the model (no reset) and re-sorts.
+    void togglingSortWithinGroupsReordersGroups()
+    {
+        StubFlows src;
+        src.replace({mk("eth0",  "", "", 0, "",  10, 0),
+                     mk("wlan0", "", "", 0, "", 800, 0)});
+        ConnectionGroupProxy p;
+        p.setSourceModel(&src);
+        p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+
+        const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
+        p.sort(rxCol, Qt::DescendingOrder);
+
+        // within-group (default): first-appearance order, eth0 first.
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 10.0);
+
+        // Switch to classic: groups reorder by aggregated RX desc → wlan0 first.
+        p.setSortWithinGroups(false);
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 800.0);
+        QCOMPARE(p.index(1, rxCol).data(ConnectionModel::RxRateRole).toDouble(),  10.0);
+
+        // Switch back to within-group: order frozen at current (wlan0 first).
+        p.setSortWithinGroups(true);
+        QCOMPARE(p.index(0, rxCol).data(ConnectionModel::RxRateRole).toDouble(), 800.0);
+    }
+
     void groupedModeSortSurvivesRebuild()
     {
         // After a sort, a dataChanged that triggers an internal rebuild
@@ -473,6 +538,7 @@ private slots:
         ConnectionGroupProxy p;
         p.setSourceModel(&src);
         p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        p.setSortWithinGroups(false);   // classic: group order tracks the sort
 
         const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
         p.sort(rxCol, Qt::DescendingOrder);
@@ -570,6 +636,7 @@ private slots:
         ConnectionGroupProxy p;
         p.setSourceModel(&src);
         p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        p.setSortWithinGroups(false);   // classic: groups reorder by aggregate
 
         const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
         p.sort(rxCol, Qt::DescendingOrder);
@@ -604,6 +671,7 @@ private slots:
         ConnectionGroupProxy p;
         p.setSourceModel(&src);
         p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        p.setSortWithinGroups(false);   // classic: groups reorder by aggregate
 
         const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
         p.sort(rxCol, Qt::DescendingOrder);
@@ -637,6 +705,7 @@ private slots:
         ConnectionGroupProxy p;
         p.setSourceModel(&src);
         p.setViewMode(Settings::ConnectionViewMode::ByInterface);
+        p.setSortWithinGroups(false);   // classic: groups reorder by aggregate
 
         const int rxCol = static_cast<int>(ConnectionModel::Column::RxRate);
         p.sort(rxCol, Qt::DescendingOrder);

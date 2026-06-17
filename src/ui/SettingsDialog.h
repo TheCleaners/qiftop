@@ -56,6 +56,7 @@ private:
     QCheckBox *m_showContainerColumnBox = nullptr;
     QCheckBox *m_showChainInTooltipBox  = nullptr;
     QCheckBox *m_showGroupHeaderDetailsBox = nullptr;
+    QCheckBox *m_sortWithinGroupsBox = nullptr;
 
     // Left-hand category navigation (KiCad/VSCode style) → page stack.
     QListWidget    *m_navList = nullptr;

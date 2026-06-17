@@ -558,6 +558,20 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS  ON)
 # library (libqiftop0). Without it lintian errors with `no-shlibs`, and
 # downstream packages linking libqiftop can't auto-derive their dependency.
 set(CPACK_DEBIAN_PACKAGE_GENERATE_SHLIBS ON)
+# IMPORTANT: emit a `>=` (not the CPack default `=`) shlibs constraint.
+# CPack's default exact-version shlibs (`libqiftop 0 libqiftop0 (= X)`) is a
+# foot-gun: when an OLDER libqiftop0 is already installed on the build host,
+# dpkg-shlibdeps reads THAT package's exact-version shlibs and injects e.g.
+# `libqiftop0 (= 0.2.5)` into the freshly-built 0.3.0 component packages —
+# right alongside our own explicit `libqiftop0 (= 0.3.0)` Depends — producing
+# two conflicting constraints that make the whole set uninstallable
+# ("Depends: libqiftop0 (= 0.2.5) but 0.3.0 is to be installed"). With `>=`,
+# the auto-derived constraint is always satisfiable next to our explicit one,
+# and it is also the correct constraint for any external consumer that links
+# libqiftop (they need >= the version they built against, not exactly it).
+# Our intra-release lockstep is still enforced by the explicit per-component
+# `libqiftop0 (= ${CPACK_PACKAGE_VERSION})` Depends below.
+set(CPACK_DEBIAN_PACKAGE_GENERATE_SHLIBS_POLICY ">=")
 # qiftop / qiftop-agent / nqiftop link our own libqiftop.so.0, which lives in
 # a SEPARATE component (libqiftop) — so dpkg-shlibdeps can't find it on the
 # system or in the per-component staging dir and aborts with "cannot find
