@@ -1,0 +1,57 @@
+name: clang-tidy
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clang-tidy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-tidy:
+    name: clang-tidy (Phase 0 report)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build + tidy dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            clang-tidy \
+            qt6-base-dev qt6-base-dev-tools \
+            libgl1-mesa-dev \
+            libnl-3-dev libnl-route-3-dev \
+            libnetfilter-conntrack-dev \
+            libncurses-dev \
+            dbus-x11
+
+      - name: Configure compilation database
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DQIFTOP_BUILD_TESTS=OFF \
+            -DQIFTOP_BUILD_BENCHMARKS=ON \
+            -DQIFTOP_AUTO_PACKAGE=OFF
+
+      - name: Generate moc includes used by analyzed sources
+        run: |
+          cmake --build build --parallel --target \
+            backend_linux_autogen \
+            bench_connection_aggregator_autogen \
+            bench_filter_autogen \
+            bench_flow_topk_autogen
+
+      - name: Run clang-tidy report
+        run: scripts/run-clang-tidy.sh build
