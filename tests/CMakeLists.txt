@@ -228,6 +228,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_test(test_conntrack_orient
         test_conntrack_orient.cpp)
 
+    qiftop_add_test(test_flow_topk
+        test_flow_topk.cpp)
+
     qiftop_add_test(test_cgroup_real_fixtures
         test_cgroup_real_fixtures.cpp)
     target_compile_definitions(test_cgroup_real_fixtures PRIVATE

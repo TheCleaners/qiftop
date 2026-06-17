@@ -1,5 +1,6 @@
 #include "ConntrackMonitor.h"
 #include "ConntrackOrient.h"
+#include "FlowTopK.h"
 #include "util/Logging.h"
 
 #include <QFile>
@@ -10,6 +11,7 @@
 #include <QTimer>
 #include <QtDebug>
 
+#include <algorithm>
 #include <list>
 
 extern "C" {
@@ -28,6 +30,15 @@ namespace {
 
 constexpr std::size_t kRouteCacheMaxEntries = 8192;
 constexpr std::size_t kIfIndexCacheMaxEntries = 256;
+
+// Bound the in-process snapshot to the top-N flows by total bytes, mirroring
+// the agent's ConnectionsService::kMaxConnections (keep these two in sync).
+// On a busy router the conntrack table can hold 100k+ flows; emitting all of
+// them every tick — and pinning that into the aggregator/model — is wasteful.
+// We keep only the loudest 4096, collected via a K-bounded min-heap (see
+// FlowTopK.h::admitFlowTopK) so the transient memory is O(K), not O(table).
+// Hosts with fewer than 4096 flows (the overwhelming majority) see no change.
+constexpr int kMaxInProcessFlows = 4096;
 
 using AddrToIface = QHash<QHostAddress, QString>;
 
@@ -165,6 +176,8 @@ struct PollCtx {
     const IfaceMap               *ifaceMap;
     LruCache<QHostAddress, QString> *routeCache;   // dst → ifname
     LruCache<QString, quint32>      *ifIndexCache; // ifname → ifindex (cached if_nametoindex)
+    int                           cap  = 0;        // top-N keep limit (<=0 = unbounded)
+    int                           seen = 0;        // total flows observed this dump
 };
 
 quint32 cachedIfIndex(LruCache<QString, quint32> *cache, const QString &name)
@@ -261,7 +274,12 @@ int nfctCallback(enum nf_conntrack_msg_type, struct nf_conntrack *ct, void *data
                      ? static_cast<TcpState>(raw)
                      : TcpState::None;
     }
-    ctx->out->append(c);
+    ++ctx->seen;
+    // Bounded top-K by bytes: fill to cap, then only admit a flow louder than
+    // the current smallest, evicting that smallest. The emitted set is the cap
+    // loudest flows (unordered — the aggregator/model sorts for display,
+    // exactly as with the agent's capped snapshot). See FlowTopK.h.
+    qiftop::backend::linux::admitFlowTopK(*ctx->out, c, ctx->cap);
     return NFCT_CB_CONTINUE;
 }
 
@@ -362,6 +380,7 @@ private slots:
     void poll()
     {
         QList<Connection> flows;
+        flows.reserve(kMaxInProcessFlows);
         const IfaceMap ifaceMap = buildIfaceMap();
         QSet<QHostAddress> localAddrs;
         localAddrs.reserve(ifaceMap.byAddr.size());
@@ -380,7 +399,8 @@ private slots:
             return;
         }
 
-        PollCtx ctx{&flows, &localAddrs, &ifaceMap, &m_routeCache, &m_ifIndexCache};
+        PollCtx ctx{&flows, &localAddrs, &ifaceMap, &m_routeCache,
+                    &m_ifIndexCache, kMaxInProcessFlows, 0};
         nfct_callback_register(h, NFCT_T_ALL, &nfctCallback, &ctx);
 
         // Dump v4 and v6 in two separate queries. AF_UNSPEC is documented
@@ -403,6 +423,16 @@ private slots:
         }
         nfct_close(h);
 
+        // One-time notice if the kernel table exceeded the cap — the user is
+        // seeing only the loudest kMaxInProcessFlows flows (matches the agent).
+        if (ctx.seen > kMaxInProcessFlows && !m_warnedCap) {
+            qWarning("ConntrackMonitor: conntrack table has %d flows; capping the "
+                     "in-process snapshot at the %d loudest by bytes (warning "
+                     "once; suppressing repeats).",
+                     ctx.seen, kMaxInProcessFlows);
+            m_warnedCap = true;
+        }
+
         emit connectionsUpdated(flows);
     }
 
@@ -410,6 +440,7 @@ private:
     QTimer *m_timer       = nullptr;
     bool    m_warnedOpen  = false;
     bool    m_warnedDump  = false;
+    bool    m_warnedCap   = false;
     bool    m_acctChecked = false;
 
     // dst-address → ifname cache for the route-lookup fallback (forwarded

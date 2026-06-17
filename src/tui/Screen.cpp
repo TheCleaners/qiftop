@@ -317,6 +317,14 @@ void Screen::render(const Frame &f)
     }
 
     // --- column widths ---
+    // NOTE (PERF #12 coupling): TuiApp formats cells only for the visible
+    // scroll window; off-screen f.rows entries are empty placeholders. The
+    // content-based natural-width scan below therefore must only run for
+    // columns that are NOT data-sized — and today every column except the
+    // flexible col 0 has a fixed width, so the scan never actually executes.
+    // If a future flex (fixedWidth==0) column at index >= 1 is added, this
+    // width would be derived from the visible rows only (and could jitter on
+    // scroll); size such a column from the aggregator, not from f.rows.
     const QList<Column> &cols = f.columns;
     const int n = static_cast<int>(cols.size());
     QList<int> w(n, 0);
