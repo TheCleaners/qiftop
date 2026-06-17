@@ -61,13 +61,17 @@ jobs:
             -DQIFTOP_BUILD_BENCHMARKS=ON \
             -DQIFTOP_AUTO_PACKAGE=OFF
 
-      - name: Generate moc includes used by analyzed sources
+      # clang-tidy needs the AUTOMOC-generated `*.moc` includes to exist before
+      # it analyzes any TU that `#include`s one. Build the real top-level
+      # targets rather than a hand-maintained list of `*_autogen` targets — the
+      # old list rotted the moment a new bench was added (bench_pipeline_tick's
+      # .moc went missing and reddened the gate). The `benchmarks` aggregate
+      # target depends on every bench, and the app targets pull in all of
+      # src/ + libqiftop, so this stays correct as targets come and go.
+      - name: Build targets (generates all moc includes)
         run: |
           cmake --build build --parallel --target \
-            backend_linux_autogen \
-            bench_connection_aggregator_autogen \
-            bench_filter_autogen \
-            bench_flow_topk_autogen
+            qiftop qiftop-agent nqiftop check_qiftop benchmarks
 
       - name: Run clang-tidy gate
         run: scripts/run-clang-tidy.sh --gate build
