@@ -209,8 +209,12 @@ private:
     bool m_showStatusInTitle             = false;
     QString m_connFilterExpr;
     ConnectionViewMode m_connViewMode    = ConnectionViewMode::Flat;
-    bool m_showProcessColumn             = false;
-    bool m_showContainerColumn           = false;
+    // Default-shown: the attribution data is already on the wire (no extra
+    // cost) and applySettingsToUi() AND-gates each column on the agent's
+    // matching capability token, so the column stays hidden against an agent
+    // (or in-process backend) that doesn't advertise attribution.
+    bool m_showProcessColumn             = true;
+    bool m_showContainerColumn           = true;
     bool m_showContainerChainInTooltip   = true;
     // When grouping (ByInterface/ByContainer/ByProcess), show extra
     // attribution detail inline on the group header rows (pid, user,

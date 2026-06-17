@@ -311,11 +311,11 @@ void MainWindow::setupUi()
         static_cast<int>(ConnectionModel::Column::RxMax), true);
     m_connView->setColumnHidden(
         static_cast<int>(ConnectionModel::Column::TxMax), true);
-    // Attribution columns are hidden by default — they only make sense
-    // when the agent advertises the matching wire-attribution tokens,
-    // and the Settings > Display sub-section (s5-settings) lets the
-    // user enable them. Until then they're available through the
-    // header right-click menu.
+    // Attribution columns start hidden here; applySettingsToUi() reveals
+    // them when BOTH the user preference (shown by default) and the
+    // agent's matching wire-attribution token are present. The Settings >
+    // Display sub-section and the header right-click menu toggle the
+    // preference.
     m_connView->setColumnHidden(
         static_cast<int>(ConnectionModel::Column::Process), true);
     m_connView->setColumnHidden(

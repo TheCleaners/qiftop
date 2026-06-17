@@ -74,6 +74,12 @@ gracefully against older agents.
   component never pins an incompatible-but-ABI-compatible library version.
 
 ### Changed
+- **Process & Container columns now show by default** in the GUI Connections
+  view when the connected agent advertises attribution (the
+  `process-attribution-wire` / `container-attribution-wire` capabilities) —
+  the data is already on the wire, so surfacing it costs nothing. They stay
+  hidden against an agent (or in-process backend) that doesn't provide
+  attribution, and the per-column toggle still persists your choice.
 - D-Bus contract `Version` → **0.6** (additive: `ConnectionDto.reason`,
   capability `attribution-reason`). `org.qiftop.NetworkAgent1` is unchanged
   otherwise; no `NetworkAgent2`.
