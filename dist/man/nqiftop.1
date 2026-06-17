@@ -6,8 +6,8 @@ nqiftop \- ncurses real\-time network traffic monitor (qiftop)
 .RI [ options ]
 .SH DESCRIPTION
 .B nqiftop
-is the terminal (ncurses) front\-end of qiftop. It presents the same two
-live views as the GUI \(em
+is the terminal (ncurses) front\-end of qiftop. It shows the same two live
+views as the GUI \(em
 .B Interfaces
 and
 .B Connections
@@ -15,21 +15,15 @@ and
 .PP
 Like
 .BR qiftop (1),
-it probes for the privileged
+it tries to use the privileged
 .BR qiftop\-agent (8)
-on D\-Bus and consumes statistics from it as an unprivileged client; if no
-agent is reachable it falls back to an in\-process capture backend (which
-needs root for per\-connection data). The active source is shown at the
-right of the title bar alongside the aggregate throughput
-.RB ( \(*S
-RX\(da TX\(ua) and the current gauge scale.
+on D\-Bus. If no agent is reachable it falls back to in\-process capture,
+which needs root for per\-connection data.
 .SH OPTIONS
 .TP
 .BR \-i ", " \-\-interval " " \fIms\fR
-Poll/refresh interval in milliseconds (default 1000). Values are applied to
-both the data source and display smoothing; the runtime Settings panel uses
-100 ms to 10 s bounds. An explicit command\-line value overrides the saved
-one.
+Poll/refresh interval in milliseconds (default 1000). A command\-line value
+overrides the saved setting.
 .TP
 .B \-\-theme " " \fIname\fR
 Colour theme:
@@ -44,12 +38,12 @@ Initial tab:
 .B interfaces
 or
 .BR connections .
-Default is the last\-used tab.
+Default: last used.
 .TP
 .B \-\-group " " \fImode\fR
 Group the Connections view:
 .BR off ", " interface ", " process ", " container .
-Default is the last\-used mode. Cycle live with
+Default: last used. Cycle live with
 .BR g .
 .TP
 .B \-\-session
@@ -69,8 +63,7 @@ Show help / version and exit.
 .SS Navigation and views
 .TP
 .BR j ", " k ", " \(da ", " \(ua
-Move the current\-line cursor down / up. Group headers are skipped in
-grouped Connections views.
+Move the cursor down / up.
 .TP
 .BR PgUp ", " PgDn ", " ^U ", " ^D
 Move the cursor by a full / half page.
@@ -82,19 +75,13 @@ Jump to the top / bottom.
 Switch view (Interfaces / Connections).
 .TP
 .BR Enter ", " Space ", " l ", " \(->
-Open a modal detail inspector for the selected row. For connections it shows
-the 5\-tuple, direction, interface, TCP state, process and container
-attribution, rates, totals and packets; for interfaces it shows type,
-addresses, MTU, oper\-state, errors and drops. While the detail panel is
-open,
-.BR j / k
-or the up/down arrows browse to the next/previous row; any other key closes
-it.
+Show details for the selected row. In the detail panel,
+.BR j ", " k
+and the arrow keys move to the previous/next row; other keys close it.
 .TP
 .BR h ", " \(<-
-Reserved in the main table (no inline collapse; details are modal). In
-Settings, Fields and other panels, vim keys and arrows navigate or adjust
-where shown in the panel footer.
+Reserved in the main table. In panels, vim keys and arrows navigate or
+adjust values as shown in the footer.
 .SS Sorting and grouping
 .TP
 .B s
@@ -116,15 +103,10 @@ Edit a Connections filter expression (see
 .B Enter
 applies,
 .B Esc
-cancels editing; when a filter is active,
-.B Esc
-clears it.
+cancels editing or clears an active filter.
 .TP
 .B p
-Pause / resume the display. Pause is a true snapshot freeze: the visible
-rows, sort order and cursor stop changing and the smoothing timer stops,
-while the capture pipeline continues updating in the background. Unpausing
-returns immediately to fresh live data.
+Pause / resume the display. When paused, the visible snapshot is frozen.
 .TP
 .B w
 Export the current view to a timestamped CSV file in the current working
@@ -132,15 +114,13 @@ directory:
 .IR qiftop\-interfaces\-YYYYMMDD\-HHMMSS.csv
 or
 .IR qiftop\-connections\-YYYYMMDD\-HHMMSS.csv .
-When paused, the frozen snapshot is exported.
 .TP
 .B z
 Cycle the colour theme.
 .TP
 .B S
 .RB ( "or " F2 )
-Open the Settings panel (theme, grouping, poll interval, gauge, direction
-colours, DNS resolution, UDP aggregation, rate smoothing). Use
+Open the Settings panel. Use
 .BR "\(ua\(da" / "j" / "k"
 to move and
 .BR "\(<-" / "\(->" / "h" / "l" / "Space"
@@ -150,18 +130,16 @@ to change a value.
 Show the key\-binding help overlay.
 .TP
 .B a
-Show the About panel (application/library version, data source, Qt and OS
-version, terminal capability).
+Show the About panel.
 .TP
 .B q
 Quit.
 .PP
-View, sort columns, grouping, theme, poll interval and every toggle are
-persisted and restored on the next launch (unless overridden on the
-command line).
+View, sort, grouping, theme, interval and display toggles are saved between
+runs unless overridden on the command line.
 .SH FILTER LANGUAGE
-The Connections filter is a small boolean expression language (shared with
-the GUI). Combine predicates with
+The Connections filter is a boolean expression language shared with the
+GUI. Combine predicates with
 .BR and ", " or ", " not
 and parentheses.
 .PP
@@ -199,7 +177,7 @@ pid=0
 .SH FILES
 .TP
 .I ~/.config/qiftop/nqiftop.conf
-Per\-user nqiftop settings (\fBQSettings\fR INI), separate from the GUI's
+Per\-user nqiftop settings, separate from the GUI's
 .IR qiftop.conf .
 .TP
 .I ./qiftop-interfaces-YYYYMMDD-HHMMSS.csv

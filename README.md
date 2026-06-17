@@ -7,21 +7,17 @@
 ![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20FreeBSD%20%7C%20NetBSD-555)
 ![License](https://img.shields.io/badge/license-GPL--2.0--or--later-orange)
 
-Qt6 iftop-style network monitor for Linux, with desktop, terminal and library
-entry points.
+Qt 6 iftop-style network monitor with desktop, terminal and library entry
+points.
 
 `qiftop` is built as four cooperating components:
 
-- **`qiftop`** — the Qt 6 Widgets GUI client.
-- **`nqiftop`** — an ncurses TUI for SSH/headless use, sharing the same data
-  path and settings concepts.
-- **`qiftop-agent`** — a privileged DBus daemon on the system bus
-  (`org.qiftop.NetworkAgent1`), running as root with a bounded capability set,
-  that collects per-interface stats with libnl-route-3 and per-flow stats with
-  libnetfilter_conntrack, including server-side process/container attribution.
-- **`libqiftop`** — a Widgets-free Qt shared library (`qiftop::qiftop`) with
-  the DBus DTOs/client proxies, aggregators, filter mini-language, IEC unit
-  formatters and JSON/CSV export helpers for external consumers.
+- **`qiftop`** — the Qt 6 desktop GUI.
+- **`nqiftop`** — an ncurses terminal UI for SSH and headless machines.
+- **`qiftop-agent`** — a privileged DBus daemon that collects network data and
+  serves unprivileged clients.
+- **`libqiftop`** — a Widgets-free shared Qt library (`qiftop::qiftop`) for
+  building your own qiftop-powered tools.
 
 ![qiftop grouping live synthetic traffic by process and touring the
 preferences dialog](https://github.com/TheCleaners/qiftop/releases/download/v0.2-rc1/demo.gif)
@@ -38,21 +34,20 @@ settings panel and live theme switching](https://github.com/TheCleaners/qiftop/r
 
 - **Per-interface counters** with sortable RX/TX byte and packet rates, link
   state, addresses, MTU and error/drop counters.
-- **Per-connection flow accounting** for TCP, UDP, ICMP/ICMPv6 — IPv4 and IPv6
-  first-class — with directionality, TCP state, totals and live rates.
-- **Process & container attribution** — flows can carry PID / `comm` / UID,
-  container runtime/id/name and the full outer→inner container chain (Docker,
-  containerd, Podman, CRI-O, Kubernetes, LXC/LXD, systemd-nspawn). Flows with
-  no local owner are tagged with a **reason** (forwarded/NAT, orphaned socket,
-  no-local-socket) instead of looking like a failed lookup.
+- **Per-connection flow accounting** for TCP, UDP, ICMP/ICMPv6, with IPv4 and
+  IPv6 support, direction, TCP state, totals and live rates.
+- **Process & container attribution** — show the owning process and container
+  when available, including nested containers across common Linux runtimes.
+  Flows with no local owner are labelled as forwarded/NAT, orphaned, or
+  no-local-socket instead of looking like failed lookups.
 - **Grouped Connections views** in the GUI and TUI: flat/off, by interface, by
   process or by container; group rows aggregate child rates and totals.
-- **Filter expression mini-language** shared by GUI, TUI and libqiftop:
+- **Powerful filters** shared by GUI, TUI and libqiftop:
   `proto:tcp and dport=443`, `iface:wlp* and rate>1Mi`, `comm=postgres`,
   `container:nginx`, `chain_has:kubernetes`, `reason:forwarded`, `pid=0`, with
   boolean operators, numeric comparisons, byte suffixes and regex.
-- **Live row gauges and smoothing**: row-spanning throughput gauges, direction
-  tinting, UDP peer aggregation and optional EMA/eased display rates.
+- **Live visual gauges** with direction tinting, sensible UDP peer grouping and
+  smoothed display rates.
 - **Async reverse DNS** with an in-process cache; hostnames never block the UI.
 - **`nqiftop` for terminals**: `j`/`k`/arrows and `Ctrl-F`/`Ctrl-B`/`Ctrl-D`/
   `Ctrl-U`/PgUp/PgDn navigation, `Enter`/`l` modal detail, `h`/`l` group
@@ -69,20 +64,16 @@ settings panel and live theme switching](https://github.com/TheCleaners/qiftop/r
 
 ## Platform support
 
-**Linux is the primary, full-featured platform.** The privileged `qiftop-agent`
-(libnl-3 interface stats + libnetfilter_conntrack per-flow accounting, plus the
-sock_diag/cgroup/netns attribution chain) is Linux-only, and the GUI/TUI clients
-stream from it over D-Bus (with an in-process self-elevating fallback).
+**Linux is the primary, full-featured platform.** The privileged
+`qiftop-agent` is Linux-only, and the GUI/TUI clients normally stream from it
+over D-Bus, with an in-process fallback when the agent is unavailable.
 
 **FreeBSD and NetBSD are supported as client builds** (`qiftop` GUI + `nqiftop`
 TUI + `libqiftop`), built from the same tree — the agent is simply not built
-there. On the BSDs capture runs **in-process** (run privileged): per-interface
-counters via `getifaddrs(3)`, and per-flow accounting via **libpcap/BPF** with a
-userspace flow table and SYN-based direction inference. Process attribution uses
-a pure-`sysctl` socket→PID join (no `kvm`), and on **FreeBSD** jailed flows are
-attributed to their jail as a container (`runtime:jail`). See
-[`docs/PORTABILITY.md`](docs/PORTABILITY.md) §7 for the BSD field guide and build
-notes; packaging there is pkgsrc-stage (not yet a finished port).
+there. On the BSDs capture runs **in-process** and should be run privileged;
+FreeBSD also reports jail ownership for jailed flows. See
+[`docs/PORTABILITY.md`](docs/PORTABILITY.md) §7 for the BSD field guide and
+build notes; packaging there is pkgsrc-stage (not yet a finished port).
 
 ### Support matrix
 
@@ -139,10 +130,8 @@ consumers/examples:
 sudo dnf install nqiftop qiftop-devel
 ```
 
-The repositories are signed with the qiftop package signing key
-`7AC658ABFADD1AAF6E0EDA6F6DD33D47032BD42D` (the landing page may show the
-short key id `6DD33D47032BD42D`). The dnf repo enables both signed metadata
-(`repo_gpgcheck=1`) and per-package RPM signatures (`gpgcheck=1`).
+The repositories are signed with the qiftop package signing key (fingerprint
+`7AC658ABFADD1AAF6E0EDA6F6DD33D47032BD42D`).
 
 ### Direct release packages
 
@@ -224,9 +213,8 @@ ls *.rpm
 # nqiftop-<ver>-1.fc44.x86_64.rpm
 ```
 
-Library dependencies are resolved automatically (`dpkg-shlibdeps` /
-rpm find-requires). `qiftop` and `nqiftop` weakly recommend `qiftop-agent`, so
-they can still fall back to in-process capture when the agent is unavailable.
+Package dependencies are resolved automatically. `qiftop` and `nqiftop` can
+still fall back to in-process capture when the agent is unavailable.
 
 ## libqiftop examples
 
