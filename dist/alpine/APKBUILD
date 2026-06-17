@@ -17,7 +17,7 @@
 # unit, netdev group). Build passes -DQIFTOP_AUTO_PACKAGE=OFF (mandatory: the
 # agent target's POST_BUILD cpack hook otherwise fires mid-build).
 pkgname=qiftop
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=0
 pkgdesc="Qt6 iftop-style network monitor with GUI, TUI, DBus agent and library"
 url="https://github.com/TheCleaners/qiftop"
