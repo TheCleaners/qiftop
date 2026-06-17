@@ -86,10 +86,12 @@ int main(int argc, char *argv[])
 #   error "qiftop-agent currently requires a Linux backend"
 #endif
 
-    const auto idleCfg = qiftop::agent::loadIdleConfig(parser.value(configOpt));
+    const QString configPath = parser.value(configOpt);
+    const auto idleCfg = qiftop::agent::loadIdleConfig(configPath);
+    const auto attrCfg = qiftop::agent::loadAttributionConfig(configPath);
     const auto detailsPolicy =
-        qiftop::agent::loadProcessDetailsPolicy(parser.value(configOpt));
-    auto resolver = qiftop::backend::createProcessResolver({});
+        qiftop::agent::loadProcessDetailsPolicy(configPath);
+    auto resolver = qiftop::backend::createProcessResolver(attrCfg);
     qiftop::agent::Application application(bus, &netMonitor, &connMonitor,
                                            idleCfg, std::move(resolver));
     application.setProcessDetailsPolicy(detailsPolicy);

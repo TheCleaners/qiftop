@@ -29,7 +29,7 @@ namespace qiftop::backend::linuximpl {
 //
 // CACHING
 //   Both the socket table and the inode→PID map are rebuilt at most once
-//   per kCacheTtlMs (default 1s) to amortise across the typical 20–500
+//   per configured cache TTL (default 1s) to amortise across the typical 20–500
 //   flow lookups that arrive together when ConntrackMonitor ticks.
 //   resolvePid() does only cached table lookups; enrichPid() performs
 //   /proc metadata reads and is intended to be memoised per unique PID by
@@ -41,7 +41,7 @@ namespace qiftop::backend::linuximpl {
 //   single mutex — contention is negligible at our call rate.
 class SockDiagResolver final : public ProcessResolver {
 public:
-    SockDiagResolver();
+    explicit SockDiagResolver(const ResolverTuning &tuning = balancedResolverTuning());
     ~SockDiagResolver() override;
 
     // Opens the NETLINK_SOCK_DIAG socket. Returns true if the socket

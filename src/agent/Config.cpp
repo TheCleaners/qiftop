@@ -6,6 +6,8 @@
 #include <QStringList>
 #include <QtDebug>
 
+#include <optional>
+
 #include "util/Logging.h"
 
 namespace qiftop::agent {
@@ -24,6 +26,48 @@ T clampCfg(const char *key, T raw, T lo, T hi, T fallback)
             << "agent: config key" << key << "value" << raw
             << "out of range [" << lo << "," << hi << "] — using" << fallback;
         return fallback;
+    }
+    return raw;
+}
+
+std::optional<bool> parseBoolToken(QString value)
+{
+    value = value.trimmed().toLower();
+    if (value == QLatin1String("true") || value == QLatin1String("yes")
+        || value == QLatin1String("1") || value == QLatin1String("on")) {
+        return true;
+    }
+    if (value == QLatin1String("false") || value == QLatin1String("no")
+        || value == QLatin1String("0") || value == QLatin1String("off")) {
+        return false;
+    }
+    return std::nullopt;
+}
+
+bool readBoolCfg(const QSettings &ini, const QString &iniKey,
+                 const char *warnKey, bool fallback)
+{
+    if (!ini.contains(iniKey)) return fallback;
+    const QString raw = ini.value(iniKey).toString().trimmed();
+    if (auto parsed = parseBoolToken(raw)) return *parsed;
+    qWarning().noquote()
+        << "agent: config key" << warnKey << "value" << raw
+        << "unrecognised (true|false|yes|no|1|0|on|off) — using"
+        << (fallback ? "true" : "false");
+    return fallback;
+}
+
+int readAttributionOverrideMs(const QSettings &ini, const QString &iniKey,
+                              const char *warnKey, int lo, int hi)
+{
+    const int raw = ini.value(iniKey, 0).toInt();
+    if (raw == 0) return 0;
+    if (raw < lo || raw > hi) {
+        qWarning().noquote()
+            << "agent: config key" << warnKey << "value" << raw
+            << "out of range (0 or [" << lo << "," << hi
+            << "]) — using preset";
+        return 0;
     }
     return raw;
 }
@@ -135,6 +179,83 @@ IdleManager::Config loadIdleConfig(const QString &path)
         << "schedule:" << cfg.activeWindowMs/1000 << "s→" << cfg.slow1IntervalMs << "ms,"
         << cfg.slow1WindowMs/1000  << "s→" << cfg.slow2IntervalMs << "ms,"
         << "idle=" << cfg.idleTimeoutMs/1000 << "s";
+    return cfg;
+}
+
+AttributionConfig loadAttributionConfig(const QString &path)
+{
+    using qiftop::backend::AttributionEagerness;
+    using qiftop::backend::resolverTuningFor;
+
+    AttributionConfig cfg; // default: balanced, all layers on
+    if (!QFileInfo::exists(path)) {
+        qCInfo(lcVerbose).noquote() << "agent: no attribution config file at"
+                                    << path << "— using built-in defaults";
+        return cfg;
+    }
+    QSettings ini(path, QSettings::IniFormat);
+
+    const QString eagerness = ini.value(QStringLiteral("attribution/eagerness"),
+                                        QStringLiteral("balanced"))
+                                  .toString()
+                                  .trimmed()
+                                  .toLower();
+    if (eagerness == QLatin1String("off")) {
+        cfg.eagerness = AttributionEagerness::Off;
+    } else if (eagerness == QLatin1String("balanced")) {
+        cfg.eagerness = AttributionEagerness::Balanced;
+    } else if (eagerness == QLatin1String("eager")) {
+        cfg.eagerness = AttributionEagerness::Eager;
+    } else {
+        qWarning().noquote()
+            << "agent: config key attribution/eagerness value" << eagerness
+            << "unrecognised (off|balanced|eager) — using balanced";
+        cfg.eagerness = AttributionEagerness::Balanced;
+    }
+
+    const int cacheOverrideMs = readAttributionOverrideMs(
+        ini, QStringLiteral("attribution/cache_refresh_ms"),
+        "attribution/cache_refresh_ms", 100, 60 * 1000);
+    const int netnsOverrideMs = readAttributionOverrideMs(
+        ini, QStringLiteral("attribution/netns_refresh_ms"),
+        "attribution/netns_refresh_ms", 250, 5 * 60 * 1000);
+    cfg.tuning = resolverTuningFor(cfg.eagerness, cacheOverrideMs, netnsOverrideMs);
+
+    if (cfg.eagerness == AttributionEagerness::Off) {
+        cfg.processAttribution = false;
+        cfg.containerAttribution = false;
+        cfg.netnsScan = false;
+        qCInfo(lcVerbose) << "agent: attribution eagerness=off; resolver disabled";
+        return cfg;
+    }
+
+    cfg.processAttribution = readBoolCfg(
+        ini, QStringLiteral("attribution/process"),
+        "attribution/process", cfg.processAttribution);
+    cfg.containerAttribution = readBoolCfg(
+        ini, QStringLiteral("attribution/container"),
+        "attribution/container", cfg.containerAttribution);
+    cfg.netnsScan = readBoolCfg(
+        ini, QStringLiteral("attribution/netns"),
+        "attribution/netns", cfg.netnsScan);
+
+    if (!cfg.processAttribution && (cfg.containerAttribution || cfg.netnsScan)) {
+        qWarning().noquote()
+            << "agent: attribution/process=false makes attribution/container"
+            << "and attribution/netns ineffective — disabling dependent layers";
+        cfg.containerAttribution = false;
+        cfg.netnsScan = false;
+    }
+
+    qCInfo(lcVerbose).noquote()
+        << "agent: attribution config"
+        << "eagerness=" << eagerness
+        << "process=" << cfg.processAttribution
+        << "container=" << cfg.containerAttribution
+        << "netns=" << cfg.netnsScan
+        << "cache=" << cfg.tuning.cacheRefreshMs << "ms"
+        << "containerCache=" << cfg.tuning.containerCacheMs << "ms"
+        << "netnsRefresh=" << cfg.tuning.netnsRefreshMs << "ms";
     return cfg;
 }
 

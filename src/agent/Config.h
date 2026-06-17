@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "backend/ProcessResolver.h"
 #include "IdleManager.h"
 
 namespace qiftop::agent {
@@ -19,6 +20,13 @@ constexpr auto kDefaultConfigPath = "/etc/qiftop/agent.conf";
 // Extracted from agent/main.cpp so it can be unit-tested without
 // spawning the agent.
 [[nodiscard]] IdleManager::Config loadIdleConfig(const QString &path);
+
+// Runtime attribution knobs from the `[attribution]` section. The loaded
+// values are already resolved through precedence rules: eagerness preset,
+// per-feature toggles, and advanced refresh overrides.
+using AttributionConfig = qiftop::backend::ProcessResolverConfig;
+
+[[nodiscard]] AttributionConfig loadAttributionConfig(const QString &path);
 
 // Policy controlling who may see the *privileged* per-process detail
 // fields (exe / cwd / cmdline) returned by Connections.GetProcessDetails.

@@ -8,8 +8,15 @@
 
 namespace qiftop::backend::linuximpl {
 
-CgroupClassifier::CgroupClassifier()
+CgroupClassifier::CgroupClassifier(const ResolverTuning &tuning)
 {
+    if (tuning.containerCacheMs <= 0) {
+        m_cacheTtlMs = kCacheTtlMs;
+    } else {
+        m_cacheTtlMs = tuning.containerCacheMs >= kMinCacheTtlMs
+            ? tuning.containerCacheMs
+            : kMinCacheTtlMs;
+    }
     m_clock.start();
 }
 
@@ -55,7 +62,7 @@ CgroupClassifier::resolveContainerChainForPid(qint32 pid)
     // Snapshot starttime BEFORE any cache hit so we can detect PID
     // reuse and invalidate the stale entry — otherwise a freshly
     // spawned process landing on a recently-dead pid would inherit
-    // the dead process's container badge for up to kCacheTtlMs.
+    // the dead process's container badge for up to the configured cache TTL.
     const auto stNowOpt = procsnap::pidStartTime(pid);
     if (!stNowOpt.has_value()) return {};  // pid is gone
     const quint64 stNow = *stNowOpt;
@@ -63,7 +70,7 @@ CgroupClassifier::resolveContainerChainForPid(qint32 pid)
     std::lock_guard lock(m_mu);
     const qint64 now = m_clock.elapsed();
     if (auto it = m_cache.constFind(pid); it != m_cache.constEnd()) {
-        if (it->startTime == stNow && now - it->ts < kCacheTtlMs) {
+        if (it->startTime == stNow && now - it->ts < m_cacheTtlMs) {
             return it->chain;
         }
         // Stale (TTL expired OR pid reused) — fall through to refresh.
@@ -82,7 +89,7 @@ CgroupClassifier::resolveContainerChainForPid(qint32 pid)
     }
     // If the open failed (race: pid died between starttime read and
     // here), chain stays empty and we cache that — cheap, and the
-    // entry will age out in ≤2 s anyway.
+    // entry will age out quickly anyway.
 
     if (m_cache.size() >= kCacheMaxItems) m_cache.clear();
     m_cache.insert(pid, { chain, now, stNow });

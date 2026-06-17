@@ -26,7 +26,14 @@ namespace qiftop::backend::linuximpl {
 
 namespace {
 
-constexpr int kCacheTtlMs = 1000;
+constexpr int kDefaultCacheTtlMs = 1000;
+constexpr int kMinCacheTtlMs = 100;
+
+constexpr int safeCacheTtlMs(int raw) noexcept
+{
+    if (raw <= 0) return kDefaultCacheTtlMs;
+    return raw >= kMinCacheTtlMs ? raw : kMinCacheTtlMs;
+}
 
 using sockdiag::makeFlowKey;
 // Local alias for the historical call site name.
@@ -73,6 +80,7 @@ struct SockDiagResolver::Impl {
     int           nlFd = -1;
     QElapsedTimer clock;
     qint64        lastDumpMs = -1;
+    int           cacheTtlMs = kDefaultCacheTtlMs;
 
     std::mutex                  mu;
     QHash<QByteArray, quint64>  keyToInode;     // 4-tuple -> kernel inode
@@ -220,19 +228,21 @@ struct SockDiagResolver::Impl {
     void maybeRefresh()
     {
         const qint64 now = clock.elapsed();
-        if (lastDumpMs < 0 || now - lastDumpMs >= kCacheTtlMs) {
+        if (lastDumpMs < 0 || now - lastDumpMs >= cacheTtlMs) {
             refreshSocketTable();
             lastDumpMs = now;
         }
-        if (lastProcWalkMs < 0 || now - lastProcWalkMs >= kCacheTtlMs) {
+        if (lastProcWalkMs < 0 || now - lastProcWalkMs >= cacheTtlMs) {
             refreshProcWalk();
             lastProcWalkMs = now;
         }
     }
 };
 
-SockDiagResolver::SockDiagResolver() : m_d(std::make_unique<Impl>())
+SockDiagResolver::SockDiagResolver(const ResolverTuning &tuning)
+    : m_d(std::make_unique<Impl>())
 {
+    m_d->cacheTtlMs = safeCacheTtlMs(tuning.cacheRefreshMs);
     m_d->clock.start();
 }
 

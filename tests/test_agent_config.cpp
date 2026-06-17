@@ -3,7 +3,9 @@
 // static helper in agent/main.cpp and was effectively untestable; the
 // Application/Config extraction was made specifically to unblock these.
 
-#include <QTemporaryDir>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QTest>
 #include <QTextStream>
 #include <QRegularExpression>
@@ -13,8 +15,37 @@
 
 namespace {
 
-// Writes `body` to `<tmp>/agent.conf` and returns the absolute path.
-QString writeConf(const QTemporaryDir &dir, const QByteArray &body)
+class TestDir {
+public:
+    TestDir()
+    {
+        static int counter = 0;
+        m_path = QDir::current().absoluteFilePath(
+            QStringLiteral(".test_agent_config_%1_%2")
+                .arg(QCoreApplication::applicationPid())
+                .arg(++counter));
+        QDir(m_path).removeRecursively();
+        m_valid = QDir().mkpath(m_path);
+    }
+
+    ~TestDir()
+    {
+        if (!m_path.isEmpty()) QDir(m_path).removeRecursively();
+    }
+
+    [[nodiscard]] bool isValid() const { return m_valid; }
+    [[nodiscard]] QString filePath(const QString &name) const
+    {
+        return QDir(m_path).filePath(name);
+    }
+
+private:
+    QString m_path;
+    bool m_valid = false;
+};
+
+// Writes `body` to `<scratch>/agent.conf` and returns the absolute path.
+QString writeConf(const TestDir &dir, const QByteArray &body)
 {
     const QString path = dir.filePath(QStringLiteral("agent.conf"));
     QFile f(path);
@@ -50,7 +81,7 @@ private slots:
 
     void parsesPollAndIdleKeys()
     {
-        QTemporaryDir dir; QVERIFY(dir.isValid());
+        TestDir dir; QVERIFY(dir.isValid());
         const QString path = writeConf(dir, R"([poll]
 min_interval_ms=250
 base_interval_ms=2000
@@ -68,7 +99,7 @@ hint_ttl_secs=15
 
     void parsesScheduleString()
     {
-        QTemporaryDir dir; QVERIFY(dir.isValid());
+        TestDir dir; QVERIFY(dir.isValid());
         const QString path = writeConf(dir, R"([idle]
 schedule=10:1500,20:3000,30:0
 )");
@@ -85,7 +116,7 @@ schedule=10:1500,20:3000,30:0
         // 5 ms is below the 10 ms floor; 999 hours is above the 1-hour
         // ceiling. Both must be silently clamped to defaults (with a
         // qWarning each — we ignore that for the assertion's sake).
-        QTemporaryDir dir; QVERIFY(dir.isValid());
+        TestDir dir; QVERIFY(dir.isValid());
         const QString path = writeConf(dir, R"([poll]
 min_interval_ms=5
 base_interval_ms=3600001
@@ -100,7 +131,7 @@ base_interval_ms=3600001
     {
         // Forward-compat: an older agent reading a newer config file
         // must not crash on unknown keys.
-        QTemporaryDir dir; QVERIFY(dir.isValid());
+        TestDir dir; QVERIFY(dir.isValid());
         const QString path = writeConf(dir, R"([poll]
 min_interval_ms=200
 some_future_key=42
@@ -114,7 +145,7 @@ whatever=true
 
     void malformedScheduleDoesNotClobberDefaults()
     {
-        QTemporaryDir dir; QVERIFY(dir.isValid());
+        TestDir dir; QVERIFY(dir.isValid());
         const QString path = writeConf(dir, R"([idle]
 schedule=not-a-schedule
 )");
@@ -135,7 +166,7 @@ schedule=not-a-schedule
         // and multiplied in 64-bit. The huge value should fall back to
         // the compile-time default with a warning (not silently wrap to
         // a tiny/negative number that clamps into a degenerate cadence).
-        QTemporaryDir dir; QVERIFY(dir.isValid());
+        TestDir dir; QVERIFY(dir.isValid());
         const QString path = writeConf(dir, R"([idle]
 timeout_secs=2147484
 schedule=2147484:2000,2147484:5000,2147484:0
@@ -150,7 +181,7 @@ schedule=2147484:2000,2147484:5000,2147484:0
 
     void hintTtlOutOfRangeWarnsAndFallsBack()
     {
-        QTemporaryDir dir; QVERIFY(dir.isValid());
+        TestDir dir; QVERIFY(dir.isValid());
         const QString path = writeConf(dir, R"([idle]
 hint_ttl_secs=2147484
 )");
@@ -166,7 +197,7 @@ hint_ttl_secs=2147484
 
     void detailsPolicyDefaultsToOwner()
     {
-        QTemporaryDir dir;
+        TestDir dir;
         // Missing file → default Owner.
         auto pol = qiftop::agent::loadProcessDetailsPolicy(
             dir.filePath(QStringLiteral("nope.conf")));
@@ -179,7 +210,7 @@ hint_ttl_secs=2147484
 
     void detailsPolicyParsesModes()
     {
-        QTemporaryDir dir;
+        TestDir dir;
         using Mode = qiftop::agent::ProcessDetailsPolicy::Mode;
         auto perm = qiftop::agent::loadProcessDetailsPolicy(
             writeConf(dir, "[process_details]\ndisclosure=permissive\n"));
@@ -198,6 +229,131 @@ hint_ttl_secs=2147484
         auto bogus = qiftop::agent::loadProcessDetailsPolicy(
             writeConf(dir, "[process_details]\ndisclosure=yolo\n"));
         QCOMPARE(bogus.mode, Mode::Owner);
+    }
+
+    // --- attribution resolver config ---------------------------------------
+
+    void attributionMissingFileReturnsDefaults()
+    {
+        using qiftop::backend::AttributionEagerness;
+        const TestDir dir;
+        const auto cfg = qiftop::agent::loadAttributionConfig(
+            dir.filePath(QStringLiteral("nope.conf")));
+        QCOMPARE(cfg.eagerness, AttributionEagerness::Balanced);
+        QVERIFY(cfg.processAttribution);
+        QVERIFY(cfg.containerAttribution);
+        QVERIFY(cfg.netnsScan);
+        QVERIFY(cfg.tuning == qiftop::backend::balancedResolverTuning());
+    }
+
+    void attributionPresetMappingIsPure()
+    {
+        using qiftop::backend::AttributionEagerness;
+        using qiftop::backend::resolverTuningFor;
+
+        QCOMPARE(resolverTuningFor(AttributionEagerness::Balanced).cacheRefreshMs, 1000);
+        QCOMPARE(resolverTuningFor(AttributionEagerness::Balanced).containerCacheMs, 2000);
+        QCOMPARE(resolverTuningFor(AttributionEagerness::Balanced).netnsRefreshMs, 5000);
+
+        QCOMPARE(resolverTuningFor(AttributionEagerness::Eager).cacheRefreshMs, 250);
+        QCOMPARE(resolverTuningFor(AttributionEagerness::Eager).containerCacheMs, 1000);
+        QCOMPARE(resolverTuningFor(AttributionEagerness::Eager).netnsRefreshMs, 1000);
+
+        QVERIFY(resolverTuningFor(AttributionEagerness::Off)
+                == qiftop::backend::offResolverTuning());
+
+        const auto overridden = resolverTuningFor(AttributionEagerness::Balanced,
+                                                 750, 3000);
+        QCOMPARE(overridden.cacheRefreshMs, 750);
+        QCOMPARE(overridden.containerCacheMs, 750);
+        QCOMPARE(overridden.netnsRefreshMs, 3000);
+    }
+
+    void attributionParsesEveryKey()
+    {
+        using qiftop::backend::AttributionEagerness;
+        TestDir dir; QVERIFY(dir.isValid());
+        const QString path = writeConf(dir, R"([attribution]
+eagerness=eager
+process=yes
+container=off
+netns=1
+cache_refresh_ms=500
+netns_refresh_ms=1500
+)");
+        const auto cfg = qiftop::agent::loadAttributionConfig(path);
+        QCOMPARE(cfg.eagerness, AttributionEagerness::Eager);
+        QVERIFY(cfg.processAttribution);
+        QVERIFY(!cfg.containerAttribution);
+        QVERIFY(cfg.netnsScan);
+        QCOMPARE(cfg.tuning.cacheRefreshMs, 500);
+        QCOMPARE(cfg.tuning.containerCacheMs, 500);
+        QCOMPARE(cfg.tuning.netnsRefreshMs, 1500);
+    }
+
+    void attributionOffIsHardKillSwitch()
+    {
+        using qiftop::backend::AttributionEagerness;
+        TestDir dir; QVERIFY(dir.isValid());
+        const QString path = writeConf(dir, R"([attribution]
+eagerness=off
+process=true
+container=true
+netns=true
+cache_refresh_ms=500
+netns_refresh_ms=1500
+)");
+        const auto cfg = qiftop::agent::loadAttributionConfig(path);
+        QCOMPARE(cfg.eagerness, AttributionEagerness::Off);
+        QVERIFY(!cfg.processAttribution);
+        QVERIFY(!cfg.containerAttribution);
+        QVERIFY(!cfg.netnsScan);
+        QVERIFY(cfg.tuning == qiftop::backend::offResolverTuning());
+    }
+
+    void attributionProcessFalseDisablesDependents()
+    {
+        TestDir dir; QVERIFY(dir.isValid());
+        const QString path = writeConf(dir, R"([attribution]
+process=false
+container=true
+netns=true
+)");
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "agent: attribution/process=false makes .* ineffective .*")));
+        const auto cfg = qiftop::agent::loadAttributionConfig(path);
+        QVERIFY(!cfg.processAttribution);
+        QVERIFY(!cfg.containerAttribution);
+        QVERIFY(!cfg.netnsScan);
+    }
+
+    void attributionInvalidValuesWarnAndFallback()
+    {
+        using qiftop::backend::AttributionEagerness;
+        TestDir dir; QVERIFY(dir.isValid());
+        const QString path = writeConf(dir, R"([attribution]
+eagerness=turbo
+process=maybe
+cache_refresh_ms=99
+netns_refresh_ms=300001
+)");
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "agent: config key attribution/eagerness value turbo unrecognised .* using balanced")));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "agent: config key attribution/cache_refresh_ms value 99 out of range .* using preset")));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "agent: config key attribution/netns_refresh_ms value 300001 out of range .* using preset")));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "agent: config key attribution/process value maybe unrecognised .* using true")));
+        const auto cfg = qiftop::agent::loadAttributionConfig(path);
+        QCOMPARE(cfg.eagerness, AttributionEagerness::Balanced);
+        QVERIFY(cfg.processAttribution);
+        QVERIFY(cfg.tuning == qiftop::backend::balancedResolverTuning());
     }
 };
 

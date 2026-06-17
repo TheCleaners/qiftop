@@ -59,7 +59,7 @@ class NetnsScannerWorker;
 //   - Per-netns sock_diag dump fails → log once per cycle, continue.
 class NetnsScanner final : public ProcessResolver {
 public:
-    NetnsScanner();
+    explicit NetnsScanner(const ResolverTuning &tuning = balancedResolverTuning());
     ~NetnsScanner() override;
 
     // Probes /proc/self/ns/net + an unshare(CLONE_NEWNET)-style read.
@@ -82,6 +82,7 @@ private:
     std::atomic<bool>                 m_stop{false};
     QThread                          *m_thread = nullptr;
     NetnsScannerWorker               *m_worker = nullptr;
+    int                               m_refreshIntervalMs = 5000;
 
     // Published cross-netns maps; mutated by worker, read by data thread.
     mutable std::mutex                m_mu;

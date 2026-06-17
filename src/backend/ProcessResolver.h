@@ -10,6 +10,93 @@ struct Connection;  // forward-decl breaks the cycle with Connection.h
 
 namespace qiftop::backend {
 
+// Runtime attribution mode selected by the agent config. `Off` is a hard
+// kill switch: the factory returns NullProcessResolver and no resolver layer
+// is constructed even if individual feature booleans are true.
+enum class AttributionEagerness {
+    Off = 0,
+    Balanced = 1,
+    Eager = 2,
+};
+
+// Concrete refresh cadences after resolving the eagerness preset plus any
+// admin overrides. Process/socket and cgroup caches are separate internally
+// because their historical safe defaults differ; the public INI override keeps
+// one knob and applies it to both.
+struct ResolverTuning {
+    int cacheRefreshMs = 1000;
+    int containerCacheMs = 2000;
+    int netnsRefreshMs = 5000;
+
+    friend bool operator==(const ResolverTuning &, const ResolverTuning &) = default;
+};
+
+[[nodiscard]] constexpr ResolverTuning balancedResolverTuning() noexcept
+{
+    return {};
+}
+
+[[nodiscard]] constexpr ResolverTuning eagerResolverTuning() noexcept
+{
+    return {
+        .cacheRefreshMs = 250,
+        .containerCacheMs = 1000,
+        .netnsRefreshMs = 1000,
+    };
+}
+
+[[nodiscard]] constexpr ResolverTuning offResolverTuning() noexcept
+{
+    return {
+        .cacheRefreshMs = 0,
+        .containerCacheMs = 0,
+        .netnsRefreshMs = 0,
+    };
+}
+
+// Pure preset mapper used by the agent config loader and unit tests.
+// Non-zero overrides are assumed to have been range-checked by the caller.
+[[nodiscard]] constexpr ResolverTuning
+resolverTuningFor(AttributionEagerness eagerness,
+                  int cacheRefreshOverrideMs = 0,
+                  int netnsRefreshOverrideMs = 0) noexcept
+{
+    ResolverTuning tuning = balancedResolverTuning();
+    switch (eagerness) {
+    case AttributionEagerness::Off:
+        return offResolverTuning();
+    case AttributionEagerness::Balanced:
+        tuning = balancedResolverTuning();
+        break;
+    case AttributionEagerness::Eager:
+        tuning = eagerResolverTuning();
+        break;
+    }
+
+    if (cacheRefreshOverrideMs > 0) {
+        tuning.cacheRefreshMs = cacheRefreshOverrideMs;
+        tuning.containerCacheMs = cacheRefreshOverrideMs;
+    }
+    if (netnsRefreshOverrideMs > 0) {
+        tuning.netnsRefreshMs = netnsRefreshOverrideMs;
+    }
+    return tuning;
+}
+
+// Configuration knobs threaded through from the agent's runtime config
+// (`/etc/qiftop/agent.conf`, [attribution]). Defaults match the historical
+// production behaviour: balanced cadence, every compiled-in layer enabled.
+//
+// Each boolean can only override a compile-time-enabled feature OFF at runtime;
+// it cannot turn ON code that was not linked into the build.
+struct ProcessResolverConfig {
+    AttributionEagerness eagerness = AttributionEagerness::Balanced;
+    bool processAttribution = true;
+    bool containerAttribution = true;
+    bool netnsScan = true;
+    ResolverTuning tuning = balancedResolverTuning();
+};
+
 // Per-process metadata that may be attached to a Connection.
 //
 // LIFETIME: snapshot value. The resolver caches PID metadata internally but

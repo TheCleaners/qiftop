@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Agent attribution knobs** — `/etc/qiftop/agent.conf` now has an
+  `[attribution]` section for startup-only resolver tuning:
+  `eagerness=off|balanced|eager`, per-layer `process` / `container` /
+  `netns` switches, and guarded cache/netns refresh overrides. No wire change;
+  disabled layers simply stop advertising their existing capability tokens.
 - **Performance benchmark harness** (developer tooling) — opt-in `bench/`
   microbenchmarks built on Qt Test's `QBENCHMARK` (no new dependency),
   enabled with `-DQIFTOP_BUILD_BENCHMARKS=ON` and excluded from the default

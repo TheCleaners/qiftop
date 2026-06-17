@@ -33,11 +33,26 @@ namespace qiftop::backend {
 std::unique_ptr<ProcessResolver>
 createProcessResolver(const ProcessResolverConfig &cfg)
 {
+    const bool attributionOff =
+        cfg.eagerness == AttributionEagerness::Off
+        || (!cfg.processAttribution && !cfg.containerAttribution && !cfg.netnsScan);
+    if (attributionOff) {
+        qCInfo(lcVerbose) << "ProcessResolverFactory: attribution disabled by config; "
+                              "using Null resolver";
+        auto resolver = std::make_unique<NullProcessResolver>();
+        resolver->initialize();
+        return resolver;
+    }
+
+    const bool enableProcess = cfg.processAttribution;
+    const bool enableContainer = enableProcess && cfg.containerAttribution;
+    const bool enableNetns = enableProcess && cfg.netnsScan;
+
 #ifdef QIFTOP_HAS_LINUX_ATTRIBUTION
     auto composite = std::make_unique<CompositeResolver>();
 #  ifdef QIFTOP_ENABLE_PROCESS_ATTRIBUTION
-    if (cfg.processAttribution) {
-        auto r = std::make_unique<linuximpl::SockDiagResolver>();
+    if (enableProcess) {
+        auto r = std::make_unique<linuximpl::SockDiagResolver>(cfg.tuning);
         if (r->initialize()) {
             qCInfo(lcVerbose) << "ProcessResolverFactory: SockDiagResolver added";
             composite->add(std::move(r));
@@ -47,8 +62,8 @@ createProcessResolver(const ProcessResolverConfig &cfg)
     }
 #  endif
 #  ifdef QIFTOP_ENABLE_CONTAINER_ATTRIBUTION
-    if (cfg.containerAttribution) {
-        auto r = std::make_unique<linuximpl::CgroupClassifier>();
+    if (enableContainer) {
+        auto r = std::make_unique<linuximpl::CgroupClassifier>(cfg.tuning);
         if (r->initialize()) {
             qCInfo(lcVerbose) << "ProcessResolverFactory: CgroupClassifier added";
             composite->add(std::move(r));
@@ -58,8 +73,8 @@ createProcessResolver(const ProcessResolverConfig &cfg)
     }
 #  endif
 #  ifdef QIFTOP_ENABLE_NETNS_SCAN
-    if (cfg.netnsScan) {
-        auto r = std::make_unique<linuximpl::NetnsScanner>();
+    if (enableNetns) {
+        auto r = std::make_unique<linuximpl::NetnsScanner>(cfg.tuning);
         if (r->initialize()) {
             qCInfo(lcVerbose) << "ProcessResolverFactory: NetnsScanner added";
             composite->add(std::move(r));
