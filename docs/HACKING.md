@@ -266,6 +266,11 @@ cat _debctl/conffiles
 rm -rf _debctl
 ```
 
+Library dependencies are auto-discovered by `dpkg-shlibdeps` (the DEB analog of
+RPM's find-requires). `qiftop` and `nqiftop` only **weakly recommend**
+`qiftop-agent`, so a client can install without the daemon and fall back to
+in-process capture.
+
 ### Building the `.rpm`s (Fedora)
 
 RPMs need `rpmbuild` + the Fedora `-devel` libraries. The release workflow

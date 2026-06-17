@@ -12,21 +12,19 @@ check_qiftop \- Nagios/Icinga/Zabbix monitoring plugin for qiftop network rates
 .B check_qiftop
 is a one\-shot monitoring plugin that queries the
 .BR qiftop\-agent (8)
-over D\-Bus, samples a network throughput metric, compares it against
+over D\-Bus, samples a throughput metric, compares it with
 .B \-\-warning
 and
 .B \-\-critical
-thresholds, and reports a result in the Nagios plugin format (a status line
-plus performance data after a
+thresholds, and prints Nagios plugin output (status plus performance data
+after a
 .RB \(lq | \(rq
 separator).
 .PP
-It is built on the Widgets\-free
-.B libqiftop
-shared library, so it has no GUI dependency and runs on headless hosts. Being
-an unprivileged D\-Bus client, it relies on the
+It has no GUI dependency and runs as an unprivileged D\-Bus client. The
+calling user must be able to access the
 .BR qiftop\-agent (8)
-system service for data; the calling user must be in the
+system service, usually by being in the
 .B netdev
 group (see
 .BR qiftop\-agent (8)).
@@ -40,8 +38,8 @@ rather than blocking the scheduler.
 .SH OPTIONS
 .TP
 .BI \-\-warning " rate"
-Warning threshold (required). Accepts a bytes\-per\-second number with an
-optional IEC suffix:
+Warning threshold (required). Accepts bytes per second with an optional IEC
+suffix:
 .BR K / Ki ", " M / Mi ", " G / Gi
 (e.g.
 .BR 50Mi ).
@@ -51,7 +49,7 @@ Critical threshold (required). Must be \(>=
 .BR \-\-warning .
 .TP
 .BI \-\-metric " name"
-Which throughput metric to check:
+Metric to check:
 .BR rate_in " (alias " rx_rate "), " rate_out " (alias " tx_rate "), or "
 .BR rate_total " (alias " total_rate ", the default)."
 .TP
@@ -62,9 +60,8 @@ Mutually exclusive with
 .BR \-\-filter .
 .TP
 .BI \-\-filter " expr"
-Restrict the check to the flows matching a qiftop filter expression (the same
-mini\-language as the GUI/TUI Connections filter), aggregating their rate. For
-a per\-interface flow check use
+Restrict the check to flows matching a qiftop filter expression, aggregating
+their rate. For a per\-interface flow check use
 .BR "\-\-filter iface=<name>" .
 Mutually exclusive with
 .BR \-\-iface .
@@ -80,7 +77,7 @@ Maximum time to wait for live data before returning
 (default 10).
 .TP
 .BI \-\-interval\-ms " ms"
-Desired agent poll cadence to request while sampling (default 1000).
+Agent poll cadence to request while sampling (default 1000).
 .SH "EXIT STATUS"
 Standard Nagios plugin codes:
 .TP
@@ -126,11 +123,5 @@ QIFTOP WARNING \- eth0 total 95.4 MiB/s | total_rate=100063026B/s;52428800;10485
 .BR nqiftop (1),
 .BR qiftop\-agent (8),
 .BR qiftop\-agent.conf (5)
-.PP
-For Prometheus/OpenMetrics\-based alerting (an alternative to a polling check),
-see the
-.B qiftop\-exporter
-example under
-.IR examples/prometheus\-exporter .
 .SH AUTHOR
 The qiftop project \(em <https://github.com/TheCleaners/qiftop>.

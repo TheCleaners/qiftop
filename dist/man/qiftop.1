@@ -6,55 +6,47 @@ qiftop \- Qt6 real\-time network traffic monitor (per\-interface and per\-connec
 .RI [ options ]
 .SH DESCRIPTION
 .B qiftop
-is a graphical, iftop\-style network monitor. It shows two live views:
+is a graphical, iftop\-style network monitor with two live views:
 .IP \(bu 3
 .B Interfaces
-\(em per\-interface throughput (RX/TX rate and cumulative totals), link
-state, MTU, addresses and error/drop counters.
+\(em per\-interface throughput, totals, link state, addresses and
+error/drop counters.
 .IP \(bu 3
 .B Connections
-\(em per\-flow throughput for every active connection (the conntrack
-table), with direction inference, reverse\-DNS, and optional grouping by
-interface, process or container.
+\(em active flows with rates, totals, direction, reverse DNS, and optional
+grouping by interface, process or container.
 .PP
-On startup qiftop probes for the privileged
+On startup qiftop tries to use the privileged
 .BR qiftop\-agent (8)
-on the system D\-Bus and, when reachable, consumes statistics from it as an
-unprivileged client so the GUI never touches the kernel. When the agent is
-not installed or the user lacks access (see
+over system D\-Bus. When the agent is unavailable or access is denied (see
 .B SECURITY
 in
 .BR qiftop\-agent (8)),
-qiftop falls back to an in\-process capture backend, offering to relaunch
-itself with elevated privileges via
+qiftop can fall back to in\-process capture and offer to relaunch with
+elevated privileges via
 .BR pkexec (1)
 or
 .BR sudo (8).
-The active source ("agent <version>" vs. "in\-process") is shown in the
-status bar.
 .SH OPTIONS
 .TP
 .BR \-i ", " \-\-interface " " \fIiface\fR
-Open on the Connections tab and restrict it to flows on \fIiface\fR. May
-be given more than once to show several interfaces. This filter is
-transient (not saved) and mirrors
+Open on the Connections tab and show only flows on \fIiface\fR. May be
+given more than once. The filter is not saved and mirrors
 .BR iftop (8)'s
 .BR \-i .
 .TP
 .B \-\-tray
-Start with no main window \(em only the system\-tray icon with a live
-throughput sparkline. Used by the XDG autostart entry installed from
+Start in the system tray with a live throughput sparkline. Used by the
+XDG autostart entry installed from
 .IR "Settings \(-> Tray \(-> Start on login" .
 Click the tray icon to summon the window.
 .TP
 .B \-\-no\-agent
-Skip the system\-bus agent and always use the in\-process backend. Intended
-for development and debugging; needs root (or the self\-elevation prompt)
-for per\-connection capture.
+Skip the agent and use in\-process capture. Intended for development and
+debugging; per\-connection capture needs root or the self\-elevation prompt.
 .TP
 .B \-\-verbose
-Print diagnostics to stderr (privilege escalation, backend errors, D\-Bus
-probing).
+Print diagnostics to stderr.
 .TP
 .BR \-h ", " \-\-help
 Show built\-in help and exit.
@@ -65,15 +57,13 @@ Show version and exit.
 Both tables are sortable by clicking a column header. The Connections view
 accepts a filter expression (the same mini\-language documented in
 .BR nqiftop (1));
-right\-clicking a header toggles column visibility, and per\-column layout
-plus the chosen view settings persist between runs. A row\-spanning gauge
-tints each row in proportion to the loudest flow. Throughput is always
-formatted in IEC units (KiB/s, MiB/s, ...).
+right\-clicking a header toggles column visibility. Layout and view settings
+are saved between runs. Throughput is formatted in IEC units (KiB/s,
+MiB/s, ...).
 .SH FILES
 .TP
 .I ~/.config/qiftop/qiftop.conf
-Per\-user settings (\fBQSettings\fR INI): monitoring cadence, display
-options, DNS, tray pins, autostart, and saved per\-column header state.
+Per\-user settings.
 .TP
 .I ~/.config/autostart/qiftop.desktop
 XDG autostart entry, created/removed by the "Start on login" preference.

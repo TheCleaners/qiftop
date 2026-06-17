@@ -5,15 +5,15 @@
   <project_license>GPL-2.0-or-later</project_license>
 
   <name>qiftop</name>
-  <summary>Real-time network traffic monitor</summary>
+  <summary>See live network usage by connection, app, and container</summary>
   <developer id="io.github.thecleaners">
     <name>The Cleaners</name>
   </developer>
 
   <description>
-    <p>qiftop is a Qt desktop application for monitoring network traffic in real time. It shows per-interface counters and per-connection flows in an iftop-like view designed for graphical desktops.</p>
-    <p>The graphical client pairs with qiftop-agent, a privileged D-Bus service that collects kernel network accounting while keeping the UI unprivileged. When available, the agent provides live connection data, interface statistics, and optional process and container attribution.</p>
-    <p>Filtering, sorting, rate smoothing, DNS names, and grouped views help identify bandwidth use by interface, process, container, protocol, address, and direction.</p>
+    <p>qiftop helps you understand what is using your network right now. It shows live upload and download speeds for each network device and for active connections, so busy links and top talkers are easy to spot.</p>
+    <p>When supported by your system, qiftop can show the app, background process, or container behind a connection. Grouping, sorting, and filters help you narrow traffic by device, app, container, address, protocol, or incoming and outgoing direction.</p>
+    <p>Use the graphical window on your desktop, or open the included terminal interface when you are working over SSH or on a headless machine.</p>
   </description>
 
   <launchable type="desktop-id">io.github.thecleaners.qiftop.desktop</launchable>
