@@ -16,9 +16,8 @@ concurrency:
 
 jobs:
   clang-tidy:
-    name: clang-tidy (Phase 0 report)
+    name: clang-tidy (enforced baseline)
     runs-on: ubuntu-24.04
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v6
@@ -53,5 +52,5 @@ jobs:
             bench_filter_autogen \
             bench_flow_topk_autogen
 
-      - name: Run clang-tidy report
-        run: scripts/run-clang-tidy.sh build
+      - name: Run clang-tidy gate
+        run: scripts/run-clang-tidy.sh --gate build

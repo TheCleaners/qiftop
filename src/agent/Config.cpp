@@ -97,7 +97,7 @@ IdleManager::Config loadIdleConfig(const QString &path)
     // multiplication in 32-bit on the raw INI value (which a typo could
     // easily make huge) is UB on overflow — the previous code clamped after
     // multiplying, which doesn't save you from the overflow itself.
-    constexpr qint64 kMaxSec = 24 * 60 * 60;
+    constexpr qint64 kMaxSec = qint64(24) * 60 * 60;
     auto secsToMs = [&](const char *key, const QString &iniKey, int defaultMs) -> int {
         const qint64 raw = ini.value(iniKey, qint64(defaultMs) / 1000).toLongLong();
         if (raw < 0 || raw > kMaxSec) {

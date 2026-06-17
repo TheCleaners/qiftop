@@ -28,7 +28,7 @@ QString autostartDir()
 // the packaged case.
 QString execPath()
 {
-    const QString applied = QCoreApplication::applicationFilePath();
+    QString applied = QCoreApplication::applicationFilePath();
     if (!applied.isEmpty() && QFileInfo(applied).isExecutable())
         return applied;
     return QStringLiteral("/usr/bin/qiftop");

@@ -349,6 +349,8 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
         if (col == Column::Flow || col == Column::Iface)
             return static_cast<int>(Qt::AlignLeft | Qt::AlignVCenter);
         return static_cast<int>(Qt::AlignRight | Qt::AlignVCenter);
+    default:
+        break;
     }
     return {};
 }

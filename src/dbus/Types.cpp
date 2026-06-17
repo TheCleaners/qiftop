@@ -44,6 +44,9 @@ const QDBusArgument &operator>>(const QDBusArgument &a, InterfaceStatsDto &s)
     if (!a.atEnd()) a >> s.rxDropped;   // v0.3
     if (!a.atEnd()) a >> s.txDropped;   // v0.3
     a.endStructure();
+    // Returning the const-ref param is the mandated QDBusArgument extraction
+    // idiom (Qt fixes this signature); not a dangling-ref bug.
+    // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
     return a;
 }
 
@@ -60,6 +63,8 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ContainerInfoDto &c)
     a.beginStructure();
     a >> c.runtime >> c.id >> c.name;
     a.endStructure();
+    // Mandated QDBusArgument extraction idiom; not a dangling-ref bug.
+    // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
     return a;
 }
 
@@ -114,6 +119,8 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ConnectionDto &c)
     if (c.containerChain.size() > kMaxContainerChainDepth)
         c.containerChain.resize(kMaxContainerChainDepth);
     a.endStructure();
+    // Mandated QDBusArgument extraction idiom; not a dangling-ref bug.
+    // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
     return a;
 }
 
@@ -143,6 +150,8 @@ const QDBusArgument &operator>>(const QDBusArgument &a, ProcessDetailsDto &p)
     a >> p.pid >> p.uid >> p.comm >> p.exe >> p.cmdline >> p.cwd
       >> p.startTimeJiffies;
     a.endStructure();
+    // Mandated QDBusArgument extraction idiom; not a dangling-ref bug.
+    // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
     return a;
 }
 

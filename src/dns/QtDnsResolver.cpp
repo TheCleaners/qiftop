@@ -8,7 +8,7 @@ namespace {
 // looking up new ones, while a typical workstation never hits the eviction
 // path at all.
 constexpr int    kMaxEntries     = 4096;
-constexpr qint64 kNegativeTtlMs  = 5 * 60 * 1000;  // 5 min
+constexpr qint64 kNegativeTtlMs  = qint64(5) * 60 * 1000;  // 5 min
 } // namespace
 
 QtDnsResolver::QtDnsResolver(QObject *parent)
@@ -76,6 +76,9 @@ void QtDnsResolver::onLookupFinished(const QHostInfo &info)
     const auto it = m_pendingById.constFind(info.lookupId());
     if (it == m_pendingById.constEnd())
         return;
+    // Real copy, not a const ref: erase(it) on the next line invalidates *it,
+    // and addr is read several times afterwards.
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     const QHostAddress addr = *it;
     m_pendingById.erase(it);
     m_pendingAddrs.remove(addr);

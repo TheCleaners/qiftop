@@ -472,7 +472,7 @@ ConntrackMonitor::ConntrackMonitor(QObject *parent)
 
 ConntrackMonitor::~ConntrackMonitor()
 {
-    stop();
+    ConntrackMonitor::stop();
 }
 
 void ConntrackMonitor::start()

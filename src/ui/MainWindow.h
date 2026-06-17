@@ -127,6 +127,9 @@ public:
     // option and could be useful from a future tray/IPC action.
     void selectConnectionsTab();
 
+    // QObject override — kept public to match the base class visibility.
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void readUiState();
     void writeUiState();
@@ -143,7 +146,6 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     void hideEvent(QHideEvent *event) override;
     void showEvent(QShowEvent *event) override;
-    bool eventFilter(QObject *watched, QEvent *event) override;
 
     Settings          *m_settings    = nullptr;
     NetworkMonitor    *m_netMonitor  = nullptr;

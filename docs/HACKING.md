@@ -115,27 +115,32 @@ Useful overrides:
 
 ### Static analysis (clang-tidy)
 
-clang-tidy is rolling out progressively, not as a surprise boss fight.
-**Phase 0 is report-only, non-gating and opt-in**: the default build and CI
-gates stay exactly as they were, while we collect a small high-signal baseline
-from `bugprone-*`, `clang-analyzer-*`, `performance-*`, `portability-*` and
-`misc-*` (with the obvious Qt/noise traps disabled). Later phases can ratchet
-checks or turn findings into gates once the baseline is boring.
+clang-tidy is rolling out progressively, not as a surprise boss fight. The
+**baseline set is now enforced (gating in CI)**: the high-signal checks from
+`bugprone-*`, `clang-analyzer-*`, `performance-*`, `portability-*` and
+`misc-*` (with the obvious Qt/noise traps disabled) were cleaned to zero, then
+the gate flipped on, so regressions in that set now fail the `clang-tidy`
+workflow. It started life as a report-only Phase 0 — that phase is done.
+`bugprone-narrowing-conversions` and the `modernize-*` / `readability-*` style
+families are deliberately still **off**; they're the next phases, not part of
+the enforced set yet.
 
-Local report path:
+Local check path (same thing CI runs):
 
 ```bash
 cmake -S . -B build -G Ninja -DQIFTOP_AUTO_PACKAGE=OFF
-scripts/run-clang-tidy.sh build
+scripts/run-clang-tidy.sh build         # report: prints findings, always exits 0
+scripts/run-clang-tidy.sh --gate build  # gate: exits non-zero on any finding
 ```
 
 The script consumes `<build-dir>/compile_commands.json`, filters to qiftop's
-own `src/` and `bench/` translation units, skips generated moc/autogen files,
-and exits 0 even when it finds things. `scripts/run-clang-tidy.sh --gate build`
-is reserved for a future stricter lane. On a completely fresh build tree, run
-the normal build once (or at least the relevant `*_autogen` targets) if
-clang-tidy complains about a missing included `.moc` file; Qt's generator has
-to leave those breadcrumbs before static analysis can follow them.
+own `src/` and `bench/` translation units, and skips generated moc/autogen
+files. Plain `run-clang-tidy.sh build` stays report-only for quick local
+poking; `--gate` is what CI uses to block regressions. On a completely fresh
+build tree, run the normal build once (or at least the relevant `*_autogen`
+targets) if clang-tidy complains about a missing included `.moc` file; Qt's
+generator has to leave those breadcrumbs before static analysis can follow
+them.
 
 For inline diagnostics while compiling, configure with:
 

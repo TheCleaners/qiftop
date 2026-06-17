@@ -24,9 +24,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`compile_commands.json`** is now emitted by every build
   (`CMAKE_EXPORT_COMPILE_COMMANDS`) for editors, language servers and
   compilation-database tooling.
-- **Phase-0 clang-tidy scaffolding** — a conservative report-only config,
-  opt-in `QIFTOP_CLANG_TIDY` build hook, local wrapper script, and non-gating
-  CI report so static analysis can start boring and ratchet later.
+- **Phase-0 clang-tidy scaffolding** — a conservative config, opt-in
+  `QIFTOP_CLANG_TIDY` build hook, local wrapper script, and a CI lane so static
+  analysis can start boring and ratchet later. The baseline set is now cleaned
+  and **enforced** — see Changed below.
+
+### Changed
+- **clang-tidy baseline is now gating.** The high-signal Phase-0 set
+  (`bugprone-*`, `clang-analyzer-*`, `performance-*`, `portability-*`,
+  `misc-*`, minus the Qt/noise traps) was fixed to zero findings, then the CI
+  `clang-tidy` job flipped from report-only to enforcing (`--gate`, no more
+  `continue-on-error`). Regressions in that set now fail the build.
+  `bugprone-narrowing-conversions` and the `modernize-*` / `readability-*`
+  style families stay parked for a later phase. The ~30 findings were real
+  fixes (const-ref params, no-automatic-move returns, merged identical
+  branches, qualified virtual calls in destructors, exhaustive-switch
+  defaults), with two narrow `NOLINT`s where the diagnostic was a genuine
+  false positive (Qt's mandated `QDBusArgument` extraction-operator signature,
+  and a copy that must outlive an immediate container `erase`).
+
+### Fixed
+- **Hardened a few 32-bit-multiplication-then-widen spots** flagged by
+  `bugprone-implicit-widening-of-multiplication-result` — agent config and DNS
+  TTL bounds plus benchmark data generation now do the multiply in 64-bit
+  before widening. These were defensive (the operands are small constants /
+  test counters today), so no user-visible behavior changed, but the math is
+  now overflow-safe if the inputs ever grow.
 
 ## [0.3.0] - 2026-06-17
 

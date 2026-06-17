@@ -192,7 +192,7 @@ std::optional<Options> parseOptions(const QStringList &args, QString *error)
 {
     Options opts;
     for (int i = 1; i < args.size(); ++i) {
-        const QString arg = args.at(i);
+        const QString &arg = args.at(i);
         if (arg == QStringLiteral("--session")) {
             opts.sessionBus = true;
         } else if (arg == QStringLiteral("--metric")) {
@@ -282,7 +282,7 @@ int main(int argc, char **argv)
         printNagiosLine(Unknown, parseError, MetricPart::Total, 0.0, 0.0, 0.0, false);
         return Unknown;
     }
-    const Options opts = *options;
+    const Options &opts = *options;
 
     qRegisterMetaType<InterfaceStats>();
     qRegisterMetaType<QList<InterfaceStats>>();

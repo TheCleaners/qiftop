@@ -148,7 +148,7 @@ MainWindow::MainWindow(Settings          *settings,
     // The cache is bounded (clear-on-overflow, repopulated on demand)
     // so heavy pid churn can't grow it without bound.
     connect(m_connMonitor, &ConnectionMonitor::processDetailsReady, this,
-            [this](qiftop::backend::ProcessDetails d) {
+            [this](const qiftop::backend::ProcessDetails &d) {
                 if (d.pid <= 0) return;
                 constexpr qsizetype kProcDetailsCacheMax = 1024;
                 if (m_procDetails.size() >= kProcDetailsCacheMax
@@ -2091,7 +2091,7 @@ using HeaderToggleInterceptor = std::function<bool(int col, bool checked)>;
 
 void populateHeaderMenu(QMenu *menu, QHeaderView *header,
                         const QSet<int> &alwaysHidden = {},
-                        HeaderToggleInterceptor toggleInterceptor = {})
+                        const HeaderToggleInterceptor &toggleInterceptor = {})
 {
     QAbstractItemModel *m = header->model();
     if (!m) return;

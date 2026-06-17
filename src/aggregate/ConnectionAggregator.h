@@ -121,7 +121,7 @@ signals:
     void viewDataChanged();
 
 private slots:
-    void onResolved(QHostAddress addr, QString hostname);
+    void onResolved(const QHostAddress &addr, const QString &hostname);
 
 private:
     [[nodiscard]] QString endpointCopyText(const Endpoint &ep) const;

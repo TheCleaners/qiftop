@@ -1,5 +1,8 @@
 ---
-# Phase 0 clang-tidy: report-only, opt-in, intentionally boring.
+# clang-tidy baseline: this set is now ENFORCED (gating in CI) and clean.
+# Was Phase 0 report-only; the listed checks were fixed to zero, then the
+# gate flipped on so regressions fail the build. Narrowing conversions and
+# the style/modernize families are the next phases — still parked below.
 # Keep this high-signal; style and policy checks can join the party later.
 Checks: >
   -*,

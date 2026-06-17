@@ -71,7 +71,7 @@ private:
 
 [[nodiscard]] inline QHostAddress remoteIpv4(qsizetype i)
 {
-    const int b = int((i / (254 * 254)) % 254) + 1;
+    const int b = int((i / (qsizetype(254) * 254)) % 254) + 1;
     const int c = int((i / 254) % 254) + 1;
     const int d = int(i % 254) + 1;
     return QHostAddress(QStringLiteral("203.%1.%2.%3").arg(b).arg(c).arg(d));
@@ -138,8 +138,8 @@ private:
             : quint16((i % 7 == 0) ? 22 : 443);
 
         const quint64 base = quint64(i + 1) * 97ULL + quint64(options.tick) * 4096ULL;
-        c.rxBytes = base + quint64((rng.next() & 0xfffU) + options.tick * 512);
-        c.txBytes = base / 2ULL + quint64((rng.next() & 0x7ffU) + options.tick * 768);
+        c.rxBytes = base + quint64((rng.next() & 0xfffU) + quint64(options.tick) * 512);
+        c.txBytes = base / 2ULL + quint64((rng.next() & 0x7ffU) + quint64(options.tick) * 768);
         c.rxPackets = c.rxBytes / 1300ULL + 1ULL;
         c.txPackets = c.txBytes / 1300ULL + 1ULL;
         c.iface = QString::fromLatin1(kIfaces[std::size_t(i % qsizetype(kIfaces.size()))]);

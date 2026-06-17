@@ -96,7 +96,7 @@ namespace {
 // permission-race window during which any same-host user can connect.
 QString pickRuntimeDir(QString *outErr)
 {
-    const QString xdg = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    QString xdg = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
     if (!xdg.isEmpty() && QDir(xdg).exists())
         return xdg;
     const QString cacheRoot =

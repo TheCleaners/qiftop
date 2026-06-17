@@ -18,7 +18,7 @@ NetlinkMonitor::NetlinkMonitor(QObject *parent)
 
 NetlinkMonitor::~NetlinkMonitor()
 {
-    stop();
+    NetlinkMonitor::stop();
 }
 
 void NetlinkMonitor::start()

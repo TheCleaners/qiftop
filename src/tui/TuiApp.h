@@ -33,10 +33,10 @@ public:
            aggregate::InterfaceAggregator  *ifaceAgg,
            aggregate::ConnectionAggregator *connAgg,
            QString sourceLabel,
-           QString themeName,
+           const QString &themeName,
            int pollMs,
-           QString viewName = {},   // CLI override: "interfaces"/"connections"
-           QString groupName = {},  // CLI override: off/interface/process/container
+           const QString &viewName = {},   // CLI override: "interfaces"/"connections"
+           const QString &groupName = {},  // CLI override: off/interface/process/container
            QObject *parent = nullptr);
 
     // Called by main's QSocketNotifier after draining curses input.
