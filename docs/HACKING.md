@@ -833,11 +833,19 @@ is cheap, so the agent's poll cadence — not the pipeline — is the budget.
 | `ConnectionAggregator` update (no DNS/UDP) | ~8.7 ms | ~316 ms |
 | `ConnectionFilter` evaluate (parse once) | ~0.03 ms | ~1 ms |
 | `admitFlowTopK` (top-4096 admission) | ~0.21 ms | ~22 ms |
+| **full pipeline tick** (cap → aggregate → filter) | ~9 ms | **~35 ms** |
 
 Takeaways: the **aggregator dominates** and is the thing to watch when
 raising flow caps; filtering and top-K are nearly free; even at 100k flows
 the pure pipeline fits well within a 1 s tick. Re-measure on your own host
 before drawing conclusions — these are relative, not absolute, guarantees.
+
+The `bench_pipeline_tick` row is the punchline for the eagerness work: a full
+data-plane tick over **100k raw flows is only ~35 ms** — versus ~316 ms to
+aggregate 100k uncapped — because the **top-K cap means aggregation only ever
+touches 4096 flows**; the raw count only flows through the cheap cap scan. So
+the cap is exactly what keeps "eager" cadence safe: the poll interval, not the
+pipeline, is the ceiling.
 
 ---
 

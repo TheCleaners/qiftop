@@ -31,6 +31,15 @@ qiftop_add_benchmark(bench_filter
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_benchmark(bench_flow_topk
         bench_flow_topk.cpp)
+
+    # The "eager budget" bench: top-K cap + aggregator + filter in one tick.
+    # Linux-gated because it pulls in FlowTopK.h (the in-process conntrack cap).
+    qiftop_add_benchmark(bench_pipeline_tick
+        bench_pipeline_tick.cpp
+        ${CMAKE_SOURCE_DIR}/src/aggregate/ConnectionAggregator.cpp
+        ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
+        ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp
+        ${CMAKE_SOURCE_DIR}/src/util/ConnectionFilter.cpp)
 endif()
 
 add_custom_target(benchmarks DEPENDS ${QIFTOP_BENCH_TARGETS})

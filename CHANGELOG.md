@@ -16,8 +16,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   microbenchmarks built on Qt Test's `QBENCHMARK` (no new dependency),
   enabled with `-DQIFTOP_BUILD_BENCHMARKS=ON` and excluded from the default
   build and `ctest` run. Initial coverage: the connection aggregator, the
-  filter mini-language evaluator, and the top-K flow cap, with deterministic
-  synthetic inputs scaling to 100k flows. See `docs/HACKING.md` §5.8.
+  filter mini-language evaluator, the top-K flow cap, and a full data-plane
+  "pipeline tick" (cap → aggregate → filter — the empirical eager-budget
+  number: ~35 ms over 100k raw flows), with deterministic synthetic inputs
+  scaling to 100k flows. See `docs/HACKING.md` §5.8.
 - **`QIFTOP_ENABLE_LTO` build option** — opt-in link-time optimization
   (IPO/LTO) where the toolchain supports it; warns and builds without it
   otherwise.
