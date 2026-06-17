@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **nqiftop Process & Container columns** — the ncurses TUI's Connections
+  view now grows real Process (`comm [pid]`, or the attribution reason for
+  unattributed flows) and Container (`runtime:name`) columns, reaching
+  parity with the GUI. They're capability-gated (need the agent's
+  `process-attribution-wire` / `container-attribution-wire` tokens), on by
+  default, and hidden when grouped by that key (the group header already
+  names it). In-process capture advertises no caps, so the columns stay
+  hidden there — same as the GUI. Client-side only: no agent, wire, or
+  capability-token changes.
+- **nqiftop `f` ("Fields") overlay, expanded** — the Fields overlay now
+  does double duty: pick the sort field (Enter sorts, `r` reverses) AND
+  toggle column visibility (Space shows/hides Process / Container). The
+  Process/Container toggles also live in the Settings (`S`) overlay; both
+  routes persist via new `showProcessColumn` / `showContainerColumn`
+  settings keys (honouring the root-owned-config load-but-don't-write
+  guard). The persisted sort field migrated from a positional integer to a
+  stable `ColumnId` token (old `ifaceSortCol` / `connSortCol` integers are
+  still read for a clean upgrade).
+
 ## [0.3.1] - 2026-06-17
 
 ### Added

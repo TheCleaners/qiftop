@@ -321,9 +321,10 @@ void Screen::render(const Frame &f)
     // scroll window; off-screen f.rows entries are empty placeholders. The
     // content-based natural-width scan below therefore must only run for
     // columns that are NOT data-sized — and today every column except the
-    // flexible col 0 has a fixed width, so the scan never actually executes.
-    // If a future flex (fixedWidth==0) column at index >= 1 is added, this
-    // width would be derived from the visible rows only (and could jitter on
+    // flexible col 0 has a fixed width (numeric rate/total columns plus the
+    // fixed-width Process / Container text columns), so the scan never actually
+    // executes. If a future flex (fixedWidth==0) column at index >= 1 is added,
+    // its width would be derived from the visible rows only (and could jitter on
     // scroll); size such a column from the aggregator, not from f.rows.
     const QList<Column> &cols = f.columns;
     const int n = static_cast<int>(cols.size());
@@ -341,6 +342,11 @@ void Screen::render(const Frame &f)
         }
         fixedSum += w[c];
     }
+    // Flow / Interface (col 0) flexes to fill the rest, but never below 4. When
+    // a wide optional column set + fixed columns overflow a narrow terminal,
+    // the flex floor can push the assembled line past `width`; rowText() clips
+    // the final line so it truncates at the right edge instead of wrapping and
+    // garbling the layout.
     w[0] = width - fixedSum - kSep * (n - 1);
     if (w[0] < 4)
         w[0] = 4;
@@ -353,6 +359,8 @@ void Screen::render(const Frame &f)
             const QString cell = c < cells.size() ? cells[c] : QString();
             line += fitCell(cell, w[c], cols[c].rightAlign);
         }
+        if (line.size() > width)            // clip to the terminal's right edge
+            line.truncate(width);
         return line;
     };
 

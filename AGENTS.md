@@ -606,7 +606,7 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
 | `test_interface_aggregator` | `InterfaceAggregator` row identity, sorted snapshots, and per-interface rate computation without Qt model/view. |
 | `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, and copy helpers. |
-| `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. Includes `orderedGroupIndices` (the group-display-order policy behind nqiftop's `sortWithinGroups`: frozen first-appearance vs classic aggregate order + stable tiebreak), `wrapToWidth` (word-wrap + hard-break for the modal dialogs' wrapped value column), `groupDetailRows` (the Enter-on-header group-info window: bulk fields + aggregates, plus exe/cmdline/cwd once on-demand details arrive), and the grouped-redundancy parity guard (`cellsForConnection` flow cell never repeats the comm/container the group header carries — the TUI analogue of the GUI hiding the redundant attribution column when grouped by that key). |
+| `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. Includes the dynamic column model (`columnsFor(View, OptionalColumns, GroupBy)` appends the capability-gated Process/Container columns and drops the grouped-by one), `cellsForConnection` / `groupHeaderCells` consuming the active column list, the `comm [pid]` / attribution-reason / `runtime:name` cell text, stable `ColumnId` sort-field tokens + legacy-index migration, `fieldRows` (the `f` overlay model), `orderedGroupIndices` (the group-display-order policy behind nqiftop's `sortWithinGroups`: frozen first-appearance vs classic aggregate order + stable tiebreak), `wrapToWidth` (word-wrap + hard-break for the modal dialogs' wrapped value column), `groupDetailRows` (the Enter-on-header group-info window: bulk fields + aggregates, plus exe/cmdline/cwd once on-demand details arrive), and the grouped-redundancy parity guard (`groupedChildRowDropsRedundantColumn`: the Process column is hidden when grouped By Process and the Container column when grouped By Container — the TUI analogue of the GUI hiding the redundant attribution column — while the OTHER stays present, and the group header still carries the grouped attribute). |
 | `test_tui_theme`           | Built-in `nqiftop` themes, case-insensitive lookup, fallback, and direction colour/attribute separation. |
 | `test_settings_migration`  | `Settings` legacy-key migration logic; chip-colour + v0.2 attribution view settings (view mode, process/container column toggles, chain-in-tooltip) round-trip + out-of-range view-mode clamp |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
@@ -1011,12 +1011,21 @@ can be dropped with `vagrant destroy default`.
   ACTUAL visibility (it stays unchecked), not the persisted setting.
   Pinned end-to-end by
   `test_mainwindow_smoke::processColumnHiddenWithoutWireCapability`.
-  The `nqiftop` TUI reaches the same parity by construction — it has no
-  Process/Container columns, so a grouped child row renders only the flow
-  (`cellsForConnection` = proto + endpoints) while the group header
-  (`groupLabelFor`) carries the grouped attribute; nothing is repeated
-  per row. Guarded by
-  `test_tui_format::groupedChildRowCarriesNoRedundantAttribution`.
+  The `nqiftop` TUI now reaches the same parity for real: it has its own
+  capability-gated Process / Container columns (default-on, same
+  `wireToken && userPref && !groupedByThatKey` gate as the GUI). The
+  agent's caps reach the TUI via a `main.cpp`-side `AgentProbe` →
+  `TuiApp::setBackendInfo`; in-process fallback advertises nothing so the
+  columns stay hidden. `TuiFormat::columnsFor(View, OptionalColumns,
+  GroupBy)` builds the active column list and applies the
+  grouped-redundancy rule (drop Process under GroupBy::Process, Container
+  under GroupBy::Container); `cellsForConnection` / `groupHeaderCells`
+  consume that list so a grouped child row never repeats what the header
+  carries. The Process cell shows `comm [pid]` or the attribution
+  `reason` label when unattributed; Container shows `runtime:name`. The
+  `f` ("Fields") overlay is the toggle UI (Space show/hide, Enter sort).
+  Guarded by `test_tui_format::groupedChildRowDropsRedundantColumn` (plus
+  `dynamicOptionalColumns` / `fieldsOverlayModel`).
 * **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
   uses an **allowlist** (`sessionEnv()`) when forwarding environment
   variables into the privileged child, not a denylist. The root child runs
