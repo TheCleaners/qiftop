@@ -542,6 +542,25 @@ range (intervals: `[10 ms, 1 h]`; windows/timeouts: `[0, 24 h]`, with `0`
 meaning "disable that step"). Typos in the conffile produce a visible
 warning, not a degenerate cadence.
 
+The `[attribution]` section (loaded by `loadAttributionConfig`, separate
+from `loadIdleConfig`) controls the resolver chain at **startup only** —
+no D-Bus runtime override, Version bump, new token, or async deep pass is
+part of this config-only knob set. `eagerness` is `balanced` by default:
+host sock_diag/proc refresh at 1000 ms, cgroup cache at 2000 ms, and
+cross-netns scanning at 5000 ms (the historical production cadence).
+`eager` tightens those to 250 / 1000 / 1000 ms for machines where fresher
+attribution is worth the extra `/proc` and `setns` churn. `off` is the
+hard kill switch: the factory builds `NullProcessResolver`, so process /
+container / netns capability tokens naturally disappear without inventing
+new wire semantics. Per-layer booleans (`process`, `container`, `netns`)
+can only disable compiled-in layers; `process=false` also disables the
+dependent container/netns layers and logs one startup warning if they were
+otherwise true. Advanced overrides `cache_refresh_ms` (`0` or
+`[100, 60000]`) and `netns_refresh_ms` (`0` or `[250, 300000]`) apply
+after the preset; invalid non-zero values warn and fall back to the
+preset. The concrete resolver constructors keep the same floors as a last
+ditch safety rail, because a 1 ms root `/proc` blender is not a feature.
+
 The `[process_details]` section (loaded by `loadProcessDetailsPolicy`,
 separate from `loadIdleConfig`) controls who may see the privileged
 `exe`/`cwd`/`cmdline` fields from `GetProcessDetails` — see §4. Keys:

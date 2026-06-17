@@ -29,7 +29,7 @@ namespace qiftop::backend::linuximpl {
 //   workloads.
 class CgroupClassifier final : public ProcessResolver {
 public:
-    CgroupClassifier();
+    explicit CgroupClassifier(const ResolverTuning &tuning = balancedResolverTuning());
     ~CgroupClassifier() override = default;
 
     // /proc readability probe. Returns true on any normal Linux host;
@@ -68,7 +68,9 @@ private:
     };
     QHash<qint32, CacheEntry>         m_cache;
     static constexpr int  kCacheTtlMs    = 2000;
+    static constexpr int  kMinCacheTtlMs = 100;
     static constexpr int  kCacheMaxItems = 8192;
+    int                   m_cacheTtlMs   = kCacheTtlMs;
 };
 
 } // namespace qiftop::backend::linuximpl

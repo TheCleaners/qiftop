@@ -38,7 +38,14 @@ namespace qiftop::backend::linuximpl {
 namespace {
 
 constexpr int kRefreshIntervalMs = 5000;   // netns set changes are rare
+constexpr int kMinRefreshIntervalMs = 250;
 constexpr int kMaxNetnsesPerTick = 256;    // sanity cap
+
+constexpr int safeRefreshIntervalMs(int raw) noexcept
+{
+    if (raw <= 0) return kRefreshIntervalMs;
+    return raw >= kMinRefreshIntervalMs ? raw : kMinRefreshIntervalMs;
+}
 
 // Read /proc/<pid>/ns/net's namespace inode. Returns nullopt on any failure.
 std::optional<quint64> readNetnsInode(long pid)
@@ -134,7 +141,7 @@ public slots:
         m_anchorInode = st.st_ino;
 
         m_timer = new QTimer(this);
-        m_timer->setInterval(kRefreshIntervalMs);
+        m_timer->setInterval(m_owner->m_refreshIntervalMs);
         connect(m_timer, &QTimer::timeout, this, &NetnsScannerWorker::tick);
         QTimer::singleShot(0, this, &NetnsScannerWorker::tick);  // warm up
         m_timer->start();
@@ -396,7 +403,10 @@ private:
 // NetnsScanner (public API; lives on the agent main thread).
 // ===========================================================================
 
-NetnsScanner::NetnsScanner() = default;
+NetnsScanner::NetnsScanner(const ResolverTuning &tuning)
+    : m_refreshIntervalMs(safeRefreshIntervalMs(tuning.netnsRefreshMs))
+{
+}
 
 NetnsScanner::~NetnsScanner()
 {
