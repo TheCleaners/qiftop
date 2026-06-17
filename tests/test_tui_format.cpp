@@ -113,6 +113,44 @@ private slots:
         QVERIFY(cells[0].contains(QChar(0x2192))); // →
     }
 
+    // Parity with the GUI's "hide the redundant column when grouped by that
+    // key" fix. The TUI has no Process/Container columns: a grouped child row
+    // renders ONLY the flow (proto + endpoints) while the group header carries
+    // the grouped attribute. So the per-flow entry never repeats what the
+    // header already shows — the TUI satisfies the parity by construction.
+    // Lock it so a future "show comm/container inline in the flow cell" change
+    // can't silently reintroduce the redundancy the GUI had to hide.
+    void groupedChildRowCarriesNoRedundantAttribution()
+    {
+        ConnectionAggregator agg;
+        agg.setUdpAggregateByPeer(false);
+        Connection c;
+        c.proto            = L4Proto::Tcp;
+        c.local.address    = QHostAddress(QStringLiteral("10.0.0.1"));
+        c.local.port       = 5000;
+        c.remote.address   = QHostAddress(QStringLiteral("1.1.1.1"));
+        c.remote.port      = 443;
+        c.process          = {4242, QStringLiteral("nginx"), {}, {}, 0};
+        c.process.uid      = 33;
+        c.container.runtime = QStringLiteral("docker");
+        c.container.id      = QStringLiteral("abcdef123456");
+        c.container.name    = QStringLiteral("web");
+        agg.updateConnections({c});
+        QCOMPARE(agg.rowCount(), 1);
+
+        // The flow cell repeats neither the process comm nor the container
+        // id/name — there is no attribution column to make redundant.
+        const QString flow = cellsForConnection(agg, agg.rowAt(0)).at(0);
+        QVERIFY(!flow.contains(QStringLiteral("nginx")));
+        QVERIFY(!flow.contains(QStringLiteral("abcdef123456")));
+        QVERIFY(!flow.contains(QStringLiteral("web")));
+
+        // …but the group header DOES carry the grouped attribute, so grouping
+        // never loses the information (it just isn't duplicated per row).
+        QVERIFY(groupLabelFor(GroupBy::Process, c).contains(QStringLiteral("nginx")));
+        QVERIFY(groupLabelFor(GroupBy::Container, c).contains(QStringLiteral("web")));
+    }
+
     void interfaceSortByRateDesc()
     {
         const QList<InterfaceAggregator::Row> rows = {
