@@ -786,16 +786,24 @@ void MainWindow::applySettingsToUi()
         // when the connected agent actually carries the matching wire
         // tokens. Without them the columns would just render "—" /
         // "(host)" everywhere, which is misleading rather than helpful.
+        // Also suppress the column that the active grouping already makes
+        // redundant — when grouped By Process the Process value lives in
+        // the group header, likewise By Container for the Container column.
         const bool procWire = m_agentCaps.contains(
             QStringLiteral("process-attribution-wire"));
         const bool contWire = m_agentCaps.contains(
             QStringLiteral("container-attribution-wire"));
+        const auto viewMode = m_settings->connectionViewMode();
+        const bool groupedByProcess =
+            (viewMode == Settings::ConnectionViewMode::ByProcess);
+        const bool groupedByContainer =
+            (viewMode == Settings::ConnectionViewMode::ByContainer);
         m_connView->setColumnHidden(
             static_cast<int>(ConnectionModel::Column::Process),
-            !(procWire && m_settings->showProcessColumn()));
+            !(procWire && m_settings->showProcessColumn() && !groupedByProcess));
         m_connView->setColumnHidden(
             static_cast<int>(ConnectionModel::Column::Container),
-            !(contWire && m_settings->showContainerColumn()));
+            !(contWire && m_settings->showContainerColumn() && !groupedByContainer));
         m_connModel->setShowContainerChainInTooltip(
             m_settings->showContainerChainInTooltip());
     }
