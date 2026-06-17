@@ -569,6 +569,14 @@ take the rest down. Run with `ctest --test-dir build --output-on-failure`.
 | **unit**          | Pure logic, no I/O, no DBus, no kernel.               | none          | `tests/`                             |
 | **integration**   | Spin up `qiftop-agent --session` + drive over DBus.   | none          | `tests/test_agent_integration.cpp`   |
 | **end-to-end**    | Real system bus, real conntrack. Manual / CI runner.  | root          | (not yet)                            |
+| **benchmark**     | `QBENCHMARK` microbenchmarks of hot paths (aggregator, filter, top-K, …). Opt-in (`QIFTOP_BUILD_BENCHMARKS=ON`), `EXCLUDE_FROM_ALL` + `DISABLED` so the default `ctest` never runs them. No new deps. | none | `bench/` |
+
+Benchmarks (`bench/`) compile the specific `src/` files they need directly
+(like the tests, not via `libqiftop`) and draw inputs from deterministic
+seeded generators in `bench/BenchData.h`. See `docs/HACKING.md` §5.8 for the
+run recipe and the current baseline numbers (used to size the resolver
+eagerness/cadence budget). Resolver/conntrack benches that need a live kernel
+are an integration-tier follow-up, not part of the pure `bench/` set.
 
 ### 6.2 What's currently covered
 
