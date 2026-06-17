@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Transport-neutral backend capabilities** — capability tokens
+  (`process-attribution-wire`, `ifindex`, `direction-on-wire`, …) are no
+  longer an agent-only thing. The abstract `NetworkMonitor` /
+  `ConnectionMonitor` interfaces gained a `capabilities()` method, and each
+  backend now reports what *it* actually delivers: the DBus proxy carries
+  the agent's advertised list, the in-process Linux backends report their
+  structural tokens (`NetlinkMonitor` → `ifindex`/`oper-state`/`link-errors`,
+  `ConntrackMonitor` → `iana-proto`/`tcp-state` — no resolver, so no
+  attribution), and the in-process BSD backends report theirs (including
+  `process-attribution-wire`, plus `container-attribution-wire` for FreeBSD
+  jails). The GUI/TUI now gate the Process/Container columns on the UNION of
+  the active backend's capabilities instead of on agent presence — so those
+  columns finally light up when running in-process on BSD, where the backend
+  genuinely attributes. Client-side only: **no DBus wire, `Version`,
+  `Capabilities`-property, or token-name changes** — the agent's contract is
+  byte-for-byte unchanged.
+
+### Changed
+- The connections **Process / Container column gate dropped its `usingAgent`
+  precondition** — it's now `wireToken && userPref && !groupedByThatKey`,
+  where `wireToken` comes from the transport-neutral backend cap set. The
+  About dialog and status-bar tooltip show the active backend's capabilities
+  (not just the agent's); `MainWindow::m_agentCaps` was renamed
+  `m_backendCaps` for honesty.
+
 - **nqiftop Process & Container columns** — the ncurses TUI's Connections
   view now grows real Process (`comm [pid]`, or the attribution reason for
   unattributed flows) and Container (`runtime:name`) columns, reaching

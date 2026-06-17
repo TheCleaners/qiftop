@@ -194,16 +194,19 @@ private:
     // the GUI's Settings::sortWithinGroups.
     bool m_sortWithinGroups = true;
     // Optional attribution columns (Connections). Default ON like the GUI, but
-    // effective only when the agent advertises the matching wire capability and
-    // the column isn't made redundant by the active grouping.
+    // effective only when the ACTIVE backend advertises the matching wire
+    // capability and the column isn't made redundant by the active grouping.
     bool m_showProcessColumn   = true;
     bool m_showContainerColumn = true;
-    // Backend + capability state, set by main via setBackendInfo(). In-process
-    // capture reports no caps, so the optional columns stay hidden (GUI parity).
+    // Backend + capability state, set by main via setBackendInfo(). m_backendCaps
+    // is the transport-neutral union of the active backend's tokens (agent proxy
+    // OR in-process): the in-process Linux conntrack path reports none so the
+    // optional columns stay hidden, while in-process BSD attributes and lights
+    // them up — no agent-presence axis.
     bool        m_usingAgent = false;
-    QStringList m_agentCaps;
-    bool        m_procWire   = false; // m_usingAgent && caps has process-attribution-wire
-    bool        m_contWire   = false; // m_usingAgent && caps has container-attribution-wire
+    QStringList m_backendCaps;
+    bool        m_procWire   = false; // backendCaps has process-attribution-wire
+    bool        m_contWire   = false; // backendCaps has container-attribution-wire
     int  m_pollMs         = 1000;
     std::function<void(int)> m_applyPollMs;  // set by main (owns the monitors)
     // On-demand process details (exe/cmdline/cwd), fetched lazily from the

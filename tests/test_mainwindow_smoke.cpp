@@ -354,6 +354,49 @@ private slots:
                  "Container column not restored after leaving the container grouping");
     }
 
+    // The converse of the above, and the whole point of transport-neutral
+    // capabilities: with an IN-PROCESS backend (usingAgent=false) that
+    // advertises the attribution wire tokens — exactly what the BSD
+    // BsdConnectionMonitor does — the Process/Container columns MUST show.
+    // This proves the gate keys off the active backend's capability set, not
+    // off agent presence: the old `usingAgent && caps.contains(...)` framing
+    // is gone.
+    void attributionColumnsShowOnInProcessBackendWithCaps()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        settings.setShowProcessColumn(true);
+        settings.setShowContainerColumn(true);
+
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        // usingAgent=false (in-process path) but the backend reports the
+        // attribution tokens — like the in-process BSD backend.
+        w.setBackendInfo(false, QString(),
+                         QStringList{
+                             QStringLiteral("process-attribution-wire"),
+                             QStringLiteral("container-attribution-wire"),
+                         });
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *connView = w.findChild<QTreeView*>(QStringLiteral("connView"));
+        QVERIFY(connView);
+        const int processCol =
+            static_cast<int>(ConnectionModel::Column::Process);
+        const int containerCol =
+            static_cast<int>(ConnectionModel::Column::Container);
+        QVERIFY2(!connView->isColumnHidden(processCol),
+                 "Process column hidden on in-process backend that advertises "
+                 "process-attribution-wire (agent-only assumption still present?)");
+        QVERIFY2(!connView->isColumnHidden(containerCol),
+                 "Container column hidden on in-process backend that advertises "
+                 "container-attribution-wire");
+    }
+
     // Unattributed flows carry a server-side reason; the Process column must
     // render a colour-coded synthetic label ("— forwarded —", etc.) rather
     // than a bare dash, so router/NAT traffic isn't mistaken for an

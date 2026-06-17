@@ -22,6 +22,14 @@ public:
     void stop()  override;
     void setPollIntervalMs(int ms) override;
 
+    // The getifaddrs(3) AF_LINK path fills ifIndex (if_nametoindex),
+    // operState (mapped from ifi_link_state), and the rx/tx error+drop
+    // counters from `struct if_data` (txDropped stays 0 — BSD has no
+    // output-drop counter, but the rest are real). So we advertise the same
+    // interface tokens as the Linux NetlinkMonitor — the GUI/TUI light up
+    // the same columns on BSD.
+    [[nodiscard]] QStringList capabilities() const override;
+
 private:
     QThread          m_thread;
     BsdNetworkWorker *m_worker = nullptr; // owned by m_thread

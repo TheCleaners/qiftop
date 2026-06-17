@@ -22,7 +22,7 @@ class SettingsDialog : public QDialog {
 
 public:
     explicit SettingsDialog(Settings *settings,
-                            const QStringList &agentCapabilities = {},
+                            const QStringList &backendCapabilities = {},
                             QWidget *parent = nullptr);
 
 private slots:
@@ -30,7 +30,9 @@ private slots:
 
 private:
     Settings *m_settings;
-    QStringList m_agentCaps;
+    // Transport-neutral capability tokens of the ACTIVE backend (agent proxy
+    // or in-process). Gates the attribution toggles — no agent-presence axis.
+    QStringList m_backendCaps;
 
     QSpinBox  *m_pollIntervalSpin = nullptr;
     QSpinBox  *m_staleRetentionSpin = nullptr;

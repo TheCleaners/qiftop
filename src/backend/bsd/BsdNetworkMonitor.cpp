@@ -44,4 +44,13 @@ void BsdNetworkMonitor::setPollIntervalMs(int ms)
                               Qt::QueuedConnection, Q_ARG(int, ms));
 }
 
+QStringList BsdNetworkMonitor::capabilities() const
+{
+    return {
+        QStringLiteral("ifindex"),
+        QStringLiteral("oper-state"),
+        QStringLiteral("link-errors"),
+    };
+}
+
 } // namespace qiftop::backend::bsd

@@ -24,6 +24,16 @@ public:
     void stop()  override;
     void setPollIntervalMs(int ms) override;
 
+    // The libpcap/BPF path fills proto (iana-proto) and a real per-flow
+    // direction (direction-on-wire — observed from the TCP SYN, or
+    // inferDirection() fallback). It attributes flows to a PID via
+    // BsdSocketResolver (process-attribution-wire) and, on FreeBSD,
+    // tags jailed flows runtime:jail (container-attribution-wire, gated by
+    // #ifdef __FreeBSD__). It does NOT advertise tcp-state (pcap has no
+    // conntrack state machine), container-chain-wire (no nesting model),
+    // or attribution-reason (inferred client-side).
+    [[nodiscard]] QStringList capabilities() const override;
+
 private:
     QThread              m_thread;
     BsdConnectionWorker *m_worker = nullptr; // owned by m_thread

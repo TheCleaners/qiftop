@@ -1512,13 +1512,15 @@ void TuiApp::setBackendInfo(bool usingAgent, const QString &version,
                             const QStringList &caps)
 {
     m_usingAgent = usingAgent;
-    m_agentCaps  = caps;
-    // Optional columns are gated on the agent's wire tokens — in-process
-    // capture advertises nothing, so they stay hidden (GUI parity). Without
-    // the token the columns would render "—"/"(host)" everywhere, which is
-    // misleading rather than helpful.
-    m_procWire = usingAgent && caps.contains(QStringLiteral("process-attribution-wire"));
-    m_contWire = usingAgent && caps.contains(QStringLiteral("container-attribution-wire"));
+    m_backendCaps = caps;
+    // Optional columns are gated on the ACTIVE backend's wire tokens —
+    // transport-neutral, NOT agent-only. The in-process Linux conntrack path
+    // advertises none (no resolver) and they stay hidden; the in-process BSD
+    // path DOES attribute, so they light up just like the agent. No
+    // `usingAgent` precondition. Without the token the columns would render
+    // "—"/"(host)" everywhere, which is misleading rather than helpful.
+    m_procWire = caps.contains(QStringLiteral("process-attribution-wire"));
+    m_contWire = caps.contains(QStringLiteral("container-attribution-wire"));
     Q_UNUSED(version);
     requestRedraw();
 }
@@ -1604,7 +1606,7 @@ void TuiApp::handleFieldsKey(int key)
         if (sel.hideable && sel.available)
             toggleOptionalColumn(sel.id);
         else if (sel.hideable && !sel.available)
-            flashMessage(QStringLiteral("%1 needs the agent's %2 capability")
+            flashMessage(QStringLiteral("%1 needs the backend's %2 capability")
                              .arg(sel.title,
                                   sel.id == ColumnId::Container
                                       ? QStringLiteral("container-attribution-wire")

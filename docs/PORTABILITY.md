@@ -475,6 +475,26 @@ cleanly to in-process when no bus/agent is present (verified: no DBus warnings
 on a NetBSD box with no session/system bus). A future BSD privileged agent
 should consider a non-DBus IPC (or make DBus strictly optional).
 
+### 7.8a In-process capabilities light up the attribution UI
+
+Capabilities are **transport-neutral** (AGENTS.md §4): each backend reports
+the tokens its own data path delivers via `NetworkMonitor::capabilities()` /
+`ConnectionMonitor::capabilities()`, and the GUI/TUI gate the
+Process/Container columns on the UNION of the active monitors — there's no
+"agent only" assumption. This matters most on BSD: the in-process
+`BsdConnectionMonitor` genuinely attributes flows (via `BsdSocketResolver`),
+so it advertises `iana-proto`, `direction-on-wire`, and
+`process-attribution-wire` — plus `container-attribution-wire` on FreeBSD
+(jailed flows tagged `runtime:jail`, `#ifdef __FreeBSD__`). `BsdNetworkMonitor`
+advertises `ifindex` / `oper-state` / `link-errors`. The upshot: run `qiftop`
+or `nqiftop` in-process on FreeBSD and the Process (and jail Container)
+columns appear **without any agent** — exactly the tokens cross-referenced in
+the §4 capability table. What BSD does NOT advertise: `tcp-state` (pcap has no
+conntrack state machine) and `container-chain-wire` (no nesting model). The
+in-process *Linux* conntrack path, by contrast, has no resolver and so
+advertises only `iana-proto` / `tcp-state` — its attribution columns stay
+hidden, which is correct.
+
 ### 7.9 What's portable vs OS-specific (for the next BSD)
 
 * Portable as-is across all BSDs: the `getifaddrs` interface backend, the

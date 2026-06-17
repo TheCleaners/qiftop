@@ -21,6 +21,12 @@ public:
     void stop()  override;
     void setPollIntervalMs(int ms) override;
 
+    // In-process interface stats genuinely fill ifIndex, operState, and the
+    // rx/tx error+drop counters (see NetlinkWorker.cpp), so we advertise
+    // those structural tokens — making the GUI/TUI treat the in-process path
+    // as a first-class capability source, not "agent only".
+    [[nodiscard]] QStringList capabilities() const override;
+
 private:
     QThread       m_thread;
     NetlinkWorker *m_worker = nullptr; // owned by m_thread

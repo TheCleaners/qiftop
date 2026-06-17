@@ -14,6 +14,7 @@
 #include "util/HandoffClient.h"
 #include "util/Logging.h"
 
+#include "backend/MonitorCapabilities.h"
 #include "backend/dbus/DBusConnectionMonitor.h"
 #include "backend/dbus/DBusNetworkMonitor.h"
 
@@ -172,7 +173,12 @@ int main(int argc, char *argv[])
         qCInfo(lcVerbose) << "main: using DBus agent" << kAgentBusName
                           << "version=" << probe.version
                           << "caps=" << probe.capabilities;
-        netMonitor  = std::make_unique<qiftop::backend::dbus_client::DBusNetworkMonitor>();
+        auto net  = std::make_unique<qiftop::backend::dbus_client::DBusNetworkMonitor>();
+        // The agent publishes ONE merged Capabilities list; let it ride on the
+        // network proxy (probeAgent() already fetched it — no re-fetch). The
+        // connection proxy reports empty; the client's union recombines them.
+        net->setAgentCapabilities(probe.capabilities);
+        netMonitor  = std::move(net);
         connMonitor = std::make_unique<qiftop::backend::dbus_client::DBusConnectionMonitor>();
     } else {
 #ifdef BACKEND_LINUX
@@ -188,8 +194,15 @@ int main(int argc, char *argv[])
 #endif
     }
 
+    // Capabilities are a transport-neutral property of the ACTIVE backend:
+    // the union of what the two live monitors advertise, regardless of whether
+    // that's the DBus agent proxy or an in-process Linux/BSD backend. The GUI
+    // gates attribution-only UI on this set — not on agent presence.
+    const QStringList backendCaps =
+        qiftop::backend::mergeCapabilities(netMonitor.get(), connMonitor.get());
+
     MainWindow window(&settings, netMonitor.get(), connMonitor.get(), &dns);
-    window.setBackendInfo(useAgent, probe.version, probe.capabilities);
+    window.setBackendInfo(useAgent, probe.version, backendCaps);
     // If we're on the DBus path, forward the agent's CadenceChanged signal
     // into the UI so the status bar can tint when the agent slows/pauses.
     if (useAgent) {

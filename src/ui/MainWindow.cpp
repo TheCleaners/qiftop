@@ -782,16 +782,20 @@ void MainWindow::applySettingsToUi()
             static_cast<int>(ConnectionModel::Column::RxMax), !showMax);
         m_connView->setColumnHidden(
             static_cast<int>(ConnectionModel::Column::TxMax), !showMax);
-        // Attribution columns: visibility driven by Settings, but only
-        // when the connected agent actually carries the matching wire
-        // tokens. Without them the columns would just render "—" /
-        // "(host)" everywhere, which is misleading rather than helpful.
-        // Also suppress the column that the active grouping already makes
-        // redundant — when grouped By Process the Process value lives in
-        // the group header, likewise By Container for the Container column.
-        const bool procWire = m_agentCaps.contains(
+        // Attribution columns: visibility driven by Settings, but only when
+        // the ACTIVE backend actually carries the matching wire tokens —
+        // transport-neutral, so the in-process BSD backend (which attributes)
+        // lights these up just like the agent does, and the in-process Linux
+        // conntrack backend (no resolver) keeps them hidden. No `usingAgent`
+        // precondition: the gate is wireToken && userPref && !groupedByThatKey.
+        // Without the token the columns would just render "—" / "(host)"
+        // everywhere, which is misleading rather than helpful. Also suppress
+        // the column that the active grouping already makes redundant — when
+        // grouped By Process the Process value lives in the group header,
+        // likewise By Container for the Container column.
+        const bool procWire = m_backendCaps.contains(
             QStringLiteral("process-attribution-wire"));
-        const bool contWire = m_agentCaps.contains(
+        const bool contWire = m_backendCaps.contains(
             QStringLiteral("container-attribution-wire"));
         const auto viewMode = m_settings->connectionViewMode();
         const bool groupedByProcess =
@@ -1017,14 +1021,16 @@ void MainWindow::showAboutDialog()
     }
 
     QString capsLine;
-    if (m_usingAgent && !m_agentCaps.isEmpty()) {
+    if (!m_backendCaps.isEmpty()) {
         // Capability tokens are stable identifiers; render in monospace so
-        // they're easy to copy/paste into bug reports.
+        // they're easy to copy/paste into bug reports. These are the ACTIVE
+        // backend's tokens (agent or in-process), so the in-process BSD path
+        // shows its attribution tokens here too — not just the agent.
         QStringList esc;
-        esc.reserve(m_agentCaps.size());
-        for (const QString &t : m_agentCaps)
+        esc.reserve(m_backendCaps.size());
+        for (const QString &t : m_backendCaps)
             esc << t.toHtmlEscaped();
-        capsLine = tr("<p>Agent capabilities:<br>"
+        capsLine = tr("<p>Backend capabilities:<br>"
                       "<code style=\"font-size:small\">%1</code></p>")
                        .arg(esc.join(QStringLiteral(", ")));
     }
@@ -1216,7 +1222,7 @@ void MainWindow::togglePaused(bool paused)
 
 void MainWindow::openSettingsDialog()
 {
-    SettingsDialog dlg(m_settings, m_agentCaps, this);
+    SettingsDialog dlg(m_settings, m_backendCaps, this);
     dlg.exec();
 }
 
@@ -1685,7 +1691,7 @@ void MainWindow::setBackendInfo(bool usingAgent,
 {
     m_usingAgent   = usingAgent;
     m_agentVersion = version;
-    m_agentCaps    = caps;
+    m_backendCaps  = caps;
     if (m_statusBackend) {
         if (usingAgent) {
             const QString shown = version.isEmpty() ? tr("(legacy)") : version;
@@ -1697,9 +1703,15 @@ void MainWindow::setBackendInfo(bool usingAgent,
             m_statusBackend->setToolTip(tip);
         } else {
             m_statusBackend->setText(tr("in-process"));
-            m_statusBackend->setToolTip(tr("qiftop-agent unavailable; using the "
-                                           "in-process Netlink/conntrack backend. "
-                                           "Some flows may be hidden without CAP_NET_ADMIN."));
+            // Surface the in-process backend's own capability tokens too —
+            // they're transport-neutral now, so this isn't an agent-only field.
+            const QString base = tr("qiftop-agent unavailable; using the "
+                                    "in-process backend. Some flows may be "
+                                    "hidden without elevated privileges.");
+            m_statusBackend->setToolTip(
+                caps.isEmpty()
+                    ? base
+                    : tr("%1\nCapabilities: %2").arg(base, caps.join(QStringLiteral(", "))));
         }
         // Reset any cadence-degradation tint left over from a previous state.
         m_statusBackend->setStyleSheet(QString());

@@ -44,3 +44,17 @@ void NetlinkMonitor::setPollIntervalMs(int ms)
     QMetaObject::invokeMethod(m_worker, "setPollIntervalMs",
                               Qt::QueuedConnection, Q_ARG(int, ms));
 }
+
+QStringList NetlinkMonitor::capabilities() const
+{
+    // NetlinkWorker fills InterfaceStats.ifIndex (rtnl_link_get_ifindex),
+    // operState (rtnl_link_get_operstate), and the rx/tx error+drop counters
+    // (RTNL_LINK_{RX,TX}_{ERRORS,DROPPED}). Each of those maps 1:1 onto a
+    // capability token, so we honestly advertise all three. We do NOT claim
+    // any connection-side token — that's ConntrackMonitor's job.
+    return {
+        QStringLiteral("ifindex"),
+        QStringLiteral("oper-state"),
+        QStringLiteral("link-errors"),
+    };
+}

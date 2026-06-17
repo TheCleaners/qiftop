@@ -20,6 +20,15 @@ public:
     void stop()  override;
     void setDesiredIntervalMs(int ms) override;
 
+    // Transport-neutral capabilities for the DBus path. The agent publishes
+    // ONE merged Capabilities list on the Interfaces service, so the network
+    // proxy carries the whole thing and the connection proxy returns empty
+    // (the client's union recombines them). main.cpp seeds this right after
+    // probeAgent() — which already fetched the property — instead of having
+    // the proxy re-fetch it.
+    void setAgentCapabilities(QStringList caps) { m_caps = std::move(caps); }
+    [[nodiscard]] QStringList capabilities() const override { return m_caps; }
+
 signals:
     // Mirrors the agent's CadenceChanged DBus signal: emitted whenever the
     // agent's effective poll interval changes (sped up, slowed down, or
@@ -39,6 +48,7 @@ private:
     bool m_useSessionBus = false;
     bool m_started       = false;
     int  m_desiredMs     = 0; // last hint we sent (also acts as heartbeat value)
+    QStringList m_caps;       // agent's merged Capabilities list (seeded by main)
 };
 
 } // namespace qiftop::backend::dbus_client

@@ -45,4 +45,22 @@ void BsdConnectionMonitor::setPollIntervalMs(int ms)
                               Qt::QueuedConnection, Q_ARG(int, ms));
 }
 
+QStringList BsdConnectionMonitor::capabilities() const
+{
+    // Structural + attribution tokens the BSD capture path actually
+    // delivers. process-attribution-wire is unconditional (BsdSocketResolver
+    // attributes a PID on every BSD); container-attribution-wire is
+    // FreeBSD-only (jail tagging) — there is no container model on the other
+    // BSDs, so don't advertise a token we can't back up.
+    QStringList caps{
+        QStringLiteral("iana-proto"),
+        QStringLiteral("direction-on-wire"),
+        QStringLiteral("process-attribution-wire"),
+    };
+#ifdef __FreeBSD__
+    caps << QStringLiteral("container-attribution-wire");
+#endif
+    return caps;
+}
+
 } // namespace qiftop::backend::bsd
