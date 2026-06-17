@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QStringList>
 
 #include "Connection.h"
 #include "ProcessDetails.h"
@@ -33,6 +34,16 @@ public:
     // client backend overrides this to call the agent's
     // Connections.GetProcessDetails(pid) RPC.
     virtual void requestProcessDetails(qint32 /*pid*/) {}
+
+    // Capability tokens this backend's data path actually provides, in the
+    // SAME vocabulary as the agent's DBus `Capabilities` property
+    // (AGENTS.md §4). Transport-neutral: the DBus proxy lets the merged
+    // agent list ride on the Interfaces monitor and returns empty here; an
+    // in-process backend reports the per-flow tokens it genuinely fills
+    // (e.g. iana-proto / tcp-state, plus *-attribution-wire only when a
+    // resolver is actually wired). The client unions this with the
+    // NetworkMonitor's list. Only advertise tokens for data you deliver.
+    [[nodiscard]] virtual QStringList capabilities() const { return {}; }
 
 signals:
     void connectionsUpdated(QList<Connection> connections);

@@ -120,6 +120,13 @@ dist/
    `dbus/` and the abstract `backend/*.h` interfaces must compile on
    any Qt 6 target. See `docs/PORTABILITY.md` for the full survey of
    what each target OS would need.
+7. **Backend capabilities live on the abstract monitor interface.**
+   `NetworkMonitor::capabilities()` / `ConnectionMonitor::capabilities()`
+   (default empty) are the transport-neutral way each backend reports what
+   its data path delivers, in the agent's DBus token vocabulary (§4). The
+   client-side union helper is the header-only `backend/MonitorCapabilities.h`.
+   This stays in the abstract `backend/` layer — Widgets-free, no platform
+   headers — so every frontend gates UI the same way regardless of transport.
 
 ### libqiftop and future direction
 
@@ -344,6 +351,47 @@ older agents. Tokens currently emitted:
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.
+
+#### Capabilities are transport-neutral (client side)
+
+The token *vocabulary* above is the agent's DBus contract, but capabilities
+themselves are a property of the **active backend**, not of "the agent". On
+the client, `NetworkMonitor::capabilities()` / `ConnectionMonitor::capabilities()`
+(abstract methods on the `backend/` interfaces, default empty) let each
+monitor report the tokens **its own data path actually delivers**, in this
+exact vocabulary. The GUI/TUI gate optional UI (Process/Container columns,
+the Settings attribution toggles) on the **UNION** of the two live monitors'
+capabilities — regardless of whether that's the DBus agent proxy or an
+in-process backend. There is no `usingAgent` precondition anymore.
+
+How each transport fills it:
+
+* **DBus proxy** — the agent publishes ONE merged `Capabilities` list on the
+  Interfaces service. `DBusNetworkMonitor::capabilities()` returns that list
+  (seeded once by `main.cpp` right after `probeAgent()`, via
+  `setAgentCapabilities()` — no re-fetch); `DBusConnectionMonitor` returns
+  empty and the client's union recombines them.
+* **In-process Linux** — `NetlinkMonitor` advertises `ifindex` / `oper-state`
+  / `link-errors` (the interface fields it fills). `ConntrackMonitor`
+  advertises only the structural `iana-proto` / `tcp-state`; it has **no
+  resolver**, so it MUST NOT advertise any `*-attribution-wire` token, and it
+  does NOT advertise `direction-on-wire` / `attribution-reason` (those are
+  inferred client-side, not produced in the dump).
+* **In-process BSD** — `BsdNetworkMonitor` advertises the same interface
+  tokens. `BsdConnectionMonitor` DOES attribute (via `BsdSocketResolver`), so
+  it advertises `iana-proto`, `direction-on-wire` (SYN-observed), and
+  `process-attribution-wire` — plus `container-attribution-wire` on FreeBSD
+  (jailed flows tagged `runtime:jail`, `#ifdef __FreeBSD__`). So the
+  attribution columns light up on BSD in-process, no agent required.
+
+A backend only ever advertises a token for data it genuinely produces — be
+conservative; claiming a token whose field stays empty is a bug, not a
+feature. The merge helper lives in `src/backend/MonitorCapabilities.h`
+(`mergeCapabilities`, union with first-seen order, de-duplicated). The
+agent's own `InterfacesService::capabilities()` is the **DBus transport's**
+capability source and is unchanged by all this — the wire contract is
+untouched.
+
 
 ### Wire-contract wisdom
 
@@ -624,7 +672,8 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
 | `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
-| `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. |
+| `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. Includes both sides of the transport-neutral cap gate: `processColumnHiddenWithoutWireCapability` (no token ⇒ hidden) and `attributionColumnsShowOnInProcessBackendWithCaps` (in-process backend, `usingAgent=false`, advertising the tokens ⇒ shown). |
+| `test_backend_capabilities` | Transport-neutral `NetworkMonitor::capabilities()` / `ConnectionMonitor::capabilities()` contract: the `mergeCapabilities` union helper (dedup + first-seen order); the DBus proxies (agent's merged list rides on `DBusNetworkMonitor`, `DBusConnectionMonitor` empty, union == agent list); in-process Linux `NetlinkMonitor` (`ifindex`/`oper-state`/`link-errors`) and `ConntrackMonitor` (only `iana-proto`/`tcp-state`, NO `*-attribution-wire`/`direction-on-wire`/`attribution-reason`); plus compile-guarded BSD assertions (`#ifdef BACKEND_BSD`) that `BsdConnectionMonitor` advertises `process-attribution-wire` + FreeBSD-only `container-attribution-wire`. |
 | `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). **sortWithinGroups** (default true): a header click sorts only each group's children and leaves the group order at first-appearance order; toggling to classic (false) re-orders the groups by aggregated value (and back freezes at the current arrangement) — both via the persistent-index-preserving resort. Uses a tiny stub source model — no real ConnectionModel needed. |
 | `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. v0.5: `reason` (resolved/forwarded/orphaned/nosocket). |
 | `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
@@ -981,24 +1030,31 @@ can be dropped with `vagrant destroy default`.
 * **Process / Container columns are capability-gated, on by default.**
   `Column::Process` and `Column::Container` default to *shown*
   (`Settings::showProcessColumn` / `showContainerColumn` default `true`)
-  but are AND-gated on the agent's matching wire token, so they only
-  appear when attribution data is actually available; the data is
-  already on the wire, so showing them costs nothing. The Settings
+  but are AND-gated on the **active backend's** matching wire token, so
+  they only appear when attribution data is actually available; the data
+  is already on the wire (or produced in-process), so showing them costs
+  nothing. The Settings
   dialog's "Process & Container Attribution" sub-section
   (Display tab) advertises three toggles — `Settings::showProcessColumn`
   / `showContainerColumn` / `showContainerChainInTooltip` — each
-  effective only when the agent advertises the matching wire token
-  (`process-attribution-wire` / `container-attribution-wire` /
+  effective only when the active backend advertises the matching wire
+  token (`process-attribution-wire` / `container-attribution-wire` /
   `container-chain-wire`). The values persist regardless so they take
   effect when the user later runs against an attribution-capable
-  agent. `applySettingsToUi()` is the single point where the
+  backend. `applySettingsToUi()` is the single point where the
   user-pref AND the wire-token are AND-ed together to (un)hide each
   column — never `setColumnHidden()` either column outside that
   helper. The same helper ALSO suppresses the column that the active
   grouping makes redundant: grouping `ByProcess` hides the Process
   column and `ByContainer` hides the Container column (the value lives
   in the group header), so the AND-gate is
-  `wireToken && userPref && !groupedByThatKey`. Changing the grouping
+  `wireToken && userPref && !groupedByThatKey` — **note there is no
+  `usingAgent` precondition**: the token comes from the transport-neutral
+  backend cap set (`m_backendCaps`, the union of the active monitors'
+  `capabilities()`), so the in-process BSD backend — which attributes —
+  lights these columns up exactly like the agent, while the in-process
+  Linux conntrack backend (no resolver) keeps them hidden. Changing the
+  grouping
   re-runs `applySettingsToUi()` (via `Settings::changed`), so the
   column hides/restores live. The header right-click menu's Process / Container entries
   are routed through `Settings::setShowProcessColumn` /
@@ -1007,16 +1063,21 @@ can be dropped with `vagrant destroy default`.
   persisted setting AND triggers `applySettingsToUi()` — the AND-gate
   still applies. Without the wire token a header-menu toggle persists
   the user's preference but the column remains hidden until a
-  capable agent is detected; the checkbox in the menu reflects the
+  capable backend is detected; the checkbox in the menu reflects the
   ACTUAL visibility (it stays unchecked), not the persisted setting.
   Pinned end-to-end by
-  `test_mainwindow_smoke::processColumnHiddenWithoutWireCapability`.
+  `test_mainwindow_smoke::processColumnHiddenWithoutWireCapability`
+  (no token ⇒ hidden) and
+  `attributionColumnsShowOnInProcessBackendWithCaps` (in-process backend
+  WITH the tokens ⇒ shown, proving the agent-only assumption is gone).
   The `nqiftop` TUI now reaches the same parity for real: it has its own
   capability-gated Process / Container columns (default-on, same
   `wireToken && userPref && !groupedByThatKey` gate as the GUI). The
-  agent's caps reach the TUI via a `main.cpp`-side `AgentProbe` →
-  `TuiApp::setBackendInfo`; in-process fallback advertises nothing so the
-  columns stay hidden. `TuiFormat::columnsFor(View, OptionalColumns,
+  active backend's caps reach the TUI via a `main.cpp`-side
+  `mergeCapabilities(netMon, connMon)` → `TuiApp::setBackendInfo`;
+  in-process Linux advertises no attribution token so the
+  columns stay hidden, in-process BSD advertises them so they show.
+  `TuiFormat::columnsFor(View, OptionalColumns,
   GroupBy)` builds the active column list and applies the
   grouped-redundancy rule (drop Process under GroupBy::Process, Container
   under GroupBy::Container); `cellsForConnection` / `groupHeaderCells`

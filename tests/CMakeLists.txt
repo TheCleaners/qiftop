@@ -195,6 +195,13 @@ target_link_libraries(test_mainwindow_smoke PRIVATE qiftop_ui Qt6::Widgets)
 target_include_directories(test_mainwindow_smoke PRIVATE
     ${CMAKE_SOURCE_DIR}/tests)
 
+# Transport-neutral backend capabilities: each monitor reports the tokens its
+# own data path delivers, the client gates UI on the union. Links qiftoplib,
+# which transitively pulls in the DBus proxies + the platform backend
+# (backend_linux / backend_bsd) and sets the BACKEND_<PLATFORM> define.
+qiftop_add_test(test_backend_capabilities test_backend_capabilities.cpp)
+target_link_libraries(test_backend_capabilities PRIVATE qiftoplib Qt6::DBus)
+
 qiftop_add_test(test_group_proxy
     test_group_proxy.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/ConnectionGroupProxy.cpp

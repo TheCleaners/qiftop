@@ -22,6 +22,15 @@ public:
     void stop()  override;
     void setPollIntervalMs(int ms) override;
 
+    // In-process conntrack capture genuinely fills the IANA proto and the
+    // TCP conntrack state, so we advertise those structural tokens. We do
+    // NOT advertise direction-on-wire or attribution-reason: those are NOT
+    // computed in-process here (the client/aggregator infers direction and
+    // reason locally from the flow + local-address set). And with NO
+    // resolver wired, we MUST NOT claim any *-attribution-wire token — the
+    // pid/uid/comm/container fields are never populated on this path.
+    [[nodiscard]] QStringList capabilities() const override;
+
 private:
     class Worker;
 

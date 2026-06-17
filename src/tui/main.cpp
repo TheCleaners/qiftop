@@ -27,6 +27,7 @@
 #include "aggregate/ConnectionAggregator.h"
 #include "aggregate/InterfaceAggregator.h"
 #include "backend/ConnectionMonitor.h"
+#include "backend/MonitorCapabilities.h"
 #include "backend/NetworkMonitor.h"
 #include "backend/PlatformInfo.h"
 #include "backend/dbus/DBusConnectionMonitor.h"
@@ -197,7 +198,12 @@ int main(int argc, char *argv[])
     const AgentProbe agent = parser.isSet(noAgentOpt) ? AgentProbe{} : probeAgent(sessionBus);
     const bool useAgent = agent.reachable;
     if (useAgent) {
-        netMon  = std::make_unique<DBusNetworkMonitor>(sessionBus);
+        auto net = std::make_unique<DBusNetworkMonitor>(sessionBus);
+        // Agent publishes one merged Capabilities list; let it ride on the
+        // network proxy (probeAgent already fetched it). The connection proxy
+        // reports empty; the union below recombines them.
+        net->setAgentCapabilities(agent.capabilities);
+        netMon  = std::move(net);
         connMon = std::make_unique<DBusConnectionMonitor>(sessionBus);
         sourceLabel = sessionBus ? QStringLiteral("agent (session)")
                                  : QStringLiteral("agent");
@@ -263,9 +269,13 @@ int main(int argc, char *argv[])
                             parser.isSet(viewOpt) ? parser.value(viewOpt) : QString(),
                             parser.isSet(groupOpt) ? parser.value(groupOpt) : QString());
 
-    // Gate the optional Process/Container columns on the agent's wire tokens
-    // (in-process capture advertises nothing → columns stay hidden, GUI parity).
-    tui.setBackendInfo(useAgent, agent.version, agent.capabilities);
+    // Gate the optional Process/Container columns on the ACTIVE backend's wire
+    // tokens — transport-neutral. The in-process Linux conntrack path
+    // advertises none (no resolver) → columns stay hidden; in-process BSD
+    // attributes → they light up just like the agent.
+    const QStringList backendCaps =
+        qiftop::backend::mergeCapabilities(netMon.get(), connMon.get());
+    tui.setBackendInfo(useAgent, agent.version, backendCaps);
 
     // The monitors live here, so give the controller a way to push a new poll
     // interval (chosen at runtime in Settings) down to the data source. This

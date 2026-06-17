@@ -32,11 +32,11 @@ QWidget *makeFormTab(QFormLayout *&form)
 } // namespace
 
 SettingsDialog::SettingsDialog(Settings *settings,
-                               const QStringList &agentCapabilities,
+                               const QStringList &backendCapabilities,
                                QWidget *parent)
     : QDialog(parent)
     , m_settings(settings)
-    , m_agentCaps(agentCapabilities)
+    , m_backendCaps(backendCapabilities)
 {
     setWindowTitle(tr("Preferences"));
     setModal(true);
@@ -235,16 +235,18 @@ SettingsDialog::SettingsDialog(Settings *settings,
     syncThroughputEnabled();
 
     // --- Process & Container Attribution (display section) ----------------
-    // Gated by the agent's *-attribution-wire capability tokens: clients
-    // talking to an old agent or to the in-process fallback (no resolver)
-    // see the toggles disabled with an explanatory tooltip — the values
-    // still persist so they take effect when the user later runs against
-    // an attribution-capable agent.
-    const bool hasProcessWire   = m_agentCaps.contains(
+    // Gated by the ACTIVE backend's *-attribution-wire capability tokens
+    // (transport-neutral): an old agent, or the in-process Linux conntrack
+    // fallback (no resolver), advertises none and the toggles disable with an
+    // explanatory tooltip — but the in-process BSD backend DOES attribute, so
+    // it lights these up just like the agent. The values still persist so they
+    // take effect when the user later runs against an attribution-capable
+    // backend.
+    const bool hasProcessWire   = m_backendCaps.contains(
         QStringLiteral("process-attribution-wire"));
-    const bool hasContainerWire = m_agentCaps.contains(
+    const bool hasContainerWire = m_backendCaps.contains(
         QStringLiteral("container-attribution-wire"));
-    const bool hasChainWire     = m_agentCaps.contains(
+    const bool hasChainWire     = m_backendCaps.contains(
         QStringLiteral("container-chain-wire"));
 
     auto *sep2 = new QFrame;
@@ -256,9 +258,9 @@ SettingsDialog::SettingsDialog(Settings *settings,
     displayForm->addRow(attribHeader);
 
     const QString offTip = tr(
-        "The connected agent does not advertise this capability — "
+        "The active backend does not advertise this capability — "
         "the column would be empty. The setting still persists and "
-        "will take effect when the agent supports it.");
+        "will take effect when the backend supports it.");
 
     m_showProcessColumnBox = new QCheckBox(tr("Show Process column"));
     m_showProcessColumnBox->setChecked(m_settings->showProcessColumn());

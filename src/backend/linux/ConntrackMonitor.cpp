@@ -497,4 +497,16 @@ void ConntrackMonitor::setPollIntervalMs(int ms)
                               Qt::QueuedConnection, Q_ARG(int, ms));
 }
 
+QStringList ConntrackMonitor::capabilities() const
+{
+    // Structural tokens the conntrack dump actually delivers: proto (mapped
+    // to IANA on the wire / kept as L4Proto in-process) and the TCP
+    // conntrack state (ATTR_TCP_STATE). Direction and reason are inferred
+    // client-side, not here, and there's no resolver so no attribution.
+    return {
+        QStringLiteral("iana-proto"),
+        QStringLiteral("tcp-state"),
+    };
+}
+
 #include "ConntrackMonitor.moc"

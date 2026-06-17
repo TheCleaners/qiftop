@@ -3,6 +3,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 struct InterfaceStats {
     QString     name;
@@ -60,6 +61,17 @@ public:
     // hint and also functions as an activity heartbeat so the agent's idle
     // manager doesn't decide we've gone away.
     virtual void setDesiredIntervalMs(int /*ms*/) {}
+
+    // Capability tokens this backend's data path actually provides, in the
+    // SAME vocabulary as the agent's DBus `Capabilities` property
+    // (AGENTS.md §4). Capabilities are a TRANSPORT-NEUTRAL property of the
+    // active backend, not an agent-only concept: the DBus proxy reports the
+    // agent's advertised list, while in-process backends report the tokens
+    // their own data path delivers. The client gates optional UI on the
+    // UNION of the active monitors' capabilities, regardless of transport.
+    // Default empty so backends that produce nothing extra are unaffected.
+    // Only ever advertise a token for data this backend genuinely fills.
+    [[nodiscard]] virtual QStringList capabilities() const { return {}; }
 
 signals:
     // Emitted (from worker thread, queued) at each polling interval.

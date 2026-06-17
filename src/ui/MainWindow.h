@@ -49,22 +49,24 @@ public:
     // forwarding the tray's user actions through the IPC channel instead.
     void prepareProxyMode(util::HandoffServer *server);
 
-    // Called by main.cpp once the data source is chosen so the status bar
-    // can show whether we're consuming the privileged DBus agent (and which
+    // Called by main.cpp once the data source is chosen so the status bar can
+    // show whether we're consuming the privileged DBus agent (and which
     // version of its contract) or running the in-process fallback. `version`
-    // and `caps` are empty for the in-process path and for pre-property
-    // agents; the label degrades gracefully.
+    // is empty for the in-process path and for pre-property agents. `caps` is
+    // the TRANSPORT-NEUTRAL union of the active backend's capabilities (agent
+    // proxy OR in-process backend) — it gates attribution-only UI regardless
+    // of transport; `usingAgent` only drives the cosmetic status-bar label.
     void setBackendInfo(bool usingAgent,
                         const QString     &version,
                         const QStringList &caps);
 
-    // Returns the agent metadata captured by setBackendInfo(). Used by the
-    // Help → About dialog so it can show "Connected to qiftop-agent vX.Y"
-    // alongside the application version. Empty fields when running on the
-    // in-process backend (or against a pre-property agent).
-    [[nodiscard]] bool        usingAgent()        const { return m_usingAgent; }
-    [[nodiscard]] QString     agentVersion()      const { return m_agentVersion; }
-    [[nodiscard]] QStringList agentCapabilities() const { return m_agentCaps; }
+    // Returns the backend metadata captured by setBackendInfo(). Used by the
+    // Help → About dialog. `usingAgent`/`agentVersion` are agent-transport
+    // labels (empty/false in-process); `backendCapabilities` is the active
+    // backend's transport-neutral token set.
+    [[nodiscard]] bool        usingAgent()          const { return m_usingAgent; }
+    [[nodiscard]] QString     agentVersion()        const { return m_agentVersion; }
+    [[nodiscard]] QStringList backendCapabilities() const { return m_backendCaps; }
 
     // Called by main.cpp when the data source is the DBus agent and has
     // notified us of a change in its effective polling cadence (sped up,
@@ -158,11 +160,14 @@ protected:
     bool m_explicitQuit = false; // set by tray's Quit action so closeEvent exits
     bool m_proxyMode    = false; // parent is proxying for a privileged child
 
-    // Backend metadata captured by setBackendInfo() and exposed via the
-    // Help → About dialog.
+    // Backend metadata captured by setBackendInfo(). m_usingAgent/m_agentVersion
+    // are agent-transport labels for the status bar + About dialog; m_backendCaps
+    // is the transport-neutral union of the active backend's capability tokens
+    // (agent proxy OR in-process backend) and is what the attribution-column
+    // gate keys off — see applySettingsToUi().
     bool        m_usingAgent = false;
     QString     m_agentVersion;
-    QStringList m_agentCaps;
+    QStringList m_backendCaps;
 
     // Interfaces tab
     NetworkModel         *m_netModel       = nullptr;
