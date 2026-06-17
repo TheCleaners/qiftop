@@ -13,6 +13,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   build and `ctest` run. Initial coverage: the connection aggregator, the
   filter mini-language evaluator, and the top-K flow cap, with deterministic
   synthetic inputs scaling to 100k flows. See `docs/HACKING.md` §5.8.
+- **`QIFTOP_ENABLE_LTO` build option** — opt-in link-time optimization
+  (IPO/LTO) where the toolchain supports it; warns and builds without it
+  otherwise.
+- **`compile_commands.json`** is now emitted by every build
+  (`CMAKE_EXPORT_COMPILE_COMMANDS`) for editors, language servers and
+  compilation-database tooling.
 
 ## [0.3.0] - 2026-06-17
 

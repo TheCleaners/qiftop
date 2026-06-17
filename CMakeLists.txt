@@ -10,6 +10,32 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # (Executables become PIE, which is already the toolchain default.)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Emit compile_commands.json for editors / language servers (clangd, VS Code,
+# etc.). Honoured by the Makefile and Ninja generators; harmlessly ignored by
+# others. Lands at <build-dir>/compile_commands.json — point your editor at it
+# (clangd: `ln -s build/compile_commands.json .` or set CompilationDatabase).
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# --- Optional link-time optimization (IPO/LTO) ------------------------------
+# User-facing, OFF by default (LTO noticeably lengthens link time). When ON we
+# probe the toolchain via CheckIPOSupported and enable IPO globally for every
+# target (production binaries, libqiftop, and the opt-in benchmarks); an
+# unsupported toolchain warns and builds without it rather than failing.
+option(QIFTOP_ENABLE_LTO
+    "Enable link-time optimization (IPO/LTO) where the toolchain supports it" OFF)
+if(QIFTOP_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _qiftop_ipo_ok OUTPUT _qiftop_ipo_msg LANGUAGES CXX)
+    if(_qiftop_ipo_ok)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+        message(STATUS "qiftop: LTO/IPO enabled")
+    else()
+        message(WARNING
+            "qiftop: QIFTOP_ENABLE_LTO=ON but this toolchain does not support "
+            "IPO/LTO; building without it: ${_qiftop_ipo_msg}")
+    endif()
+endif()
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)

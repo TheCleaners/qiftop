@@ -160,6 +160,10 @@ cmake --build build -j$(nproc)
 The default Linux build produces `qiftop`, `qiftop-agent`, `libqiftop` and,
 when ncursesw is available, `nqiftop`.
 
+The build emits `compile_commands.json` for editors and language servers
+(clangd, VS Code). Pass `-DQIFTOP_ENABLE_LTO=ON` to enable link-time
+optimization where the toolchain supports it.
+
 ### Build dependencies (Debian/Ubuntu)
 
 ```sh
