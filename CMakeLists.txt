@@ -16,6 +16,24 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # (clangd: `ln -s build/compile_commands.json .` or set CompilationDatabase).
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# --- Optional clang-tidy static analysis ------------------------------------
+# Phase 0 is intentionally opt-in and report-only. The default build must stay
+# exactly as fast and quiet as before; flip this when you want inline compiler
+# launcher diagnostics during local iteration.
+option(QIFTOP_CLANG_TIDY
+    "Run clang-tidy inline during the build" OFF)
+if(QIFTOP_CLANG_TIDY)
+    find_program(QIFTOP_CLANG_TIDY_EXE NAMES clang-tidy)
+    if(QIFTOP_CLANG_TIDY_EXE)
+        set(CMAKE_CXX_CLANG_TIDY "${QIFTOP_CLANG_TIDY_EXE}")
+        message(STATUS "qiftop: clang-tidy inline analysis enabled (${QIFTOP_CLANG_TIDY_EXE})")
+    else()
+        message(WARNING
+            "qiftop: QIFTOP_CLANG_TIDY=ON but clang-tidy was not found; "
+            "building without inline static analysis")
+    endif()
+endif()
+
 # --- Optional link-time optimization (IPO/LTO) ------------------------------
 # User-facing, OFF by default (LTO noticeably lengthens link time). When ON we
 # probe the toolchain via CheckIPOSupported and enable IPO globally for every

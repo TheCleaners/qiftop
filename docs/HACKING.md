@@ -103,6 +103,7 @@ Useful overrides:
 | `QIFTOP_BUILD_DEMO`             | `OFF`   | Build the synthetic GUI/TUI demo harnesses under `docs/demo/`. |
 | `QIFTOP_BUILD_ATTRIBUTION_INTEGRATION` | `OFF` | Build Tier-2 runtime attribution tests. Requires root + container runtimes; leave off for normal dev. |
 | `QIFTOP_BUILD_BENCHMARKS`       | `OFF`   | Build the opt-in `bench/` QBENCHMARK harness (see §5.8). Build these in `Release` — unoptimized numbers are meaningless. |
+| `QIFTOP_CLANG_TIDY`             | `OFF`   | Run clang-tidy inline during compilation. Handy for local poking; the standalone script below is the cleaner report path. |
 | `QIFTOP_ENABLE_LTO`            | `OFF`   | Enable link-time optimization (IPO/LTO) where the toolchain supports it. Longer link times; for release/benchmark performance. Warns and builds without it on an unsupported toolchain. |
 | `QIFTOP_AUTO_PACKAGE`           | `ON`    | Run `cpack -G DEB` automatically after each agent re-link. |
 
@@ -111,6 +112,42 @@ Useful overrides:
 > by default). Point clangd / VS Code at it, e.g.
 > `ln -s build/compile_commands.json .` at the repo root. This same file is
 > what `clang-tidy` and other compilation-database tools consume.
+
+### Static analysis (clang-tidy)
+
+clang-tidy is rolling out progressively, not as a surprise boss fight.
+**Phase 0 is report-only, non-gating and opt-in**: the default build and CI
+gates stay exactly as they were, while we collect a small high-signal baseline
+from `bugprone-*`, `clang-analyzer-*`, `performance-*`, `portability-*` and
+`misc-*` (with the obvious Qt/noise traps disabled). Later phases can ratchet
+checks or turn findings into gates once the baseline is boring.
+
+Local report path:
+
+```bash
+cmake -S . -B build -G Ninja -DQIFTOP_AUTO_PACKAGE=OFF
+scripts/run-clang-tidy.sh build
+```
+
+The script consumes `<build-dir>/compile_commands.json`, filters to qiftop's
+own `src/` and `bench/` translation units, skips generated moc/autogen files,
+and exits 0 even when it finds things. `scripts/run-clang-tidy.sh --gate build`
+is reserved for a future stricter lane. On a completely fresh build tree, run
+the normal build once (or at least the relevant `*_autogen` targets) if
+clang-tidy complains about a missing included `.moc` file; Qt's generator has
+to leave those breadcrumbs before static analysis can follow them.
+
+For inline diagnostics while compiling, configure with:
+
+```bash
+cmake -S . -B build-tidy -G Ninja \
+    -DQIFTOP_CLANG_TIDY=ON \
+    -DQIFTOP_AUTO_PACKAGE=OFF
+cmake --build build-tidy --target qiftoplib
+```
+
+That path wires clang-tidy in as a compiler launcher, so it may also see Qt
+generated translation units. Useful, just less tidy than the script.
 
 The normal "build everything useful for development" configure is:
 

@@ -19,6 +19,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`compile_commands.json`** is now emitted by every build
   (`CMAKE_EXPORT_COMPILE_COMMANDS`) for editors, language servers and
   compilation-database tooling.
+- **Phase-0 clang-tidy scaffolding** — a conservative report-only config,
+  opt-in `QIFTOP_CLANG_TIDY` build hook, local wrapper script, and non-gating
+  CI report so static analysis can start boring and ratchet later.
 
 ## [0.3.0] - 2026-06-17
 

@@ -733,6 +733,10 @@ Actions runner image. `HOME` is redirected to
 `$RUNNER_TEMP/home` so QSettings/Autostart tests don't trample the
 runner user. See docs/HACKING.md §5.5 for the test-writing conventions.
 
+`.github/workflows/clang-tidy.yml` is a Phase-0 static-analysis report:
+non-gating (`continue-on-error`), configure/autogen-only, and routed through
+`scripts/run-clang-tidy.sh` so PRs get signal without surprise red lights.
+
 `.github/workflows/integration.yml` runs the Tier-2 attribution
 runners (docker + podman only) on push-to-main / dispatch / release.
 k3d and k8s runners exist but only run locally via the Vagrant

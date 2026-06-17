@@ -1,0 +1,59 @@
+---
+# Phase 0 clang-tidy: report-only, opt-in, intentionally boring.
+# Keep this high-signal; style and policy checks can join the party later.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  performance-*,
+  portability-*,
+  misc-*,
+  -modernize-*,
+  -readability-*,
+  -cppcoreguidelines-*,
+  -google-*,
+  -fuchsia-*,
+  -llvm*,
+  -altera-*,
+  -abseil-*,
+  -hicpp-*,
+  -cert-*,
+  -bugprone-easily-swappable-parameters,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  -misc-const-correctness,
+  -misc-use-anonymous-namespace,
+  -misc-use-internal-linkage,
+  -misc-unused-parameters,
+  -misc-multiple-inheritance,
+  -portability-avoid-pragma-once,
+  -performance-enum-size,
+  -clang-analyzer-optin.performance.Padding,
+  -misc-header-include-cycle,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  -bugprone-narrowing-conversions
+
+# Disabled checks, on purpose:
+# - bugprone-easily-swappable-parameters: Qt/value-type APIs have many adjacent same-type params.
+# - misc-non-private-member-variables-in-classes: DTOs and row structs are intentionally POD-ish.
+# - misc-no-recursion: small parser/walker recursion is intentional and easier to read.
+# - misc-include-cleaner: extremely noisy with Qt includes, moc and generated meta-object code.
+# - misc-const-correctness: mostly sweeping const/style churn, not Phase-0 defect signal.
+# - misc-use-anonymous-namespace / misc-use-internal-linkage: file-local helper style, not a bug gate.
+# - misc-unused-parameters: Qt slots, overrides and callbacks often require named-but-unused params.
+# - misc-multiple-inheritance: QObject + small adapter/interface patterns are deliberate here.
+# - portability-avoid-pragma-once: the project consistently uses pragma once; include guards would be churn.
+# - performance-enum-size: micro layout advice; too broad for the first report-only baseline.
+# - clang-analyzer-optin.performance.Padding: padding nits are noise for this rollout phase.
+# - misc-header-include-cycle: reports libnl/system include cycles outside qiftop's control.
+# - clang-analyzer-cplusplus.NewDeleteLeaks: false-positives on Qt ownership/factory patterns in Qt headers.
+# - bugprone-narrowing-conversions: ~54 hits, mostly benign int/qsizetype/quint64 interplay that's
+#   idiomatic in Qt land. It's real-ish signal but a cleanup project of its own — earmarked for a
+#   later phase (fix or explicit-cast pass) rather than drowning the Phase-0 baseline.
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(src|bench)/.*|^.*/(qiftop|qt6tst)/(src|bench)/.*'
+ExcludeHeaderFilterRegex: '(^|.*/)(build[^/]*/|[^/]*_autogen/|moc_|mocs_compilation|qrc_|tests/|docs/|examples/|dist/)'
+FormatStyle: none
+SystemHeaders: false
+...
