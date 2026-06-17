@@ -131,14 +131,15 @@ private slots:
             // Defaults on a fresh store.
             Settings s;
             QCOMPARE(s.connectionViewMode(), Settings::ConnectionViewMode::Flat);
-            QCOMPARE(s.showProcessColumn(),   false);
-            QCOMPARE(s.showContainerColumn(), false);
+            // Default-shown (capability-gated at the view layer).
+            QCOMPARE(s.showProcessColumn(),   true);
+            QCOMPARE(s.showContainerColumn(), true);
             QCOMPARE(s.showContainerChainInTooltip(), true);
             QCOMPARE(s.sortWithinGroups(), true);   // new default: within-group sort
 
             s.setConnectionViewMode(Settings::ConnectionViewMode::ByContainer);
-            s.setShowProcessColumn(true);
-            s.setShowContainerColumn(true);
+            s.setShowProcessColumn(false);
+            s.setShowContainerColumn(false);
             s.setShowContainerChainInTooltip(false);
             s.setSortWithinGroups(false);
         }
@@ -146,8 +147,8 @@ private slots:
             // Persisted across reconstruction.
             Settings s;
             QCOMPARE(s.connectionViewMode(), Settings::ConnectionViewMode::ByContainer);
-            QCOMPARE(s.showProcessColumn(),   true);
-            QCOMPARE(s.showContainerColumn(), true);
+            QCOMPARE(s.showProcessColumn(),   false);
+            QCOMPARE(s.showContainerColumn(), false);
             QCOMPARE(s.showContainerChainInTooltip(), false);
             QCOMPARE(s.sortWithinGroups(), false);
         }

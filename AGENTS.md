@@ -947,12 +947,16 @@ can be dropped with `vagrant destroy default`.
   `ConnectionGroupProxy::setSortWithinGroups()`, which re-sorts with
   full persistent-index preservation (no model reset → expansion/
   selection survive).
-* **Process / Container columns are capability-gated, not always-on.**
-  `Column::Process` and `Column::Container` are hidden by default; the
-  Settings dialog's "Process & Container Attribution" sub-section
+* **Process / Container columns are capability-gated, on by default.**
+  `Column::Process` and `Column::Container` default to *shown*
+  (`Settings::showProcessColumn` / `showContainerColumn` default `true`)
+  but are AND-gated on the agent's matching wire token, so they only
+  appear when attribution data is actually available; the data is
+  already on the wire, so showing them costs nothing. The Settings
+  dialog's "Process & Container Attribution" sub-section
   (Display tab) advertises three toggles — `Settings::showProcessColumn`
   / `showContainerColumn` / `showContainerChainInTooltip` — each
-  enabled only when the agent advertises the matching wire token
+  effective only when the agent advertises the matching wire token
   (`process-attribution-wire` / `container-attribution-wire` /
   `container-chain-wire`). The values persist regardless so they take
   effect when the user later runs against an attribution-capable

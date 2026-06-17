@@ -30,8 +30,8 @@ public:
         TxTotal,
         RxMax,        // adaptive reference (window-max or CMA) — see setThroughput*
         TxMax,
-        Process,      // comm + pid (v0.2 attribution; hidden by default)
-        Container,    // runtime:name + chain breadcrumb (v0.2 attribution; hidden by default)
+        Process,      // comm + pid (v0.2 attribution; shown when agent capable)
+        Container,    // runtime:name + chain breadcrumb (v0.2 attribution; shown when agent capable)
         ColumnCount,
     };
 
