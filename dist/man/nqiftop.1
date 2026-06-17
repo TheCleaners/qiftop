@@ -19,6 +19,30 @@ it tries to use the privileged
 .BR qiftop\-agent (8)
 on D\-Bus. If no agent is reachable it falls back to in\-process capture,
 which needs root for per\-connection data.
+.PP
+The
+.B Connections
+view always shows the flow (protocol + endpoints) and its RX/TX rate and
+totals. When the agent advertises attribution, two more columns appear by
+default:
+.B Process
+.RB ( "comm [pid]" ,
+or the reason a flow has no local process \(em
+.IR forwarded ", " orphaned ", " "no socket" )
+and
+.B Container
+.RB ( runtime\fR:\fIname ).
+They need the agent's
+.I process\-attribution\-wire
+and
+.I container\-attribution\-wire
+capabilities respectively; under in\-process capture (no agent) they stay
+hidden. Each is hidden automatically while grouping by that key (the group
+header already names it). Toggle them from the
+.B f
+(Fields) or
+.B S
+(Settings) panel.
 .SH OPTIONS
 .TP
 .BR \-i ", " \-\-interval " " \fIms\fR
@@ -85,10 +109,16 @@ adjust values as shown in the footer.
 .SS Sorting and grouping
 .TP
 .B s
-Cycle the sort column.
+Cycle the sort field.
 .TP
 .B f
-Open the Fields panel to pick the sort column and direction.
+Open the Fields panel: pick the sort field
+.RB ( Enter " sorts, " r " reverses)"
+.B and
+toggle column visibility
+.RB ( Space
+shows/hides the optional Process / Container columns). The panel marks the
+active sort field and its direction even when that column is hidden.
 .TP
 .B r
 Reverse the sort order.
@@ -135,8 +165,9 @@ Show the About panel.
 .B q
 Quit.
 .PP
-View, sort, grouping, theme, interval and display toggles are saved between
-runs unless overridden on the command line.
+View, sort, grouping, theme, interval, the Process / Container column toggles
+and other display settings are saved between runs unless overridden on the
+command line.
 .SH FILTER LANGUAGE
 The Connections filter is a boolean expression language shared with the
 GUI. Combine predicates with

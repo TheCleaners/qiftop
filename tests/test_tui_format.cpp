@@ -54,6 +54,77 @@ private slots:
         QCOMPARE(columnsFor(View::Interfaces)[6].title, QStringLiteral("State"));
     }
 
+    // Dynamic Connections columns: the optional Process/Container columns are
+    // appended only when the caller passes the (already cap+pref-gated) flag,
+    // and dropped when grouping by that key (GUI-parity redundancy rule).
+    void dynamicOptionalColumns()
+    {
+        const auto ids = [](const QList<Column> &cols) {
+            QList<ColumnId> out;
+            for (const Column &c : cols) out << c.id;
+            return out;
+        };
+
+        // Neither optional → the classic 5-column flat layout.
+        QCOMPARE(columnsFor(View::Connections, {false, false}).size(), 5);
+
+        // Process only → appended after the four traffic columns.
+        const QList<Column> proc = columnsFor(View::Connections, {true, false});
+        QCOMPARE(proc.size(), 6);
+        QCOMPARE(proc.last().id, ColumnId::Process);
+        QVERIFY(proc.last().hideable);
+        QCOMPARE(proc.last().fixedWidth, kProcessW);
+
+        // Container only.
+        const QList<Column> cont = columnsFor(View::Connections, {false, true});
+        QCOMPARE(cont.size(), 6);
+        QCOMPARE(cont.last().id, ColumnId::Container);
+
+        // Both → Process then Container, in that order.
+        QCOMPARE(ids(columnsFor(View::Connections, {true, true})),
+                 (QList<ColumnId>{ColumnId::Flow, ColumnId::RxRate, ColumnId::TxRate,
+                                  ColumnId::RxTotal, ColumnId::TxTotal,
+                                  ColumnId::Process, ColumnId::Container}));
+
+        // Grouped-redundancy rule: the grouped-by column is dropped (its value
+        // is in the group header). GroupBy::Process hides Process; Container stays.
+        QVERIFY(!ids(columnsFor(View::Connections, {true, true}, GroupBy::Process))
+                     .contains(ColumnId::Process));
+        QVERIFY(ids(columnsFor(View::Connections, {true, true}, GroupBy::Process))
+                    .contains(ColumnId::Container));
+        QVERIFY(!ids(columnsFor(View::Connections, {true, true}, GroupBy::Container))
+                     .contains(ColumnId::Container));
+        QVERIFY(ids(columnsFor(View::Connections, {true, true}, GroupBy::Container))
+                    .contains(ColumnId::Process));
+        // GroupBy::Interface makes neither redundant → both stay.
+        QCOMPARE(columnsFor(View::Connections, {true, true}, GroupBy::Interface).size(), 7);
+
+        // The Fields-overlay column set always lists both optional columns,
+        // independent of grouping, so the user can always toggle them.
+        QCOMPARE(overlayColumnsFor(View::Connections).size(), 7);
+        QCOMPARE(overlayColumnsFor(View::Interfaces).size(), 8);
+    }
+
+    // Stable sort-field tokens survive a column being hidden/reordered (the
+    // reason the persisted sort migrated off positional integers), and the
+    // legacy positional index maps to the right ColumnId for upgrading users.
+    void columnIdTokensAndLegacyMapping()
+    {
+        for (ColumnId id : {ColumnId::Flow, ColumnId::RxRate, ColumnId::Process,
+                            ColumnId::Container, ColumnId::Interface, ColumnId::ErrDrop})
+            QCOMPARE(columnIdFromToken(columnIdToken(id), ColumnId::Flow), id);
+        // Unknown token → fallback.
+        QCOMPARE(columnIdFromToken(QStringLiteral("nope"), ColumnId::TxRate), ColumnId::TxRate);
+        // Legacy positional indices (pre-0.3.1) map to the stable ids.
+        QCOMPARE(columnIdForLegacyIndex(View::Connections, 1), ColumnId::RxRate);
+        QCOMPARE(columnIdForLegacyIndex(View::Interfaces, 0), ColumnId::Interface);
+        QCOMPARE(columnIdForLegacyIndex(View::Interfaces, 6), ColumnId::State);
+        // visualIndexForColumn returns -1 when the field's column is hidden.
+        const QList<Column> flat = columnsFor(View::Connections);
+        QCOMPARE(visualIndexForColumn(flat, ColumnId::RxRate), 1);
+        QCOMPARE(visualIndexForColumn(flat, ColumnId::Process), -1);
+    }
+
     void interfaceCells()
     {
         const QStringList cells = cellsForInterface(ifaceRow(QStringLiteral("eth0"), 0, 0, true));
@@ -113,14 +184,67 @@ private slots:
         QVERIFY(cells[0].contains(QChar(0x2192))); // →
     }
 
+    // cellsForConnection is column-driven: passing an explicit column list adds
+    // the matching Process / Container cells, index-aligned with the columns.
+    void connectionCellsAreColumnDriven()
+    {
+        ConnectionAggregator agg;
+        agg.setUdpAggregateByPeer(false);
+        Connection c;
+        c.proto          = L4Proto::Tcp;
+        c.local.address  = QHostAddress(QStringLiteral("10.0.0.1"));
+        c.local.port     = 5000;
+        c.remote.address = QHostAddress(QStringLiteral("1.1.1.1"));
+        c.remote.port    = 443;
+        c.process        = {4242, QStringLiteral("nginx"), {}, {}, 33};
+        c.container      = {QStringLiteral("docker"), QStringLiteral("abcdef123456"),
+                            QStringLiteral("web")};
+        agg.updateConnections({c});
+
+        const QList<Column> cols = columnsFor(View::Connections, {true, true});
+        const QStringList cells = cellsForConnection(agg, agg.rowAt(0), cols);
+        QCOMPARE(cells.size(), cols.size());          // 7
+        QCOMPARE(cells.size(), 7);
+        // Process cell: comm [pid]; Container cell: runtime:name.
+        QCOMPARE(cells[5], QStringLiteral("nginx [4242]"));
+        QCOMPARE(cells[6], QStringLiteral("docker:web"));
+    }
+
+    // Process/Container cell-text edge cases: unattributed flows surface the
+    // attribution reason; host flows read "(host)".
+    void attributionCellText()
+    {
+        // Resolved process → "comm [pid]".
+        Connection r;
+        r.process = {99, QStringLiteral("curl"), {}, {}, 0};
+        QCOMPARE(processCellText(r), QStringLiteral("curl [99]"));
+
+        // Unattributed: the reason label, not a blank cell.
+        Connection fwd;  fwd.reason = AttributionReason::Forwarded;
+        QVERIFY(processCellText(fwd).contains(QStringLiteral("forwarded")));
+        Connection orph; orph.reason = AttributionReason::Orphaned;
+        QVERIFY(processCellText(orph).contains(QStringLiteral("orphaned")));
+        Connection nos;  nos.reason = AttributionReason::NoLocalSocket;
+        QVERIFY(processCellText(nos).contains(QStringLiteral("no socket")));
+
+        // Container cells: host vs runtime:name vs nested-chain hint.
+        Connection host;
+        QCOMPARE(containerCellText(host), QStringLiteral("(host)"));
+        Connection dock;
+        dock.container = {QStringLiteral("docker"), QStringLiteral("abcdef123456"),
+                          QStringLiteral("web")};
+        QCOMPARE(containerCellText(dock), QStringLiteral("docker:web"));
+    }
+
     // Parity with the GUI's "hide the redundant column when grouped by that
-    // key" fix. The TUI has no Process/Container columns: a grouped child row
-    // renders ONLY the flow (proto + endpoints) while the group header carries
-    // the grouped attribute. So the per-flow entry never repeats what the
-    // header already shows — the TUI satisfies the parity by construction.
-    // Lock it so a future "show comm/container inline in the flow cell" change
-    // can't silently reintroduce the redundancy the GUI had to hide.
-    void groupedChildRowCarriesNoRedundantAttribution()
+    // key" fix (PR #28). The TUI now HAS Process/Container columns, so the
+    // invariant is no longer "by construction" — it's enforced by columnsFor()'s
+    // grouped-redundancy rule. When grouped By Process the Process column is
+    // dropped (the group header already names the process); same for Container.
+    // The grouped child row therefore never repeats what the header shows, AND
+    // the OTHER attribution column is still available. Locks the rule so a
+    // refactor can't silently bring the duplication back.
+    void groupedChildRowDropsRedundantColumn()
     {
         ConnectionAggregator agg;
         agg.setUdpAggregateByPeer(false);
@@ -138,17 +262,45 @@ private slots:
         agg.updateConnections({c});
         QCOMPARE(agg.rowCount(), 1);
 
-        // The flow cell repeats neither the process comm nor the container
-        // id/name — there is no attribution column to make redundant.
-        const QString flow = cellsForConnection(agg, agg.rowAt(0)).at(0);
-        QVERIFY(!flow.contains(QStringLiteral("nginx")));
-        QVERIFY(!flow.contains(QStringLiteral("abcdef123456")));
-        QVERIFY(!flow.contains(QStringLiteral("web")));
+        const auto cellTexts = [&](GroupBy grp) {
+            const QList<Column> cols = columnsFor(View::Connections, {true, true}, grp);
+            return cellsForConnection(agg, agg.rowAt(0), cols);
+        };
 
-        // …but the group header DOES carry the grouped attribute, so grouping
-        // never loses the information (it just isn't duplicated per row).
+        // Grouped By Process: no Process cell anywhere in the child row (the
+        // comm is in the header), but the Container cell IS present.
+        const QStringList byProc = cellTexts(GroupBy::Process);
+        QVERIFY(std::none_of(byProc.cbegin(), byProc.cend(),
+                             [](const QString &s){ return s.contains(QStringLiteral("nginx")); }));
+        QVERIFY(std::any_of(byProc.cbegin(), byProc.cend(),
+                            [](const QString &s){ return s.contains(QStringLiteral("web")); }));
+
+        // Grouped By Container: the Container cell is gone, Process stays.
+        const QStringList byCont = cellTexts(GroupBy::Container);
+        QVERIFY(std::none_of(byCont.cbegin(), byCont.cend(),
+                             [](const QString &s){ return s.contains(QStringLiteral("web")); }));
+        QVERIFY(std::any_of(byCont.cbegin(), byCont.cend(),
+                            [](const QString &s){ return s.contains(QStringLiteral("nginx")); }));
+
+        // Flat / grouped-by-interface: both attribution columns present.
+        const QStringList flat = cellTexts(GroupBy::None);
+        QVERIFY(std::any_of(flat.cbegin(), flat.cend(),
+                            [](const QString &s){ return s.contains(QStringLiteral("nginx")); }));
+        QVERIFY(std::any_of(flat.cbegin(), flat.cend(),
+                            [](const QString &s){ return s.contains(QStringLiteral("web")); }));
+
+        // The group header DOES carry the grouped attribute (no information lost).
         QVERIFY(groupLabelFor(GroupBy::Process, c).contains(QStringLiteral("nginx")));
         QVERIFY(groupLabelFor(GroupBy::Container, c).contains(QStringLiteral("web")));
+
+        // groupHeaderCells leaves the optional columns empty (the value lives in
+        // the label / group-info window, not a per-column cell).
+        const QList<Column> cols = columnsFor(View::Connections, {true, true});
+        const QStringList hdr = groupHeaderCells(cols, QStringLiteral("nginx [4242]"),
+                                                 0, 0, 0, 0);
+        QCOMPARE(hdr.size(), cols.size());
+        QCOMPARE(hdr[5], QString());   // Process column cell empty in a header
+        QCOMPARE(hdr[6], QString());   // Container column cell empty in a header
     }
 
     void interfaceSortByRateDesc()
@@ -158,10 +310,10 @@ private slots:
             ifaceRow(QStringLiteral("b"), 90, 0),
             ifaceRow(QStringLiteral("c"), 50, 0),
         };
-        // Column 1 = bandwidth (combined; tx==0 so == rx rate), descending.
-        const QList<int> desc = sortedInterfaceIndices(rows, 1, true);
+        // RxRate field (combined; tx==0 so == rx rate), descending.
+        const QList<int> desc = sortedInterfaceIndices(rows, ColumnId::RxRate, true);
         QCOMPARE(desc, (QList<int>{1, 2, 0}));
-        const QList<int> asc = sortedInterfaceIndices(rows, 1, false);
+        const QList<int> asc = sortedInterfaceIndices(rows, ColumnId::RxRate, false);
         QCOMPARE(asc, (QList<int>{0, 2, 1}));
     }
 
@@ -172,8 +324,9 @@ private slots:
             ifaceRow(QStringLiteral("eth0"), 0, 0),
             ifaceRow(QStringLiteral("lo"), 0, 0),
         };
-        // Column 0 = name, ascending => eth0, lo, wlan0.
-        QCOMPARE(sortedInterfaceIndices(rows, 0, false), (QList<int>{1, 2, 0}));
+        // Interface field = name, ascending => eth0, lo, wlan0.
+        QCOMPARE(sortedInterfaceIndices(rows, ColumnId::Interface, false),
+                 (QList<int>{1, 2, 0}));
     }
 
     void connectionSortByRateDesc()
@@ -183,23 +336,63 @@ private slots:
             connRow("2.2.2.2", 100),
             connRow("3.3.3.3", 40),
         };
-        QCOMPARE(sortedConnectionIndices(rows, 1, true), (QList<int>{1, 2, 0}));
+        QCOMPARE(sortedConnectionIndices(rows, ColumnId::RxRate, true),
+                 (QList<int>{1, 2, 0}));
     }
 
-    void sortFieldsModel()
+    // Process/Container sort keys: Process sorts by pid, Container by name/id
+    // with host flows sorted last (the \u0001 sentinel prefix).
+    void connectionSortByAttribution()
     {
-        // Fields overlay lists every column; only the active sort column shows
-        // a direction marker, and it flips with the descending flag.
+        QList<ConnectionAggregator::Row> rows(3);
+        rows[0].current.process = {300, QStringLiteral("c"), {}, {}, 0};
+        rows[1].current.process = {100, QStringLiteral("a"), {}, {}, 0};
+        rows[2].current.process = {200, QStringLiteral("b"), {}, {}, 0};
+        // Ascending by pid → 100, 200, 300.
+        QCOMPARE(sortedConnectionIndices(rows, ColumnId::Process, false),
+                 (QList<int>{1, 2, 0}));
+
+        QList<ConnectionAggregator::Row> crows(3);
+        crows[0].current.container = {QStringLiteral("docker"), QStringLiteral("id"),
+                                      QStringLiteral("zeta")};
+        crows[1].current.container = {};                       // host
+        crows[2].current.container = {QStringLiteral("docker"), QStringLiteral("id"),
+                                      QStringLiteral("alpha")};
+        // Ascending → (host) first (the \u0001 sentinel sorts low), then alpha, zeta.
+        QCOMPARE(sortedConnectionIndices(crows, ColumnId::Container, false),
+                 (QList<int>{1, 2, 0}));
+    }
+
+    void fieldsOverlayModel()
+    {
+        // Fields overlay lists every column; only the active sort field shows a
+        // direction marker, and it flips with the descending flag.
         const QList<Column> cols = columnsFor(View::Connections);
-        const QList<SettingRow> desc = sortFieldRows(cols, 1, true);
+        const QList<SettingRow> desc = fieldRows(cols, ColumnId::RxRate, true);
         QCOMPARE(desc.size(), cols.size());
         QVERIFY(desc[1].value.contains(QStringLiteral("desc")));
-        QVERIFY(desc[0].value.isEmpty());        // non-sort columns: no marker
+        QVERIFY(!desc[0].value.contains(QStringLiteral("desc")));  // non-sort: no dir
         QVERIFY(!desc[1].label.isEmpty());
         QVERIFY(!desc[1].help.isEmpty());
-        const QList<SettingRow> asc = sortFieldRows(cols, 0, false);
+        const QList<SettingRow> asc = fieldRows(cols, ColumnId::Flow, false);
         QVERIFY(asc[0].value.contains(QStringLiteral("asc")));
-        QVERIFY(asc[1].value.isEmpty());
+        QVERIFY(!asc[1].value.contains(QStringLiteral("asc")));
+
+        // Mandatory columns read "fixed"; the overlay column set's optional
+        // columns read [x]/[ ] (available) or "unavailable" (cap missing).
+        QList<Column> overlay = overlayColumnsFor(View::Connections);
+        for (Column &c : overlay) {                 // annotate as TuiApp does
+            if (c.id == ColumnId::Process)   { c.available = true;  c.visible = true; }
+            if (c.id == ColumnId::Container) { c.available = false; c.visible = true; }
+        }
+        const QList<SettingRow> rows = fieldRows(overlay, ColumnId::RxRate, true);
+        QVERIFY(rows[0].value.startsWith(QStringLiteral("fixed")));      // Flow
+        // Process available + visible → "[x]".
+        const int procIdx = visualIndexForColumn(overlay, ColumnId::Process);
+        QVERIFY(rows[procIdx].value.contains(QStringLiteral("[x]")));
+        // Container unavailable (cap missing) → "unavailable".
+        const int contIdx = visualIndexForColumn(overlay, ColumnId::Container);
+        QCOMPARE(rows[contIdx].value, QStringLiteral("unavailable"));
     }
 
     void groupingKeysAndLabels()
@@ -318,7 +511,7 @@ private slots:
         g << GroupSummary{500.0, 0.0, 700, 0, /*minSrc*/1, QStringLiteral("wlan0") };
         g << GroupSummary{ 70.0, 0.0, 300, 0, /*minSrc*/2, QStringLiteral("lo")    };
 
-        const int rxRateCol = 1;
+        const ColumnId rxRateCol = ColumnId::RxRate;
 
         // sortWithinGroups (default): group order FROZEN at first-appearance
         // (minSrc) regardless of sort column/direction.
@@ -335,9 +528,9 @@ private slots:
         QCOMPARE(orderedGroupIndices(g, rxRateCol, /*desc*/false, /*within*/false),
                  (QList<int>{0, 2, 1}));
 
-        // Classic on the Flow column (0) orders by label (case-insensitive).
+        // Classic on the Flow column orders by label (case-insensitive).
         // asc → eth0, lo, wlan0.
-        QCOMPARE(orderedGroupIndices(g, /*Flow*/0, /*desc*/false, /*within*/false),
+        QCOMPARE(orderedGroupIndices(g, ColumnId::Flow, /*desc*/false, /*within*/false),
                  (QList<int>{0, 2, 1}));
     }
 
@@ -349,8 +542,8 @@ private slots:
         g << GroupSummary{100.0, 0.0, 0, 0, 1, QStringLiteral("b")};
         g << GroupSummary{100.0, 0.0, 0, 0, 2, QStringLiteral("c")};
         // All equal on RX rate → keep first-appearance order in both directions.
-        QCOMPARE(orderedGroupIndices(g, 1, true,  false), (QList<int>{0, 1, 2}));
-        QCOMPARE(orderedGroupIndices(g, 1, false, false), (QList<int>{0, 1, 2}));
+        QCOMPARE(orderedGroupIndices(g, ColumnId::RxRate, true,  false), (QList<int>{0, 1, 2}));
+        QCOMPARE(orderedGroupIndices(g, ColumnId::RxRate, false, false), (QList<int>{0, 1, 2}));
     }
 
     void detailRows()

@@ -58,6 +58,12 @@ public:
     // an open Detail / group-info overlay fills in exe/cmdline/cwd live.
     void onProcessDetails(const qiftop::backend::ProcessDetails &d);
 
+    // Tell the controller which backend it's reading and what the agent
+    // advertises. Mirrors MainWindow::setBackendInfo: caps gate the optional
+    // Process/Container columns (empty caps / in-process ⇒ columns hidden).
+    void setBackendInfo(bool usingAgent, const QString &version,
+                        const QStringList &caps);
+
 private:
     // A single declarative, runtime-adjustable preference. value() renders the
     // current value; adjust(dir) changes it (dir = -1 left, +1 right/activate).
@@ -102,12 +108,31 @@ private:
     int          m_themeIdx = 0;
 
     View m_view = View::Connections;
-    int  m_ifaceSortCol = 0;  bool m_ifaceSortDesc = false; // name asc
-    int  m_connSortCol  = 1;  bool m_connSortDesc  = true;  // RX rate desc
+    ColumnId m_ifaceSortField = ColumnId::Interface; bool m_ifaceSortDesc = false; // name asc
+    ColumnId m_connSortField  = ColumnId::RxRate;    bool m_connSortDesc  = true;  // RX rate desc
     int  m_ifaceScroll  = 0;
     int  m_connScroll   = 0;
     int  m_ifaceCursor  = 0;  // selected row (index into displayed rows)
     int  m_connCursor   = 0;
+
+    // The active sort field for the current view (read/write helpers so the key
+    // handlers don't repeat the view branch).
+    [[nodiscard]] ColumnId currentSortField() const
+    { return m_view == View::Interfaces ? m_ifaceSortField : m_connSortField; }
+    void setCurrentSortField(ColumnId id)
+    { (m_view == View::Interfaces ? m_ifaceSortField : m_connSortField) = id; }
+
+    // Which optional Connections columns are EFFECTIVE right now: AND of the
+    // agent's wire capability, the user preference, and the grouped-redundancy
+    // rule (Process hidden when grouped By Process, etc.). Interfaces => none.
+    [[nodiscard]] OptionalColumns effectiveOptionalColumns() const;
+    // The columns Screen renders + cellsForConnection consumes this frame.
+    [[nodiscard]] QList<Column> activeColumns() const;
+    // The full Fields-overlay column list, annotated with hideable/available/
+    // visible state from caps + preference (includes hidden optional columns).
+    [[nodiscard]] QList<Column> overlayColumns() const;
+    void cycleSortField();                  // s: advance sort to the next active column
+    void toggleOptionalColumn(ColumnId id); // Space in Fields: flip a show pref
 
     // Per displayed row of the active view, rebuilt each buildFrame: whether the
     // row is a cursor-landable target, whether it's a group header, its stable
@@ -168,6 +193,17 @@ private:
     // are ordered by the sort column's aggregate (loudest group first). Mirrors
     // the GUI's Settings::sortWithinGroups.
     bool m_sortWithinGroups = true;
+    // Optional attribution columns (Connections). Default ON like the GUI, but
+    // effective only when the agent advertises the matching wire capability and
+    // the column isn't made redundant by the active grouping.
+    bool m_showProcessColumn   = true;
+    bool m_showContainerColumn = true;
+    // Backend + capability state, set by main via setBackendInfo(). In-process
+    // capture reports no caps, so the optional columns stay hidden (GUI parity).
+    bool        m_usingAgent = false;
+    QStringList m_agentCaps;
+    bool        m_procWire   = false; // m_usingAgent && caps has process-attribution-wire
+    bool        m_contWire   = false; // m_usingAgent && caps has container-attribution-wire
     int  m_pollMs         = 1000;
     std::function<void(int)> m_applyPollMs;  // set by main (owns the monitors)
     // On-demand process details (exe/cmdline/cwd), fetched lazily from the

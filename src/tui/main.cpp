@@ -10,6 +10,7 @@
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QDBusVariant>
 #include <QHostAddress>
 #include <QSet>
 #include <QSocketNotifier>
@@ -64,24 +65,64 @@ constexpr auto kAgentBusName    = "org.qiftop.NetworkAgent1";
 constexpr auto kAgentIfacesPath = "/org/qiftop/NetworkAgent1/Interfaces";
 constexpr auto kAgentIfacesIface = "org.qiftop.NetworkAgent1.Interfaces";
 
-// Minimal liveness probe: name-activate the agent and do a real method call
-// (the bus policy is group-gated, so registration alone isn't enough).
-bool probeAgent(bool sessionBus)
+// Mirrors the GUI's AgentProbe (src/main.cpp): reachability plus the
+// opportunistically-read Version / Capabilities so the TUI can gate the
+// optional Process/Container columns on the agent's wire tokens.
+struct AgentProbe {
+    bool        reachable = false;
+    QString     version;
+    QStringList capabilities;
+};
+
+// Fetch a property via the freedesktop Properties interface; a default QVariant
+// when the call fails (pre-property agents) — caller falls back to a sane default.
+QVariant propGet(QDBusConnection &bus, const QString &path,
+                 const QString &iface, const QString &name)
 {
+    auto call = QDBusMessage::createMethodCall(QString::fromLatin1(kAgentBusName),
+                                               path,
+                                               QStringLiteral("org.freedesktop.DBus.Properties"),
+                                               QStringLiteral("Get"));
+    call << iface << name;
+    auto reply = bus.call(call, QDBus::Block, 1000);
+    if (reply.type() == QDBusMessage::ErrorMessage) return {};
+    const auto args = reply.arguments();
+    if (args.isEmpty()) return {};
+    return args.first().value<QDBusVariant>().variant();
+}
+
+// Minimal liveness probe: name-activate the agent and do a real method call
+// (the bus policy is group-gated, so registration alone isn't enough). Then
+// opportunistically read Version / Capabilities like the GUI.
+AgentProbe probeAgent(bool sessionBus)
+{
+    AgentProbe info;
     auto bus = sessionBus ? QDBusConnection::sessionBus() : QDBusConnection::systemBus();
-    if (!bus.isConnected()) return false;
+    if (!bus.isConnected()) return info;
     auto *iface = bus.interface();
-    if (!iface) return false;
+    if (!iface) return info;
     if (!iface->isServiceRegistered(QString::fromLatin1(kAgentBusName))) {
         if (!iface->startService(QString::fromLatin1(kAgentBusName)).isValid())
-            return false;
+            return info;
     }
     QDBusMessage probe = QDBusMessage::createMethodCall(
         QString::fromLatin1(kAgentBusName),
         QString::fromLatin1(kAgentIfacesPath),
         QString::fromLatin1(kAgentIfacesIface),
         QStringLiteral("GetInterfaces"));
-    return bus.call(probe, QDBus::Block, 1000).type() != QDBusMessage::ErrorMessage;
+    if (bus.call(probe, QDBus::Block, 1000).type() == QDBusMessage::ErrorMessage)
+        return info;
+    info.reachable = true;
+
+    const QVariant v = propGet(bus, QString::fromLatin1(kAgentIfacesPath),
+                               QString::fromLatin1(kAgentIfacesIface),
+                               QStringLiteral("Version"));
+    if (v.isValid()) info.version = v.toString();
+    const QVariant c = propGet(bus, QString::fromLatin1(kAgentIfacesPath),
+                               QString::fromLatin1(kAgentIfacesIface),
+                               QStringLiteral("Capabilities"));
+    if (c.isValid()) info.capabilities = c.toStringList();
+    return info;
 }
 
 // Self-pipe for async-signal-safe handling: the handler only write()s the
@@ -153,7 +194,8 @@ int main(int argc, char *argv[])
     std::unique_ptr<NetworkMonitor>    netMon;
     std::unique_ptr<ConnectionMonitor> connMon;
     QString sourceLabel;
-    const bool useAgent = !parser.isSet(noAgentOpt) && probeAgent(sessionBus);
+    const AgentProbe agent = parser.isSet(noAgentOpt) ? AgentProbe{} : probeAgent(sessionBus);
+    const bool useAgent = agent.reachable;
     if (useAgent) {
         netMon  = std::make_unique<DBusNetworkMonitor>(sessionBus);
         connMon = std::make_unique<DBusConnectionMonitor>(sessionBus);
@@ -220,6 +262,10 @@ int main(int argc, char *argv[])
                             parser.isSet(intervalOpt) ? pollMs : 0,
                             parser.isSet(viewOpt) ? parser.value(viewOpt) : QString(),
                             parser.isSet(groupOpt) ? parser.value(groupOpt) : QString());
+
+    // Gate the optional Process/Container columns on the agent's wire tokens
+    // (in-process capture advertises nothing → columns stay hidden, GUI parity).
+    tui.setBackendInfo(useAgent, agent.version, agent.capabilities);
 
     // The monitors live here, so give the controller a way to push a new poll
     // interval (chosen at runtime in Settings) down to the data source. This

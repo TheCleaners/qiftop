@@ -97,11 +97,11 @@ private:
 
 QList<int> displayedConnectionIndices(const QList<aggregate::ConnectionAggregator::Row> &rows,
                                       const aggregate::ConnectionAggregator &agg,
-                                      int sortCol,
+                                      ColumnId sortField,
                                       bool sortDesc,
                                       const qiftop::filter::ExprPtr &filterExpr)
 {
-    const QList<int> order = sortedConnectionIndices(rows, sortCol, sortDesc);
+    const QList<int> order = sortedConnectionIndices(rows, sortField, sortDesc);
     QList<int> matched;
     matched.reserve(order.size());
     for (int i : order) {
@@ -279,8 +279,6 @@ void TuiApp::handleKey(int key)
         return;
     }
 
-    const int nCols = static_cast<int>(columnsFor(m_view).size());
-    int &sortCol = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
     bool &sortDesc = (m_view == View::Interfaces) ? m_ifaceSortDesc : m_connSortDesc;
     const int bodyH = std::max(1, m_screen ? m_screen->bodyHeight() : 1);
 
@@ -296,7 +294,8 @@ void TuiApp::handleKey(int key)
         break;
     case 'f':
     case 'F':
-        m_fieldsSel = sortCol;          // start on the current sort column
+        // Start the Fields overlay on the current sort field's row.
+        m_fieldsSel = std::max(0, visualIndexForColumn(overlayColumns(), currentSortField()));
         m_overlay = Overlay::Fields;
         break;
     case '?':
@@ -352,7 +351,7 @@ void TuiApp::handleKey(int key)
         m_view = View::Connections;
         break;
     case 's':
-        sortCol = (sortCol + 1) % nCols;
+        cycleSortField();
         break;
     case 'r':
     case 'R':
@@ -445,7 +444,7 @@ Frame TuiApp::buildFrame()
     Frame f;
     f.tabs        = {QStringLiteral("Interfaces"), QStringLiteral("Connections")};
     f.activeTab   = (m_view == View::Interfaces) ? 0 : 1;
-    f.columns     = columnsFor(m_view);
+    f.columns     = activeColumns();
     // When grouped, advertise the grouping mode in the (always-present) first
     // column header instead of a bare "Flow" — the rows are bucketed by it.
     // The Column identity used for sorting is unchanged (this only re-labels
@@ -478,12 +477,12 @@ Frame TuiApp::buildFrame()
     const QList<aggregate::ConnectionAggregator::Row>* cRows = nullptr;
 
     if (m_view == View::Interfaces) {
-        f.sortCol  = m_ifaceSortCol;
+        f.sortCol  = visualIndexForColumn(f.columns, m_ifaceSortField);
         f.sortDesc = m_ifaceSortDesc;
         const auto &rows = m_paused ? m_frozenIfaceRows : m_ifaceAgg->rows();
         iRows = &rows;
         const QList<int> order =
-            sortedInterfaceIndices(rows, m_ifaceSortCol, m_ifaceSortDesc);
+            sortedInterfaceIndices(rows, m_ifaceSortField, m_ifaceSortDesc);
         for (int i : order) {
             const auto &row = rows[i];
             plan       << PlannedRow{i, false, {}};
@@ -496,12 +495,12 @@ Frame TuiApp::buildFrame()
             m_rowRefs << RowRef{true, false, interfaceKey(row), QString()};
         }
     } else {
-        f.sortCol  = m_connSortCol;
+        f.sortCol  = visualIndexForColumn(f.columns, m_connSortField);
         f.sortDesc = m_connSortDesc;
         const auto &rows = m_paused ? m_frozenConnRows : m_connAgg->rows();
         cRows = &rows;
         const QList<int> matched =
-            displayedConnectionIndices(rows, *m_connAgg, m_connSortCol,
+            displayedConnectionIndices(rows, *m_connAgg, m_connSortField,
                                        m_connSortDesc, m_filterExpr);
 
         // Direction colours can be disabled (a customization point): fall back
@@ -560,7 +559,7 @@ Frame TuiApp::buildFrame()
             }
 
             const QList<int> gorder = orderedGroupIndices(
-                summaries, m_connSortCol, m_connSortDesc, m_sortWithinGroups);
+                summaries, m_connSortField, m_connSortDesc, m_sortWithinGroups);
 
             for (int oi : gorder) {
                 const QString &k = firstSeen[oi];
@@ -575,10 +574,10 @@ Frame TuiApp::buildFrame()
                 const bool collapsed = m_collapsedGroups.contains(k);
                 const QString marker = collapsed ? QStringLiteral("\u25b8")  // ▸
                                                  : QStringLiteral("\u25be"); // ▾
-                plan << PlannedRow{-1, false, QStringList{
-                    QStringLiteral("%1 %2  (%3)").arg(marker, gs.label).arg(members.size()),
-                    util::formatByteRate(grx), util::formatByteRate(gtx),
-                    util::formatBytes(grb), util::formatBytes(gtb)}};
+                const QString label =
+                    QStringLiteral("%1 %2  (%3)").arg(marker, gs.label).arg(members.size());
+                plan << PlannedRow{-1, false,
+                                   groupHeaderCells(f.columns, label, grx, gtx, grb, gtb)};
                 f.rowRoles << Role::GroupHeader;
                 const double gcr = grx + gtx;
                 rates << gcr;
@@ -692,7 +691,7 @@ Frame TuiApp::buildFrame()
             }
             QStringList cells = (m_view == View::Interfaces)
                 ? cellsForInterface((*iRows)[p.src])
-                : cellsForConnection(*m_connAgg, (*cRows)[p.src]);
+                : cellsForConnection(*m_connAgg, (*cRows)[p.src], f.columns);
             if (p.indent && !cells.isEmpty())
                 cells[0] = QStringLiteral("  ") + cells[0];
             f.rows << cells;
@@ -726,7 +725,8 @@ Frame TuiApp::buildFrame()
             {QStringLiteral("Tab"),   QStringLiteral("view")},
             {QStringLiteral("jk"),    QStringLiteral("move")},
             {QStringLiteral("\u21b5"), QStringLiteral("details")},
-            {QStringLiteral("s/f"),   QStringLiteral("sort")},
+            {QStringLiteral("s"),     QStringLiteral("sort")},
+            {QStringLiteral("f"),     QStringLiteral("fields")},
             {QStringLiteral("g"),     QStringLiteral("group")},
             {QStringLiteral("/"),     QStringLiteral("filter")},
             {QStringLiteral("p"),     QStringLiteral("pause")},
@@ -736,7 +736,7 @@ Frame TuiApp::buildFrame()
         };
         // When grouped, advertise fold/unfold (h/l) right after the group key.
         if (m_groupBy != GroupBy::None)
-            f.footerHints.insert(6, {QStringLiteral("h/l"), QStringLiteral("fold")});
+            f.footerHints.insert(7, {QStringLiteral("h/l"), QStringLiteral("fold")});
     }
 
     buildModal(f);
@@ -818,13 +818,14 @@ void TuiApp::buildModal(Frame &f) const
         f.modal.selected = m_settingsSel;
         f.modal.footer   = QStringLiteral("↑↓ move · ←/→/Space change · S/Esc close");
     } else if (m_overlay == Overlay::Fields) {
-        const int sortCol  = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
-        const bool sortDesc = (m_view == View::Interfaces) ? m_ifaceSortDesc : m_connSortDesc;
         f.modal.visible  = true;
-        f.modal.title    = QStringLiteral("Sort field");
-        f.modal.items    = sortFieldRows(columnsFor(m_view), sortCol, sortDesc);
+        f.modal.title    = QStringLiteral("Fields");
+        f.modal.items    = fieldRows(overlayColumns(), currentSortField(),
+                                     m_view == View::Interfaces ? m_ifaceSortDesc
+                                                                : m_connSortDesc);
         f.modal.selected = m_fieldsSel;
-        f.modal.footer   = QStringLiteral("↑↓ move · Enter/Space sort · r reverse · f/Esc close");
+        f.modal.footer   = QStringLiteral(
+            "↑↓ move · Space show/hide · Enter sort · r reverse · f/Esc close");
     } else if (m_overlay == Overlay::Help) {
         // key → label (Accent column), description → value (wrapped column).
         const auto row = [](const QString &key, const QString &desc) {
@@ -840,8 +841,8 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("Space"),        QStringLiteral("On a flow: detail inspector. On a group header: fold / unfold")),
             row(QStringLiteral("PgUp/PgDn ^F/^B ^U/^D"), QStringLiteral("Page up/down (^F/^B) · half page (^U/^D)")),
             row(QStringLiteral("Home/End  G"),  QStringLiteral("Jump to top / bottom")),
-            row(QStringLiteral("s"),            QStringLiteral("Cycle the sort column")),
-            row(QStringLiteral("f"),            QStringLiteral("Fields: pick sort column & direction")),
+            row(QStringLiteral("s"),            QStringLiteral("Cycle the sort field")),
+            row(QStringLiteral("f"),            QStringLiteral("Fields: sort and show/hide the Process / Container columns. Unattributed Process cells show the forwarded / orphaned / no-socket reason.")),
             row(QStringLiteral("r"),            QStringLiteral("Reverse the sort order")),
             row(QStringLiteral("/"),            QStringLiteral("Filter connections (mini-language; Esc clears)")),
             row(QStringLiteral("g"),            QStringLiteral("Group connections by interface / process / container")),
@@ -1093,7 +1094,7 @@ void TuiApp::exportCurrentView(const QString &explicitPath)
         // Grouped views render synthetic group headers; CSV exports the flat
         // filtered/sorted flow set underneath so downstream tools get records.
         ConnRowsExportable ex(rowsForIndices(
-            rows, displayedConnectionIndices(rows, *m_connAgg, m_connSortCol,
+            rows, displayedConnectionIndices(rows, *m_connAgg, m_connSortField,
                                              m_connSortDesc, m_filterExpr)));
         count = ex.exportRowCount();
         data  = util::exporter::toCsv(ex);
@@ -1259,9 +1260,21 @@ void TuiApp::loadSettings()
     s.beginGroup(QStringLiteral("nqiftop"));
     m_view = (s.value(QStringLiteral("view"), int(m_view)).toInt() == int(View::Interfaces))
                  ? View::Interfaces : View::Connections;
-    m_ifaceSortCol  = s.value(QStringLiteral("ifaceSortCol"), m_ifaceSortCol).toInt();
+    // Sort field: read the legacy positional integer keys (pre-0.3.1) for
+    // back-compat, then let the new stable field tokens override (authoritative).
+    {
+        const int legacyIface = s.value(QStringLiteral("ifaceSortCol"), -1).toInt();
+        if (legacyIface >= 0)
+            m_ifaceSortField = columnIdForLegacyIndex(View::Interfaces, legacyIface);
+        const int legacyConn = s.value(QStringLiteral("connSortCol"), -1).toInt();
+        if (legacyConn >= 0)
+            m_connSortField = columnIdForLegacyIndex(View::Connections, legacyConn);
+        m_ifaceSortField = columnIdFromToken(
+            s.value(QStringLiteral("ifaceSortField")).toString(), m_ifaceSortField);
+        m_connSortField = columnIdFromToken(
+            s.value(QStringLiteral("connSortField")).toString(), m_connSortField);
+    }
     m_ifaceSortDesc = s.value(QStringLiteral("ifaceSortDesc"), m_ifaceSortDesc).toBool();
-    m_connSortCol   = s.value(QStringLiteral("connSortCol"), m_connSortCol).toInt();
     m_connSortDesc  = s.value(QStringLiteral("connSortDesc"), m_connSortDesc).toBool();
     m_gaugeEnabled  = s.value(QStringLiteral("gauge"), m_gaugeEnabled).toBool();
     m_dnsEnabled    = s.value(QStringLiteral("dns"), m_dnsEnabled).toBool();
@@ -1269,6 +1282,8 @@ void TuiApp::loadSettings()
     m_smoothing     = s.value(QStringLiteral("smoothing"), m_smoothing).toBool();
     m_directionColors = s.value(QStringLiteral("directionColors"), m_directionColors).toBool();
     m_sortWithinGroups = s.value(QStringLiteral("sortWithinGroups"), m_sortWithinGroups).toBool();
+    m_showProcessColumn   = s.value(QStringLiteral("showProcessColumn"),   m_showProcessColumn).toBool();
+    m_showContainerColumn = s.value(QStringLiteral("showContainerColumn"), m_showContainerColumn).toBool();
     m_pollMs        = std::clamp(s.value(QStringLiteral("pollMs"), m_pollMs).toInt(), 100, 10000);
     {
         const int g = s.value(QStringLiteral("groupBy"), int(m_groupBy)).toInt();
@@ -1285,11 +1300,12 @@ void TuiApp::loadSettings()
                 break;
             }
     }
-    // Clamp persisted sort columns in case the column set changed across versions.
-    const int ifaceCols = static_cast<int>(columnsFor(View::Interfaces).size());
-    const int connCols  = static_cast<int>(columnsFor(View::Connections).size());
-    m_ifaceSortCol = std::clamp(m_ifaceSortCol, 0, ifaceCols - 1);
-    m_connSortCol  = std::clamp(m_connSortCol, 0, connCols - 1);
+    // Guard the persisted sort field against a token that isn't valid for the
+    // view (corrupt/cross-view config) — fall back to the per-view default.
+    if (visualIndexForColumn(overlayColumnsFor(View::Interfaces), m_ifaceSortField) < 0)
+        m_ifaceSortField = ColumnId::Interface;
+    if (visualIndexForColumn(overlayColumnsFor(View::Connections), m_connSortField) < 0)
+        m_connSortField = ColumnId::RxRate;
 }
 
 void TuiApp::saveSettings() const
@@ -1310,9 +1326,9 @@ void TuiApp::saveSettings() const
     QSettings s;
     s.beginGroup(QStringLiteral("nqiftop"));
     s.setValue(QStringLiteral("view"), int(m_view));
-    s.setValue(QStringLiteral("ifaceSortCol"), m_ifaceSortCol);
+    s.setValue(QStringLiteral("ifaceSortField"), columnIdToken(m_ifaceSortField));
     s.setValue(QStringLiteral("ifaceSortDesc"), m_ifaceSortDesc);
-    s.setValue(QStringLiteral("connSortCol"), m_connSortCol);
+    s.setValue(QStringLiteral("connSortField"), columnIdToken(m_connSortField));
     s.setValue(QStringLiteral("connSortDesc"), m_connSortDesc);
     s.setValue(QStringLiteral("gauge"), m_gaugeEnabled);
     s.setValue(QStringLiteral("dns"), m_dnsEnabled);
@@ -1320,6 +1336,8 @@ void TuiApp::saveSettings() const
     s.setValue(QStringLiteral("smoothing"), m_smoothing);
     s.setValue(QStringLiteral("directionColors"), m_directionColors);
     s.setValue(QStringLiteral("sortWithinGroups"), m_sortWithinGroups);
+    s.setValue(QStringLiteral("showProcessColumn"), m_showProcessColumn);
+    s.setValue(QStringLiteral("showContainerColumn"), m_showContainerColumn);
     s.setValue(QStringLiteral("pollMs"), m_pollMs);
     s.setValue(QStringLiteral("groupBy"), int(m_groupBy));
     if (!m_themes.isEmpty())
@@ -1452,6 +1470,26 @@ void TuiApp::buildSettingItems()
                        "order fixed; off = order groups by their total."),
         [this] { return onOff(m_sortWithinGroups); },
         [this](int) { m_sortWithinGroups = !m_sortWithinGroups; requestRedraw(); }});
+
+    // Process column — show comm[pid] / attribution reason. Effective only when
+    // the agent advertises process-attribution-wire (else "unavailable"). Also
+    // toggleable from the Fields overlay (f); both route through the same flag.
+    m_settings.append({
+        QStringLiteral("Process column"),
+        QStringLiteral("Show the Process column (comm[pid], or the reason a flow has "
+                       "no local process). Needs an attribution-capable agent. Also: f."),
+        [this] { return m_procWire ? onOff(m_showProcessColumn)
+                                   : QStringLiteral("unavailable"); },
+        [this](int) { toggleOptionalColumn(ColumnId::Process); requestRedraw(); }});
+
+    // Container column — runtime:name. Effective only with container-attribution-wire.
+    m_settings.append({
+        QStringLiteral("Container column"),
+        QStringLiteral("Show the Container column (runtime:name). Needs a "
+                       "container-attribution-capable agent. Also: f."),
+        [this] { return m_contWire ? onOff(m_showContainerColumn)
+                                   : QStringLiteral("unavailable"); },
+        [this](int) { toggleOptionalColumn(ColumnId::Container); requestRedraw(); }});
 }
 
 void TuiApp::applyPollInterval()
@@ -1470,11 +1508,79 @@ void TuiApp::setPollApplier(std::function<void(int)> fn)
     applyPollInterval();   // sync the source to the (possibly persisted) interval
 }
 
+void TuiApp::setBackendInfo(bool usingAgent, const QString &version,
+                            const QStringList &caps)
+{
+    m_usingAgent = usingAgent;
+    m_agentCaps  = caps;
+    // Optional columns are gated on the agent's wire tokens — in-process
+    // capture advertises nothing, so they stay hidden (GUI parity). Without
+    // the token the columns would render "—"/"(host)" everywhere, which is
+    // misleading rather than helpful.
+    m_procWire = usingAgent && caps.contains(QStringLiteral("process-attribution-wire"));
+    m_contWire = usingAgent && caps.contains(QStringLiteral("container-attribution-wire"));
+    Q_UNUSED(version);
+    requestRedraw();
+}
+
+OptionalColumns TuiApp::effectiveOptionalColumns() const
+{
+    if (m_view != View::Connections)
+        return {};
+    return {
+        m_procWire && m_showProcessColumn   && m_groupBy != GroupBy::Process,
+        m_contWire && m_showContainerColumn && m_groupBy != GroupBy::Container,
+    };
+}
+
+QList<Column> TuiApp::activeColumns() const
+{
+    return columnsFor(m_view, effectiveOptionalColumns(), m_groupBy);
+}
+
+QList<Column> TuiApp::overlayColumns() const
+{
+    QList<Column> cols = overlayColumnsFor(m_view);
+    for (Column &c : cols) {
+        if (c.id == ColumnId::Process) {
+            c.available = m_procWire;
+            c.visible   = m_showProcessColumn;   // user pref; group-redundancy is separate
+        } else if (c.id == ColumnId::Container) {
+            c.available = m_contWire;
+            c.visible   = m_showContainerColumn;
+        }
+    }
+    return cols;
+}
+
+void TuiApp::cycleSortField()
+{
+    const QList<Column> cols = activeColumns();
+    if (cols.isEmpty())
+        return;
+    int idx = visualIndexForColumn(cols, currentSortField());
+    idx = (idx + 1) % static_cast<int>(cols.size());   // -1 (hidden) wraps to 0
+    if (idx < 0)
+        idx = 0;
+    setCurrentSortField(cols[idx].id);
+}
+
+void TuiApp::toggleOptionalColumn(ColumnId id)
+{
+    if (id == ColumnId::Process)
+        m_showProcessColumn = !m_showProcessColumn;
+    else if (id == ColumnId::Container)
+        m_showContainerColumn = !m_showContainerColumn;
+}
+
 void TuiApp::handleFieldsKey(int key)
 {
-    const int nCols = static_cast<int>(columnsFor(m_view).size());
-    int &sortCol = (m_view == View::Interfaces) ? m_ifaceSortCol : m_connSortCol;
+    const QList<Column> cols = overlayColumns();
+    const int n = static_cast<int>(cols.size());
+    if (n == 0) { m_overlay = Overlay::None; requestRedraw(); return; }
+    m_fieldsSel = std::clamp(m_fieldsSel, 0, n - 1);
     bool &sortDesc = (m_view == View::Interfaces) ? m_ifaceSortDesc : m_connSortDesc;
+    const Column &sel = cols[m_fieldsSel];
 
     switch (key) {
     case 'f':
@@ -1486,22 +1592,33 @@ void TuiApp::handleFieldsKey(int key)
         break;
     case KEY_UP:
     case 'k':
-        m_fieldsSel = (m_fieldsSel - 1 + nCols) % nCols;
+        m_fieldsSel = (m_fieldsSel - 1 + n) % n;
         break;
     case KEY_DOWN:
     case 'j':
-        m_fieldsSel = (m_fieldsSel + 1) % nCols;
+        m_fieldsSel = (m_fieldsSel + 1) % n;
         break;
     case ' ':
+        // Toggle visibility for an available optional field. Mandatory fields
+        // are a no-op; an unavailable one flashes why it can't be shown.
+        if (sel.hideable && sel.available)
+            toggleOptionalColumn(sel.id);
+        else if (sel.hideable && !sel.available)
+            flashMessage(QStringLiteral("%1 needs the agent's %2 capability")
+                             .arg(sel.title,
+                                  sel.id == ColumnId::Container
+                                      ? QStringLiteral("container-attribution-wire")
+                                      : QStringLiteral("process-attribution-wire")));
+        break;
     case '\n':
     case '\r':
     case KEY_ENTER:
-        // Selecting the current sort column toggles direction; otherwise make
-        // the highlighted column the sort column (keeping the direction).
-        if (sortCol == m_fieldsSel)
+        // Make the selected field the sort field; if it already is, flip the
+        // direction (preserves the old "activate current sort flips it" feel).
+        if (currentSortField() == sel.id)
             sortDesc = !sortDesc;
         else
-            sortCol = m_fieldsSel;
+            setCurrentSortField(sel.id);
         break;
     case 'r':
     case 'R':
