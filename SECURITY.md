@@ -19,12 +19,12 @@ elevation, handoff IPC, or export sanitisation can be security issues.
 ## Supported versions
 
 `qiftop` is pre-1.0. Only the latest tagged release receives security fixes;
-there are no LTS branches. The current project release is **0.2.2**.
+there are no LTS branches.
 
-| Version | Supported          |
-|---------|--------------------|
-| 0.2.2   | :white_check_mark: |
-| < 0.2.2 | :x:                |
+| Version            | Supported          |
+|--------------------|--------------------|
+| latest release     | :white_check_mark: |
+| older releases     | :x:                |
 
 ## Reporting a vulnerability
 
