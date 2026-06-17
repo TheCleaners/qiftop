@@ -740,6 +740,51 @@ target and stops emitting. Don't add per-tick work that runs on every
 row unconditionally — the sub-poll tick fires often and is on the GUI
 thread.
 
+### 5.8 Benchmarks (opt-in, `QBENCHMARK`)
+
+Performance microbenchmarks live under `bench/`. They use Qt Test's
+**`QBENCHMARK` / `QBENCHMARK_ONCE`** — **no new third-party dependency**
+(deliberately not google/benchmark; `Qt6::Test` is already in the tree).
+They are **opt-in and fully excluded from normal builds and the default
+`ctest` run**, so distro/CI builds are unaffected.
+
+```sh
+cmake -B build-bench -DCMAKE_BUILD_TYPE=Release -DQIFTOP_BUILD_BENCHMARKS=ON
+cmake --build build-bench --target benchmarks -j$(nproc)
+QT_QPA_PLATFORM=offscreen ./build-bench/bench/bench_connection_aggregator
+```
+
+Conventions (mirror `tests/`):
+* Each `bench/bench_*.cpp` is its own executable via `qiftop_add_benchmark()`
+  and, like the tests, **compiles the specific `src/` files it needs
+  directly** rather than linking `libqiftop` — keeps the bench build
+  isolated and fast.
+* The targets are `EXCLUDE_FROM_ALL`; their CTest entries are registered
+  with `DISABLED TRUE` and the `benchmark` label, so a plain `ctest` never
+  runs them (verify: `ctest -N` shows them as `(Disabled)`; a build without
+  the flag lists none).
+* Inputs come from `bench/BenchData.h` — deterministic (seeded) synthetic
+  `Connection` / `InterfaceStats` generators that scale 1k → 100k. No DNS,
+  no network, no kernel I/O, so the numbers are reproducible.
+* Resolver/conntrack benchmarks (sock_diag, `/proc`, cgroup) need a live
+  kernel and belong in an integration tier, not these pure micro-benches.
+
+**Baseline (golden-nugget reference — dev host, Release, single-tick cost).**
+These are the empirical basis for the "how eager can attribution get?"
+question (see the attribution-tuning design): the per-tick *data pipeline*
+is cheap, so the agent's poll cadence — not the pipeline — is the budget.
+
+| Path | 4096 flows | 100k flows |
+|------|-----------:|-----------:|
+| `ConnectionAggregator` update (no DNS/UDP) | ~8.7 ms | ~316 ms |
+| `ConnectionFilter` evaluate (parse once) | ~0.03 ms | ~1 ms |
+| `admitFlowTopK` (top-4096 admission) | ~0.21 ms | ~22 ms |
+
+Takeaways: the **aggregator dominates** and is the thing to watch when
+raising flow caps; filtering and top-K are nearly free; even at 100k flows
+the pure pipeline fits well within a 1 s tick. Re-measure on your own host
+before drawing conclusions — these are relative, not absolute, guarantees.
+
 ---
 
 ## 6. Debugging recipes

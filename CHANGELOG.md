@@ -4,6 +4,16 @@ All notable changes to qiftop are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Performance benchmark harness** (developer tooling) — opt-in `bench/`
+  microbenchmarks built on Qt Test's `QBENCHMARK` (no new dependency),
+  enabled with `-DQIFTOP_BUILD_BENCHMARKS=ON` and excluded from the default
+  build and `ctest` run. Initial coverage: the connection aggregator, the
+  filter mini-language evaluator, and the top-K flow cap, with deterministic
+  synthetic inputs scaling to 100k flows. See `docs/HACKING.md` §5.8.
+
 ## [0.3.0] - 2026-06-17
 
 The "all-inclusive" release: first-class **BSD support** (FreeBSD + NetBSD
