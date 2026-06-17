@@ -30,6 +30,24 @@ gracefully against older agents.
 - **nqiftop** gained group collapse/expand (`h`/`l`/Enter), a grouping-aware
   flow-column header, `Ctrl-F`/`Ctrl-B` page down/up (vim/less aliases), and a
   `W` export action that prompts for a filename (`w` still auto-names).
+- **Sort within groups** — a new toggle (GUI Settings → Display, and the
+  nqiftop settings overlay; on by default) sorts flows *within* each group while
+  the group order stays frozen at first appearance. Turning it off restores the
+  classic global sort that also reorders groups by their aggregate.
+- **nqiftop group-info window** — pressing `Enter` on a group header now opens a
+  detail window (process `comm`/`pid`/`uid` plus on-demand `exe`/`cmdline`/`cwd`
+  via `GetProcessDetails`, container scope, and the group's aggregate rates and
+  flow count); fold/unfold stays on `h`/`l`/`Space`. TUI info dialogs gained an
+  accent-coloured label column and word-wrapping of long values to the dialog
+  width.
+
+### Performance
+- **nqiftop viewport-only rendering** — a frame now formats cells only for the
+  rows visible in the scroll window instead of the whole (possibly thousands of
+  rows) table; off-screen rows cost only their cheap structural pass.
+- **In-process flow cap** — the in-process `ConntrackMonitor` now keeps only the
+  top 4096 flows by bytes (a bounded min-heap), matching the agent's snapshot
+  cap, so a busy router no longer balloons client memory.
 
 ### Fixed
 - **Dual-stack (v4-mapped IPv6) attribution** — flows owned by an `AF_INET6`
@@ -50,6 +68,10 @@ gracefully against older agents.
 - **nqiftop**: fixed a 100% CPU spin on stdin EOF and unresponsive input on
   FreeBSD (raw `read(2)` input path), plus garbled box-drawing on BSD curses
   (wide-char rendering).
+- **`.deb` install conflict** — installing the 0.3.0 package set over an older
+  `libqiftop0` failed with `Depends: libqiftop0 (= 0.2.5) but 0.3.0 is to be
+  installed`. The Debian shlibs version policy is now `>=` (not exact `=`), so a
+  component never pins an incompatible-but-ABI-compatible library version.
 
 ### Changed
 - D-Bus contract `Version` → **0.6** (additive: `ConnectionDto.reason`,
