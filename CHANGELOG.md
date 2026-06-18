@@ -51,6 +51,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stable `ColumnId` token (old `ifaceSortCol` / `connSortCol` integers are
   still read for a clean upgrade).
 
+### Fixed
+- **Colour-picker swatches in Settings → Colours now actually show their
+  colour.** Each swatch button is filled with the colour it represents, with
+  the hex label drawn in black or white for max legibility (WCAG luminance).
+  Previously they rendered as flat grey rectangles: a `QPushButton` with a
+  background-color-only stylesheet falls back to the native style and never
+  paints the fill — specifying the full box model (border + padding) is what
+  makes Qt honour it.
+
 ## [0.3.1] - 2026-06-17
 
 ### Added
