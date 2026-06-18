@@ -38,6 +38,23 @@ public:
     void setColorCodeEnabled(bool v) { m_colorCode = v; }
     [[nodiscard]] bool colorCodeEnabled() const { return m_colorCode; }
 
+    // Inject the active GUI theme's flow-endpoint accents (source = cool,
+    // dest = warm). When both are valid the painter prefers them over its
+    // built-in luminance-derived dark/light defaults; pass two invalid
+    // QColors (the default) to revert to the automatic behaviour — which is
+    // what the "System" theme does, keeping pre-theming appearance unchanged.
+    void setFlowAccentColors(const QColor &src, const QColor &dst)
+    {
+        m_flowSrc = src;
+        m_flowDst = dst;
+    }
+    [[nodiscard]] bool hasFlowAccentColors() const
+    {
+        return m_flowSrc.isValid() && m_flowDst.isValid();
+    }
+    [[nodiscard]] QColor flowSourceColor() const { return m_flowSrc; }
+    [[nodiscard]] QColor flowDestColor() const { return m_flowDst; }
+
     // Group-header chip colours. Empty/invalid entries fall back to a
     // muted theme colour in the painter.
     void setChipPalette(const ChipPalette &p) { m_chipPalette = p; }
@@ -51,5 +68,7 @@ public:
 private:
     bool m_colorCode = true;
     ChipPalette m_chipPalette;
+    QColor m_flowSrc;   // injected theme accent (invalid = use auto default)
+    QColor m_flowDst;
     mutable QTextDocument m_doc;
 };

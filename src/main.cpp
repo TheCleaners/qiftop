@@ -11,6 +11,7 @@
 #include "dbus/Types.h"
 #include "dns/QtDnsResolver.h"
 #include "ui/MainWindow.h"
+#include "ui/GuiTheme.h"
 #include "util/HandoffClient.h"
 #include "util/Logging.h"
 
@@ -160,6 +161,17 @@ int main(int argc, char *argv[])
 
     Settings      settings;
     QtDnsResolver dns;
+
+    // Capture the native style/palette ONCE before any theme override, then
+    // apply the persisted GUI colour theme. Default "System" restores exactly
+    // what we captured, so out-of-the-box appearance is unchanged.
+    qiftop::ui::captureSystemTheme();
+    {
+        const auto themes = qiftop::ui::builtinGuiThemes();
+        int idx = qiftop::ui::guiThemeIndexByName(themes, settings.guiThemeName());
+        if (idx < 0) idx = 0;
+        qiftop::ui::applyGuiTheme(themes.at(idx));
+    }
 
     // Pick the data source. Prefer the privileged DBus agent so the UI never
     // needs CAP_NET_ADMIN of its own; fall back to in-process backends (which

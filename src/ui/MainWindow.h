@@ -169,6 +169,10 @@ protected:
     QString     m_agentVersion;
     QStringList m_backendCaps;
 
+    // Last GUI colour theme applied via applySettingsToUi(); guards against
+    // re-forcing the style (and its flicker) on unrelated settings changes.
+    QString     m_appliedThemeName;
+
     // Interfaces tab
     NetworkModel         *m_netModel       = nullptr;
     InterfaceFilterProxy *m_netProxy       = nullptr;

@@ -22,7 +22,8 @@ struct FlowColors {
     QString dst;    // destination endpoint
 };
 
-FlowColors pickFlowColors(const QStyleOptionViewItem &option, bool selected)
+FlowColors pickFlowColors(const QStyleOptionViewItem &option, bool selected,
+                          const QColor &injectedSrc, const QColor &injectedDst)
 {
     // On the selected row everything has to read against the highlight
     // background — bail out to a single contrasting color so we don't end
@@ -37,9 +38,15 @@ FlowColors pickFlowColors(const QStyleOptionViewItem &option, bool selected)
     const QColor base = option.palette.color(QPalette::Base);
     const bool   dark = base.lightness() < 128;
     const QColor muted = option.palette.color(QPalette::PlaceholderText);
-    // Hand-picked, theme-aware accents. Source = cool, destination = warm.
-    const QColor src = dark ? QColor(0x6CB6FF) : QColor(0x0B5FA5); // blue
-    const QColor dst = dark ? QColor(0xF0B86E) : QColor(0xA0521B); // amber
+    // Prefer the active theme's injected accents (set by
+    // MainWindow::applySettingsToUi from GuiTheme); fall back to the
+    // hand-picked, luminance-aware defaults when none were injected (the
+    // "System" theme path, so behaviour is unchanged out of the box).
+    // Source = cool, destination = warm.
+    const QColor src = injectedSrc.isValid() ? injectedSrc
+                     : (dark ? QColor(0x6CB6FF) : QColor(0x0B5FA5)); // blue
+    const QColor dst = injectedDst.isValid() ? injectedDst
+                     : (dark ? QColor(0xF0B86E) : QColor(0xA0521B)); // amber
     return { muted.name(QColor::HexArgb),
              src  .name(QColor::HexArgb),
              dst  .name(QColor::HexArgb) };
@@ -111,14 +118,16 @@ void buildGroupDoc(QTextDocument &doc,
 void buildDoc(QTextDocument &doc,
               const QStyleOptionViewItem &option,
               const QModelIndex &index,
-              bool colorCode)
+              bool colorCode,
+              const QColor &injectedSrc,
+              const QColor &injectedDst)
 {
     const QString proto  = index.data(ConnectionModel::ProtoTextRole).toString().toHtmlEscaped();
     const QString local  = index.data(ConnectionModel::LocalTextRole).toString().toHtmlEscaped();
     const QString remote = index.data(ConnectionModel::RemoteTextRole).toString().toHtmlEscaped();
 
     const bool selected = option.state & QStyle::State_Selected;
-    const FlowColors c  = pickFlowColors(option, selected);
+    const FlowColors c  = pickFlowColors(option, selected, injectedSrc, injectedDst);
 
     // Direction-aware ordering: outbound -> src=local; inbound -> src=remote;
     // unknown -> default to local→remote (matches non-aggregated view).
@@ -165,7 +174,9 @@ static void chooseDoc(QTextDocument &doc,
                       const QStyleOptionViewItem &option,
                       const QModelIndex &index,
                       bool colorCode,
-                      const ChipPalette &chipPalette)
+                      const ChipPalette &chipPalette,
+                      const QColor &injectedSrc,
+                      const QColor &injectedDst)
 {
     const QVariantList chips =
         index.data(ConnectionModel::GroupChipsRole).toList();
@@ -173,7 +184,7 @@ static void chooseDoc(QTextDocument &doc,
         buildGroupDoc(doc, option, chips, chipPalette);
         return;
     }
-    buildDoc(doc, option, index, colorCode);
+    buildDoc(doc, option, index, colorCode, injectedSrc, injectedDst);
 }
 
 void ConnectionFlowDelegate::paint(QPainter *painter,
@@ -196,7 +207,7 @@ void ConnectionFlowDelegate::paint(QPainter *painter,
 
     const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
 
-    chooseDoc(m_doc, opt, index, m_colorCode, m_chipPalette);
+    chooseDoc(m_doc, opt, index, m_colorCode, m_chipPalette, m_flowSrc, m_flowDst);
     m_doc.setTextWidth(textRect.width());
 
     painter->save();
@@ -217,7 +228,7 @@ QSize ConnectionFlowDelegate::sizeHint(const QStyleOptionViewItem &option,
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
 
-    chooseDoc(m_doc, opt, index, m_colorCode, m_chipPalette);
+    chooseDoc(m_doc, opt, index, m_colorCode, m_chipPalette, m_flowSrc, m_flowDst);
 
     // Measure at the live column width so wrapped content (long IPv6
     // endpoints in a narrow window) reports its true multi-line height

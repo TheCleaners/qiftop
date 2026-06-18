@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **GUI colour themes** — the Qt Widgets client gained named colour themes,
+  the desktop analogue of nqiftop's `z`-cycled themes. A new `GuiTheme` model
+  (`src/ui/GuiTheme.h`) ships **System** (the default — leaves the native Qt
+  palette untouched, so out-of-the-box appearance is unchanged), plus
+  **Dark**, **Light**, **Nord**, **Solarized Dark**, **Solarized Light**, and
+  **Gruvbox Dark**. Pick one under Preferences → Colors → *Theme*. Named
+  themes force the Fusion style (the only widely-available style that honours
+  an arbitrary `QPalette`) and apply their palette live — no restart. The
+  Connections "Flow" column's source/destination accents follow the active
+  theme; the filter-error tint is now derived from the live palette so it
+  stays readable on dark themes. Persisted as `display/guiTheme`; an unknown
+  name falls back cleanly to System. GUI-only — **no DBus wire, `Version`, or
+  capability-token changes.**
 - **Transport-neutral backend capabilities** — capability tokens
   (`process-attribution-wire`, `ifindex`, `direction-on-wire`, …) are no
   longer an agent-only thing. The abstract `NetworkMonitor` /

@@ -97,6 +97,10 @@ qiftop_add_test(test_tui_format
     ${CMAKE_SOURCE_DIR}/src/backend/PlatformInfo.cpp
     ${CMAKE_SOURCE_DIR}/src/dns/DnsResolver.cpp)
 qiftop_add_test(test_tui_theme test_tui_theme.cpp)
+qiftop_add_test(test_gui_theme
+    test_gui_theme.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/GuiTheme.cpp)
+target_link_libraries(test_gui_theme PRIVATE Qt6::Widgets)
 qiftop_add_test(test_settings_migration
     test_settings_migration.cpp
     ${CMAKE_SOURCE_DIR}/src/config/Settings.cpp

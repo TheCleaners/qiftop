@@ -202,6 +202,24 @@ private slots:
         Settings reopened;
         QCOMPARE(reopened.pollIntervalMs(), 4242);
     }
+
+    // GUI theme: defaults to "System" (so out-of-the-box look is unchanged)
+    // and round-trips an explicitly chosen theme name through QSettings.
+    void guiThemeDefaultsToSystemAndRoundTrips()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        redirectSettings(dir.path());
+
+        {
+            Settings s;
+            QCOMPARE(s.guiThemeName(), QStringLiteral("System"));
+            s.setGuiThemeName(QStringLiteral("Nord"));
+            QCOMPARE(s.guiThemeName(), QStringLiteral("Nord"));
+        }
+        Settings reopened;
+        QCOMPARE(reopened.guiThemeName(), QStringLiteral("Nord"));
+    }
 };
 
 QTEST_MAIN(TestSettingsMigration)
