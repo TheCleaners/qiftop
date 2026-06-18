@@ -1,7 +1,10 @@
 #pragma once
 
-// Server-side attribution glue: enrich a snapshot of Connection rows
-// with process + container metadata sourced from a ProcessResolver.
+// Attribution glue: enrich a snapshot of Connection rows with process +
+// container metadata sourced from a ProcessResolver. Shared by the DBus
+// agent (ConnectionsService, server-side) and the in-process Linux
+// ConntrackMonitor (self-elevated / no-agent fallback) so both paths
+// attribute flows identically.
 //
 // Extracted as a free function (not a member of ConnectionsService) so
 // it can be unit-tested with a FakeProcessResolver — the service slot
@@ -9,7 +12,8 @@
 //
 // Threading: callers are expected to call this from the same thread
 // that constructs the resolver and owns the slot (the agent main
-// thread). ProcessResolver implementations are documented as
+// thread, or the in-process ConntrackMonitor worker thread).
+// ProcessResolver implementations are documented as
 // reentrant-safe across resolvePid / enrichPid / resolveContainerForPid /
 // resolveContainerChainForPid (ProcessResolver.h §THREADING), so this
 // helper makes no extra synchronisation.
@@ -21,9 +25,9 @@
 
 struct Connection;
 
-namespace qiftop::backend { class ProcessResolver; }
+namespace qiftop::backend {
 
-namespace qiftop::agent {
+class ProcessResolver;
 
 struct AttributionOptions {
     // When true, callers expect the resolver to advertise the
@@ -59,7 +63,7 @@ struct AttributionOptions {
 // Safe to call with resolver==nullptr: no-op (every flow keeps zero
 // attribution).
 void attributeFlows(QList<Connection> &flows,
-                    backend::ProcessResolver *resolver,
+                    ProcessResolver *resolver,
                     const AttributionOptions &opts = {});
 
-} // namespace qiftop::agent
+} // namespace qiftop::backend

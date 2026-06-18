@@ -33,7 +33,7 @@ namespace qiftop::backend::linuximpl {
 //   flow lookups that arrive together when ConntrackMonitor ticks.
 //   resolvePid() does only cached table lookups; enrichPid() performs
 //   /proc metadata reads and is intended to be memoised per unique PID by
-//   the caller (agent::attributeFlows does this for each snapshot).
+//   the caller (backend::attributeFlows does this for each snapshot).
 //
 // THREADING
 //   resolvePid()/enrichPid() are called from the agent thread (or, future: the

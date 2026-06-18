@@ -4,6 +4,7 @@
 #include <QDBusMessage>
 
 #include "IdleManager.h"
+#include "backend/MonitorCapabilities.h"
 #include "backend/NetworkMonitor.h"
 #include "backend/ProcessResolver.h"
 
@@ -80,22 +81,13 @@ QStringList InterfacesService::capabilities() const
         // clients gate the new ConnectionDto fields (pid/uid/comm + container
         // bulk + chain) on these tokens rather than poking at fields blindly.
         // Only advertise when the underlying resolver token is present, so
-        // we never lie about data we don't actually populate.
-        if (resolverCaps.contains(QStringLiteral("process-attribution"))
-            && !base.contains(QStringLiteral("process-attribution-wire"))) {
-            base.append(QStringLiteral("process-attribution-wire"));
-        }
-        if (resolverCaps.contains(QStringLiteral("container-attribution"))
-            && !base.contains(QStringLiteral("container-attribution-wire"))) {
-            base.append(QStringLiteral("container-attribution-wire"));
-        }
-        // AGENTS.md §4: chain-wire is a strict superset of leaf container
+        // we never lie about data we don't actually populate. The mapping is
+        // shared with the in-process ConntrackMonitor via attributionWireTokens
+        // (AGENTS.md §4): chain-wire is a strict superset of leaf container
         // info, so it requires BOTH resolver tokens. Keep this in sync with
         // Application::start()'s wantChain computation.
-        if (resolverCaps.contains(QStringLiteral("container-attribution"))
-            && resolverCaps.contains(QStringLiteral("container-chain"))
-            && !base.contains(QStringLiteral("container-chain-wire"))) {
-            base.append(QStringLiteral("container-chain-wire"));
+        for (const auto &tok : backend::attributionWireTokens(resolverCaps)) {
+            if (!base.contains(tok)) base.append(tok);
         }
     }
     return base;

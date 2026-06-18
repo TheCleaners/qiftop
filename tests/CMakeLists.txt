@@ -181,7 +181,7 @@ target_link_libraries(test_resolver_factory PRIVATE Qt6::DBus)
 
 qiftop_add_test(test_attribution
     test_attribution.cpp
-    ${CMAKE_SOURCE_DIR}/src/agent/Attribution.cpp)
+    ${CMAKE_SOURCE_DIR}/src/backend/Attribution.cpp)
 
 qiftop_add_test(test_composite_resolver
     test_composite_resolver.cpp)
@@ -220,7 +220,7 @@ qiftop_add_test(test_services
     fakes/FakeMonitors.h
     ${CMAKE_SOURCE_DIR}/src/agent/ConnectionsService.cpp
     ${CMAKE_SOURCE_DIR}/src/agent/InterfacesService.cpp
-    ${CMAKE_SOURCE_DIR}/src/agent/Attribution.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/Attribution.cpp
     ${CMAKE_SOURCE_DIR}/src/agent/IdleManager.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/ConnectionMonitor.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/NetworkMonitor.cpp

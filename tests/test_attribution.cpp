@@ -1,4 +1,4 @@
-// Tests for qiftop::agent::attributeFlows — the helper that enriches a
+// Tests for qiftop::backend::attributeFlows — the helper that enriches a
 // snapshot of Connection rows with process + container metadata from
 // the wired ProcessResolver. Drives the resolver via a fake so the
 // test stays a pure unit test (no /proc, no sock_diag, no agent
@@ -10,7 +10,7 @@
 
 #include <QTest>
 
-#include "agent/Attribution.h"
+#include "backend/Attribution.h"
 #include "backend/Connection.h"
 #include "backend/ProcessResolver.h"
 
@@ -121,7 +121,7 @@ private slots:
     void nullResolverIsNoop()
     {
         QList<Connection> flows = { makeFlow(8080), makeFlow(8081) };
-        qiftop::agent::attributeFlows(flows, nullptr);
+        qiftop::backend::attributeFlows(flows, nullptr);
         for (const auto &c : flows) {
             QCOMPARE(c.process.pid, qint32(0));
             QVERIFY(c.container.runtime.isEmpty());
@@ -136,7 +136,7 @@ private slots:
         r.setCapabilities({QStringLiteral("process-attribution"),
                            QStringLiteral("container-attribution")});
         QList<Connection> flows = { makeFlow(8080) };
-        qiftop::agent::attributeFlows(flows, &r);
+        qiftop::backend::attributeFlows(flows, &r);
         QCOMPARE(flows[0].process.pid, qint32(0));
         QVERIFY(flows[0].container.runtime.isEmpty());
     }
@@ -149,7 +149,7 @@ private slots:
         r.setProcessForLocalPort(8080, p);
 
         QList<Connection> flows = { makeFlow(8080) };
-        qiftop::agent::attributeFlows(flows, &r);
+        qiftop::backend::attributeFlows(flows, &r);
         QCOMPARE(flows[0].process.pid, qint32(1234));
         QCOMPARE(flows[0].process.uid, quint32(33));
         QCOMPARE(flows[0].process.comm, QStringLiteral("nginx"));
@@ -169,7 +169,7 @@ private slots:
                           QStringLiteral("web")});
 
         QList<Connection> flows = { makeFlow(8080) };
-        qiftop::agent::attributeFlows(flows, &r);
+        qiftop::backend::attributeFlows(flows, &r);
         QCOMPARE(flows[0].container.runtime, QStringLiteral("docker"));
         QCOMPARE(flows[0].container.id,      QStringLiteral("af85275074f5"));
         QCOMPARE(flows[0].container.name,    QStringLiteral("web"));
@@ -198,8 +198,8 @@ private slots:
                           QStringLiteral("app")});
 
         QList<Connection> flows = { makeFlow(8080) };
-        qiftop::agent::attributeFlows(flows, &r,
-            qiftop::agent::AttributionOptions{ /*wantContainerChain=*/true });
+        qiftop::backend::attributeFlows(flows, &r,
+            qiftop::backend::AttributionOptions{ /*wantContainerChain=*/true });
 
         QCOMPARE(flows[0].containerChain.size(), 2);
         QCOMPARE(flows[0].containerChain[0].runtime,
@@ -227,7 +227,7 @@ private slots:
         for (quint16 port = 9000; port < 9050; ++port)
             flows << makeFlow(port);
 
-        qiftop::agent::attributeFlows(flows, &r);
+        qiftop::backend::attributeFlows(flows, &r);
 
         QCOMPARE(r.pidCalls, 50);
         QCOMPARE(r.enrichCalls.value(999), 1);
@@ -257,7 +257,7 @@ private slots:
             }
         }
 
-        qiftop::agent::attributeFlows(flows, &r);
+        qiftop::backend::attributeFlows(flows, &r);
 
         QCOMPARE(r.pidCalls, 50);
         for (qint32 pid = 1000; pid < 1005; ++pid) {
@@ -289,8 +289,8 @@ private slots:
         for (quint16 port = 7000; port < 7010; ++port)
             flows << makeFlow(port);
 
-        qiftop::agent::attributeFlows(flows, &r,
-            qiftop::agent::AttributionOptions{ /*wantContainerChain=*/true });
+        qiftop::backend::attributeFlows(flows, &r,
+            qiftop::backend::AttributionOptions{ /*wantContainerChain=*/true });
 
         QCOMPARE(r.containerCalls.value(42), 1);
         QCOMPARE(r.chainCalls.value(42), 1);
@@ -302,7 +302,7 @@ private slots:
         // must NOT trigger a container lookup against PID 0.
         FakeResolver r;
         QList<Connection> flows = { makeFlow(8080) };
-        qiftop::agent::attributeFlows(flows, &r);
+        qiftop::backend::attributeFlows(flows, &r);
         QCOMPARE(r.pidCalls, 1);
         QVERIFY(r.enrichCalls.isEmpty());
         QVERIFY(r.containerCalls.isEmpty());
@@ -333,12 +333,12 @@ private slots:
                               QStringLiteral("cid-%1").arg(callNo), {}});
         };
 
-        qiftop::agent::AttributionOptions opts;
+        qiftop::backend::AttributionOptions opts;
         quint64 nextStart = 100;
         opts.startTimeForPid = [&nextStart](qint32) { return nextStart++; };
 
         QList<Connection> flows = { makeFlow(8080), makeFlow(8081) };
-        qiftop::agent::attributeFlows(flows, &r, opts);
+        qiftop::backend::attributeFlows(flows, &r, opts);
 
         // No cross-contamination: each incarnation got its own lookup.
         QCOMPARE(r.enrichCalls.value(777), 2);
@@ -362,13 +362,13 @@ private slots:
             ContainerInfo{QStringLiteral("docker"),
                           QStringLiteral("abc123def456"), {}});
 
-        qiftop::agent::AttributionOptions opts;
+        qiftop::backend::AttributionOptions opts;
         opts.startTimeForPid = [](qint32) { return quint64(100); };
 
         QList<Connection> flows;
         for (quint16 port = 9100; port < 9150; ++port)
             flows << makeFlow(port);
-        qiftop::agent::attributeFlows(flows, &r, opts);
+        qiftop::backend::attributeFlows(flows, &r, opts);
 
         QCOMPARE(r.pidCalls, 50);
         QCOMPARE(r.enrichCalls.value(777), 1);

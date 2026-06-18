@@ -38,7 +38,6 @@ src/
 │   ├── Config.{h,cpp}        # loadIdleConfig() — parses /etc/qiftop/agent.conf
 │   ├── InterfacesService.{h,cpp}   # /.../Interfaces — Version + Capabilities props
 │   ├── ConnectionsService.{h,cpp}  # /.../Connections — GetProcessDetails RPC, snapshot cap
-│   ├── Attribution.{h,cpp}  # pure helper: enrich Connection list via ProcessResolver
 │   └── IdleManager.{h,cpp}   # adaptive polling cadence + per-client hints
 ├── aggregate/                # libqiftop row/rate aggregators (plain QObject)
 │   ├── InterfaceAggregator.{h,cpp}   # per-interface rates + sorted rows
@@ -51,10 +50,12 @@ src/
 │   ├── ProcessDetails.h            # on-demand exe/cmdline/cwd/startTime DTO
 │   ├── CompositeResolver.h         # fan-out across a chain of resolvers
 │   ├── ProcessResolverFactory.{h,cpp}  # env-gated default resolver chain
+│   ├── Attribution.{h,cpp}         # enrich Connection list via ProcessResolver (shared: agent + in-process)
+│   ├── MonitorCapabilities.h       # capability union + resolver-caps→*-attribution-wire mapping
 │   ├── PlatformInfo.{h,cpp}        # qiftop::platform host facts (uid→name, ephemeral range)
-│   ├── linux/                      # libnl + nf_conntrack + attribution (server-side)
+│   ├── linux/                      # libnl + nf_conntrack + attribution
 │   │   ├── NetlinkMonitor.{h,cpp}, NetlinkWorker.{h,cpp}   # per-interface stats
-│   │   ├── ConntrackMonitor.{h,cpp}                        # per-flow capture
+│   │   ├── ConntrackMonitor.{h,cpp}                        # per-flow capture + in-process attribution
 │   │   ├── SockDiagResolver.{h,cpp}, SockDiagDump.{h}, SockDiagParse.h  # pid via sock_diag
 │   │   ├── CgroupClassifier.{h,cpp}, CgroupParse.h         # pid → container runtime/id/chain
 │   │   ├── NetnsScanner.{h,cpp}                            # per-netns socket dump (setns)
@@ -96,7 +97,11 @@ dist/
 
 1. **`backend/` does not include `agent/` or `ui/` or `dbus/Types.h`.**
    Backends speak in their own value types (`InterfaceStats`, `Connection`).
-   The agent translates them to DTOs at the boundary.
+   The agent translates them to DTOs at the boundary. (This is why the
+   `attributeFlows` attribution helper lives in `backend/Attribution.{h,cpp}`
+   — namespace `qiftop::backend` — rather than `agent/`: both the agent's
+   `ConnectionsService` AND the in-process Linux `ConntrackMonitor` worker
+   need it, and a backend can't reach up into `agent/`.)
 2. **`agent/` does not include `ui/`.** Period.
 3. **`ui/` does not include `backend/linux/*`.** It uses the abstract
    interfaces (resolved at runtime to either a `DBus*Monitor` or, when
@@ -373,10 +378,14 @@ How each transport fills it:
   empty and the client's union recombines them.
 * **In-process Linux** — `NetlinkMonitor` advertises `ifindex` / `oper-state`
   / `link-errors` (the interface fields it fills). `ConntrackMonitor`
-  advertises only the structural `iana-proto` / `tcp-state`; it has **no
-  resolver**, so it MUST NOT advertise any `*-attribution-wire` token, and it
-  does NOT advertise `direction-on-wire` / `attribution-reason` (those are
-  inferred client-side, not produced in the dump).
+  advertises the structural `iana-proto` / `tcp-state` PLUS the
+  `*-attribution-wire` tokens derived from its wired `ProcessResolver`'s
+  probed capabilities (`backend::attributionWireTokens(m_resolverCaps)`),
+  so the self-elevated / no-agent path attributes at parity with the agent.
+  It still does NOT advertise `direction-on-wire` / `attribution-reason`
+  (those are inferred client-side, not produced in the dump). An
+  unprivileged resolver probes fewer capabilities and advertises fewer
+  tokens accordingly.
 * **In-process BSD** — `BsdNetworkMonitor` advertises the same interface
   tokens. `BsdConnectionMonitor` DOES attribute (via `BsdSocketResolver`), so
   it advertises `iana-proto`, `direction-on-wire` (SYN-observed), and
@@ -493,6 +502,24 @@ sync with the agent's `kMaxConnections`), but collects the top-N via a
 K-bounded min-heap by bytes (`backend/linux/FlowTopK.h::admitFlowTopK`)
 so the transient memory is O(K), not O(table). Same one-time `qWarning`
 on overflow. Pinned by `test_flow_topk`.
+
+The in-process `ConntrackMonitor` **also attributes process/container
+metadata**, at parity with the agent path. The constructor builds the
+default `ProcessResolver` (`backend/ProcessResolverFactory.h::createProcessResolver`)
+on the main thread, snapshots its probed `capabilities()` into
+`m_resolverCaps`, and hands the resolver to the worker; `Worker::poll()`
+runs the shared `backend::attributeFlows()` over the snapshot (once per
+tick, on the worker thread — the resolver's own bounded caches +
+starttime guards + ENOENT tolerance per §8a do the heavy lifting) before
+both `connectionsUpdated` emits. `wantContainerChain` mirrors the agent:
+gated on the resolver advertising BOTH `container-attribution` and
+`container-chain`. `ConntrackMonitor::capabilities()` then advertises the
+`*-attribution-wire` tokens derived from `m_resolverCaps` via the shared
+`backend::attributionWireTokens()` helper (same mapping the agent's
+`InterfacesService` uses), so the GUI/TUI Process & Container columns
+light up on the self-elevated path. Unprivileged runs probe a thinner
+resolver (own processes only) and advertise correspondingly fewer tokens
+— honest, not special-cased. Pinned by `test_backend_capabilities`.
 
 ### Access control
 
@@ -670,11 +697,11 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_priv_escalator`      | `PrivilegeEscalator::envAllowlist` / `filterEnv` — security-critical env-var filtering for the root child |
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults; v0.5 `reason` round-trip + out-of-range clamp to NoLocalSocket. |
 | `test_wire_compat`         | Forward-compat: a real session-bus service returns OLD-shaped (shorter) `ConnectionDto`/`InterfaceStatsDto` structs (no `reason` / no v0.3 iface tail); the PRODUCTION `operator>>` must decode them via its `atEnd()` guards (missing tail fields default) instead of reading past the struct end and aborting — the new-client-vs-old-agent crash. |
-| `test_attribution`         | `agent::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
+| `test_attribution`         | `backend::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
 | `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
 | `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. Includes both sides of the transport-neutral cap gate: `processColumnHiddenWithoutWireCapability` (no token ⇒ hidden) and `attributionColumnsShowOnInProcessBackendWithCaps` (in-process backend, `usingAgent=false`, advertising the tokens ⇒ shown). |
-| `test_backend_capabilities` | Transport-neutral `NetworkMonitor::capabilities()` / `ConnectionMonitor::capabilities()` contract: the `mergeCapabilities` union helper (dedup + first-seen order); the DBus proxies (agent's merged list rides on `DBusNetworkMonitor`, `DBusConnectionMonitor` empty, union == agent list); in-process Linux `NetlinkMonitor` (`ifindex`/`oper-state`/`link-errors`) and `ConntrackMonitor` (only `iana-proto`/`tcp-state`, NO `*-attribution-wire`/`direction-on-wire`/`attribution-reason`); plus compile-guarded BSD assertions (`#ifdef BACKEND_BSD`) that `BsdConnectionMonitor` advertises `process-attribution-wire` + FreeBSD-only `container-attribution-wire`. |
+| `test_backend_capabilities` | Transport-neutral `NetworkMonitor::capabilities()` / `ConnectionMonitor::capabilities()` contract: the `mergeCapabilities` union helper (dedup + first-seen order); the shared `attributionWireTokens` resolver-caps→`*-attribution-wire` mapping (process/container/chain, chain-wire a strict superset needing BOTH tokens); the DBus proxies (agent's merged list rides on `DBusNetworkMonitor`, `DBusConnectionMonitor` empty, union == agent list); in-process Linux `NetlinkMonitor` (`ifindex`/`oper-state`/`link-errors`) and `ConntrackMonitor` — structural `iana-proto`/`tcp-state` always, plus `*-attribution-wire` tokens derived from an INJECTED resolver (test-only ctor seam): inert resolver ⇒ structural only, full resolver ⇒ all three wire tokens, process-only ⇒ just `process-attribution-wire`, and the in-process union lights attribution via the resolver; never `direction-on-wire`/`attribution-reason` in-process; plus compile-guarded BSD assertions (`#ifdef BACKEND_BSD`) that `BsdConnectionMonitor` advertises `process-attribution-wire` + FreeBSD-only `container-attribution-wire`. |
 | `test_group_proxy`         | `ConnectionGroupProxy` — Flat mode is strictly pass-through (no parents, no children, 1:1 source mapping → preserves v0.1 view geometry); ByInterface builds expected group/child counts including the "(unattributed)" bucket; ByContainer keys include `runtime` so the same id under docker vs. podman never collapses; SUM aggregation for RxRateRole/TxRateRole/SortRole; mode switching emits modelReset and rebuilds; `sort()` forwards to source in Flat mode and rearranges m_groups + child srcRows in grouped modes (the v0.2-UIUX-C2 regression: header click was a no-op before). **sortWithinGroups** (default true): a header click sorts only each group's children and leaves the group order at first-appearance order; toggling to classic (false) re-orders the groups by aggregated value (and back freezes at the current arrangement) — both via the persistent-index-preserving resort. Uses a tiny stub source model — no real ConnectionModel needed. |
 | `test_filter`              | Filter mini-language parser + evaluator (every field/op). v0.4: `pid`, `uid`, `comm`, `runtime`, `container` (multi-haystack across runtime/id/name), `chain_has` (matches any ancestor in `containerChain`). `pid=0` selects unattributed flows by design. v0.5: `reason` (resolved/forwarded/orphaned/nosocket). |
 | `test_process_resolver_null` | `qiftop::backend::NullResolver` — pid=0, empty optionals, empty capability list. Smoke test for the universal fallback. |
@@ -1053,9 +1080,13 @@ can be dropped with `vagrant destroy default`.
   `usingAgent` precondition**: the token comes from the transport-neutral
   backend cap set (`m_backendCaps`, the union of the active monitors'
   `capabilities()`), so the in-process BSD backend — which attributes —
-  lights these columns up exactly like the agent, while the in-process
-  Linux conntrack backend (no resolver) keeps them hidden. Changing the
-  grouping
+  lights these columns up exactly like the agent. The in-process Linux
+  conntrack backend now does too: it wires a `ProcessResolver` and
+  advertises the `*-attribution-wire` tokens its resolver actually
+  probed, so the self-elevated path reaches column parity (an
+  unprivileged in-process resolver that can only see the user's own
+  processes advertises fewer/no tokens, keeping the columns honest).
+  Changing the grouping
   re-runs `applySettingsToUi()` (via `Settings::changed`), so the
   column hides/restores live. The header right-click menu's Process / Container entries
   are routed through `Settings::setShowProcessColumn` /
@@ -1076,8 +1107,9 @@ can be dropped with `vagrant destroy default`.
   `wireToken && userPref && !groupedByThatKey` gate as the GUI). The
   active backend's caps reach the TUI via a `main.cpp`-side
   `mergeCapabilities(netMon, connMon)` → `TuiApp::setBackendInfo`;
-  in-process Linux advertises no attribution token so the
-  columns stay hidden, in-process BSD advertises them so they show.
+  in-process Linux now advertises the attribution tokens its resolver
+  probed (so the columns show on the self-elevated path), in-process BSD
+  advertises them so they show.
   `TuiFormat::columnsFor(View, OptionalColumns,
   GroupBy)` builds the active column list and applies the
   grouped-redundancy rule (drop Process under GroupBy::Process, Container
