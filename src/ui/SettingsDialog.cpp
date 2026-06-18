@@ -1,4 +1,5 @@
 #include "SettingsDialog.h"
+#include "GuiTheme.h"
 #include "config/Settings.h"
 
 #include <QCheckBox>
@@ -380,9 +381,38 @@ SettingsDialog::SettingsDialog(Settings *settings,
 
     addNavPage(trayTab, tr("Tray"));
 
-    // --- Colors tab (group-header chip palette) ---
+    // --- Colors tab (Appearance theme + group-header chip palette) ---
     QFormLayout *colorsForm = nullptr;
     QWidget     *colorsTab  = makeFormTab(colorsForm);
+
+    auto *appearanceHeader = new QLabel(tr(
+        "<b>Appearance</b><br>"
+        "<span style=\"color:gray;\">Application colour theme. "
+        "\"System\" leaves the native Qt palette untouched; the named "
+        "themes force the Fusion style so their palette applies "
+        "everywhere.</span>"));
+    appearanceHeader->setWordWrap(true);
+    colorsForm->addRow(appearanceHeader);
+
+    m_themeCombo = new QComboBox;
+    for (const auto &t : qiftop::ui::builtinGuiThemes())
+        m_themeCombo->addItem(t.name);
+    {
+        const auto themes = qiftop::ui::builtinGuiThemes();
+        int idx = qiftop::ui::guiThemeIndexByName(themes, m_settings->guiThemeName());
+        if (idx < 0) idx = 0;
+        m_themeCombo->setCurrentIndex(idx);
+    }
+    m_themeCombo->setToolTip(tr(
+        "Colour theme for the qiftop window. Applies immediately; the "
+        "Connections \"Flow\" column's source/destination accents follow "
+        "the chosen theme."));
+    colorsForm->addRow(tr("Theme:"), m_themeCombo);
+
+    auto *colorsSep = new QFrame;
+    colorsSep->setFrameShape(QFrame::HLine);
+    colorsSep->setFrameShadow(QFrame::Sunken);
+    colorsForm->addRow(colorsSep);
 
     auto *colorsHeader = new QLabel(tr(
         "<b>Grouping header colours</b><br>"
@@ -501,6 +531,8 @@ void SettingsDialog::apply()
     m_settings->setChipColorUser(m_chipUser.name());
     m_settings->setChipColorId(m_chipId.name());
     m_settings->setChipColorDetail(m_chipDetail.name());
+    if (m_themeCombo)
+        m_settings->setGuiThemeName(m_themeCombo->currentText());
     m_settings->setCloseToTray(m_closeToTrayBox->isChecked());
     m_settings->setStartOnLogin(m_startOnLoginBox->isChecked());
 }

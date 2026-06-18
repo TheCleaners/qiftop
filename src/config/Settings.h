@@ -127,6 +127,12 @@ public:
     // Empty = no filter. See util/ConnectionFilter.h for grammar.
     [[nodiscard]] QString connectionFilterExpr() const { return m_connFilterExpr; }
 
+    // Name of the active GUI colour theme (see src/ui/GuiTheme.h). Default
+    // "System" means "don't override the native Qt palette/style" — so the
+    // out-of-the-box look is unchanged. Persisted as a plain string so an
+    // unknown name (e.g. from a future build) cleanly falls back to System.
+    [[nodiscard]] QString guiThemeName() const { return m_guiThemeName; }
+
     void setPollIntervalMs(int ms);
     void setShowLoopback(bool v);
     void setShowDown(bool v);
@@ -158,6 +164,7 @@ public:
     void setShowStatusInTitle(bool v);
     void setStartOnLogin(bool v);
     void setConnectionFilterExpr(const QString &expr);
+    void setGuiThemeName(const QString &name);
     void setConnectionViewMode(ConnectionViewMode m);
     void setShowProcessColumn(bool v);
     void setShowContainerColumn(bool v);
@@ -208,6 +215,7 @@ private:
     int  m_rateSmoothingMs               = 0;   // 0 = off (EMA τ in ms; sub-second supported)
     bool m_showStatusInTitle             = false;
     QString m_connFilterExpr;
+    QString m_guiThemeName               = QStringLiteral("System");
     ConnectionViewMode m_connViewMode    = ConnectionViewMode::Flat;
     // Default-shown: the attribution data is already on the wire (no extra
     // cost) and applySettingsToUi() AND-gates each column on the agent's

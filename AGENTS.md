@@ -656,7 +656,8 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, and copy helpers. |
 | `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. Includes the dynamic column model (`columnsFor(View, OptionalColumns, GroupBy)` appends the capability-gated Process/Container columns and drops the grouped-by one), `cellsForConnection` / `groupHeaderCells` consuming the active column list, the `comm [pid]` / attribution-reason / `runtime:name` cell text, stable `ColumnId` sort-field tokens + legacy-index migration, `fieldRows` (the `f` overlay model), `orderedGroupIndices` (the group-display-order policy behind nqiftop's `sortWithinGroups`: frozen first-appearance vs classic aggregate order + stable tiebreak), `wrapToWidth` (word-wrap + hard-break for the modal dialogs' wrapped value column), `groupDetailRows` (the Enter-on-header group-info window: bulk fields + aggregates, plus exe/cmdline/cwd once on-demand details arrive), and the grouped-redundancy parity guard (`groupedChildRowDropsRedundantColumn`: the Process column is hidden when grouped By Process and the Container column when grouped By Container — the TUI analogue of the GUI hiding the redundant attribution column — while the OTHER stays present, and the group header still carries the grouped attribute). |
 | `test_tui_theme`           | Built-in `nqiftop` themes, case-insensitive lookup, fallback, and direction colour/attribute separation. |
-| `test_settings_migration`  | `Settings` legacy-key migration logic; chip-colour + v0.2 attribution view settings (view mode, process/container column toggles, chain-in-tooltip) round-trip + out-of-range view-mode clamp |
+| `test_gui_theme`           | GUI colour-theme model (`src/ui/GuiTheme.h`): `builtinGuiThemes()` ships System-first (the only `followSystem`) plus the named set; `guiThemeIndexByName` is case-insensitive and returns -1 for unknown; named themes carry a valid, non-default palette and distinct flow accents; System ships invalid accents (delegate keeps its auto defaults); Dark/Light differ in Base luminance. Headless QtGui (no window). |
+| `test_settings_migration`  | `Settings` legacy-key migration logic; chip-colour + v0.2 attribution view settings (view mode, process/container column toggles, chain-in-tooltip) round-trip + out-of-range view-mode clamp; GUI theme name defaults to "System" and round-trips |
 | `test_autostart`           | XDG autostart file lifecycle (`util/Autostart`)                   |
 | `test_exporter`            | JSON quint64-as-string, qint64 numeric, CSV formula-injection     |
 | `test_idle`                | `IdleManager` cadence, hints, TTL, 64-cap, degrade, NameOwnerChanged |
@@ -1087,6 +1088,23 @@ can be dropped with `vagrant destroy default`.
   `f` ("Fields") overlay is the toggle UI (Space show/hide, Enter sort).
   Guarded by `test_tui_format::groupedChildRowDropsRedundantColumn` (plus
   `dynamicOptionalColumns` / `fieldsOverlayModel`).
+* **GUI colour themes live in `src/ui/GuiTheme.{h,cpp}`** (the desktop
+  analogue of `src/tui/TuiTheme.h`). The model is QtGui-only (a named
+  `QPalette` + a `flowSource`/`flowDest` accent pair per theme) so it's
+  unit-testable headlessly. `builtinGuiThemes()` ships **System** first —
+  `followSystem=true` means "don't override the native palette/style", so the
+  default is byte-for-byte the pre-theming look — plus Dark, Light, Nord,
+  Solarized Dark/Light, Gruvbox Dark. Application forces the **Fusion** style
+  for real themes (native styles ignore an arbitrary `QPalette`) and restores
+  the captured native style for System; `captureSystemTheme()` snapshots the
+  native style+palette ONCE in `main()` before the first apply.
+  `MainWindow::applySettingsToUi()` is the single reapply point — it pushes
+  the active theme's accents into `ConnectionFlowDelegate::setFlowAccentColors`
+  (System passes two invalid `QColor`s, so the delegate keeps its
+  luminance-derived dark/light defaults — unchanged behaviour). The persisted
+  key is `display/guiTheme` (default `"System"`); an unknown name falls back
+  to System. GUI-only; no wire/contract impact. Pinned by `test_gui_theme` +
+  the `test_settings_migration` round-trip.
 * **Privilege escalation env handling.** `src/util/PrivilegeEscalator.cpp`
   uses an **allowlist** (`sessionEnv()`) when forwarding environment
   variables into the privileged child, not a denylist. The root child runs

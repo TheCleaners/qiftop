@@ -64,6 +64,9 @@ private:
     QListWidget    *m_navList = nullptr;
     QStackedWidget *m_stack   = nullptr;
 
+    // Appearance: GUI colour theme selector (Colors tab).
+    QComboBox *m_themeCombo = nullptr;
+
     // Group-header chip palette working copies + their swatch buttons.
     QColor m_chipPrimary, m_chipUser, m_chipId, m_chipDetail;
     QPushButton *m_chipPrimaryBtn = nullptr;

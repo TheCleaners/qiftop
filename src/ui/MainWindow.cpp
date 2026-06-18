@@ -5,6 +5,7 @@
 #include "ConnectionFilterProxy.h"
 #include "ConnectionFlowDelegate.h"
 #include "ConnectionModel.h"
+#include "GuiTheme.h"
 #include "InterfaceFilterProxy.h"
 #include "InterfaceNameDelegate.h"
 #include "NetworkModel.h"
@@ -745,6 +746,20 @@ void MainWindow::setupMenuAndToolbar()
 
 void MainWindow::applySettingsToUi()
 {
+    // Apply the active GUI colour theme first so every widget repolish below
+    // happens against the themed palette. "System" (the default) restores the
+    // captured native style/palette, so out-of-the-box appearance is
+    // unchanged. We track the last-applied name to avoid re-forcing the style
+    // (and the flicker that comes with it) on unrelated settings changes.
+    const QList<qiftop::ui::GuiTheme> themes = qiftop::ui::builtinGuiThemes();
+    int themeIdx = qiftop::ui::guiThemeIndexByName(themes, m_settings->guiThemeName());
+    if (themeIdx < 0) themeIdx = 0; // unknown name → System
+    const qiftop::ui::GuiTheme &theme = themes.at(themeIdx);
+    if (theme.name != m_appliedThemeName) {
+        qiftop::ui::applyGuiTheme(theme);
+        m_appliedThemeName = theme.name;
+    }
+
     m_netProxy->setShowLoopback(m_settings->showLoopback());
     m_netProxy->setShowDown(m_settings->showDown());
     m_connProxy->setShowIPv6(m_settings->ipv6Enabled());
@@ -861,6 +876,13 @@ void MainWindow::applySettingsToUi()
             QColor(m_settings->chipColorId()),
             QColor(m_settings->chipColorDetail()),
         });
+        // Push the active theme's flow-endpoint accents. For "System" we pass
+        // two invalid colours so the delegate keeps its luminance-derived
+        // dark/light defaults — i.e. nothing changes out of the box.
+        if (theme.followSystem)
+            m_connFlowDelegate->setFlowAccentColors(QColor(), QColor());
+        else
+            m_connFlowDelegate->setFlowAccentColors(theme.flowSource, theme.flowDest);
         if (m_connView) m_connView->viewport()->update();
     }
     applyConnIfaceFilterToProxy();
@@ -948,9 +970,19 @@ void MainWindow::applyConnFilterExpr()
 
     // Visual feedback: red tint + tooltip with the parser error when the
     // expression doesn't parse. Otherwise show the syntax help on hover.
+    // Derive the tint from the live palette so it stays readable on dark
+    // themes (a fixed light-pink Base would render light-text-on-light there);
+    // dark base → deep red + light text, light base → soft pink + dark text.
     QPalette pal = m_connFilterEdit->palette();
     if (!err.isEmpty()) {
-        pal.setColor(QPalette::Base, QColor(0xff, 0xe5, 0xe5));
+        const QColor base = QPalette{}.color(QPalette::Base);
+        const bool   dark = base.lightness() < 128;
+        const QColor errBase = dark ? QColor(0x5a, 0x1f, 0x1f)
+                                    : QColor(0xff, 0xe5, 0xe5);
+        const QColor errText = dark ? QColor(0xff, 0xd6, 0xd6)
+                                    : QColor(0x60, 0x00, 0x00);
+        pal.setColor(QPalette::Base, errBase);
+        pal.setColor(QPalette::Text, errText);
         m_connFilterEdit->setPalette(pal);
         m_connFilterEdit->setToolTip(tr("Filter error: %1").arg(err));
     } else {
