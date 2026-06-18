@@ -1,6 +1,10 @@
 #include "ConntrackMonitor.h"
 #include "ConntrackOrient.h"
 #include "FlowTopK.h"
+#include "backend/Attribution.h"
+#include "backend/MonitorCapabilities.h"
+#include "backend/ProcessResolver.h"
+#include "backend/ProcessResolverFactory.h"
 #include "util/Logging.h"
 
 #include <QFile>
@@ -13,6 +17,8 @@
 
 #include <algorithm>
 #include <list>
+#include <memory>
+#include <utility>
 
 extern "C" {
 #include <libnetfilter_conntrack/libnetfilter_conntrack.h>
@@ -285,6 +291,8 @@ int nfctCallback(enum nf_conntrack_msg_type, struct nf_conntrack *ct, void *data
 
 } // namespace
 
+using qiftop::backend::ProcessResolver;
+
 // Worker runs in m_thread. Each tick performs a synchronous conntrack dump via
 // libnetfilter_conntrack: NFCT_Q_DUMP makes the kernel stream every active
 // flow through our callback. Per-flow byte/packet counters require the kernel
@@ -296,6 +304,21 @@ class ConntrackMonitor::Worker : public QObject {
 
 public:
     using QObject::QObject;
+
+    // Set on the main thread before the worker's QThread starts (the
+    // resolver is constructed there too). ProcessResolver fds are not
+    // thread-affine, so it's safe to then use from the worker thread —
+    // mirrors how the agent builds the resolver in main() and uses it
+    // from the service slot thread. wantChain mirrors the agent: only
+    // walk the full nesting chain when the resolver advertises BOTH
+    // container-attribution and container-chain.
+    void setResolver(std::unique_ptr<ProcessResolver> resolver)
+    {
+        m_resolver = std::move(resolver);
+        m_wantChain = m_resolver
+            && m_resolver->capabilities().contains(QStringLiteral("container-attribution"))
+            && m_resolver->capabilities().contains(QStringLiteral("container-chain"));
+    }
 
 public slots:
     void start()
@@ -395,7 +418,7 @@ private slots:
                 emit permissionDenied(QString::fromLocal8Bit(std::strerror(errno)));
                 m_warnedOpen = true;
             }
-            emit connectionsUpdated(flows);
+            emit connectionsUpdated(applyAttribution(flows));
             return;
         }
 
@@ -433,15 +456,39 @@ private slots:
             m_warnedCap = true;
         }
 
-        emit connectionsUpdated(flows);
+        emit connectionsUpdated(applyAttribution(flows));
     }
 
 private:
+    // Enrich the snapshot with process/container attribution from the wired
+    // resolver, in place, then return it. No-op when no resolver is wired
+    // (e.g. injected null) or the flow list is empty. Runs on the worker
+    // thread; the resolver's own bounds + starttime guards + ENOENT
+    // tolerance (AGENTS.md §8a) keep this within the per-tick budget — we
+    // call it exactly once per snapshot, never per flow. Factored so BOTH
+    // emit sites (the nfct_open-failure early return and the normal path)
+    // attribute identically.
+    QList<Connection> &applyAttribution(QList<Connection> &flows)
+    {
+        if (m_resolver) {
+            qiftop::backend::attributeFlows(
+                flows, m_resolver.get(),
+                qiftop::backend::AttributionOptions{m_wantChain});
+        }
+        return flows;
+    }
+
     QTimer *m_timer       = nullptr;
     bool    m_warnedOpen  = false;
     bool    m_warnedDump  = false;
     bool    m_warnedCap   = false;
     bool    m_acctChecked = false;
+
+    // Process/container attribution resolver, constructed on the main thread
+    // and used here on the worker thread (fds are not thread-affine).
+    // Null when injected as such (tests) — applyAttribution() then no-ops.
+    std::unique_ptr<ProcessResolver> m_resolver;
+    bool                             m_wantChain = false;
 
     // dst-address → ifname cache for the route-lookup fallback (forwarded
     // flows). Bounded LRU so it can't grow unboundedly on a busy router.
@@ -454,9 +501,26 @@ private:
 };
 
 ConntrackMonitor::ConntrackMonitor(QObject *parent)
+    : ConntrackMonitor(qiftop::backend::createProcessResolver(), parent)
+{
+}
+
+ConntrackMonitor::ConntrackMonitor(std::unique_ptr<qiftop::backend::ProcessResolver> resolver,
+                                   QObject *parent)
     : ConnectionMonitor(parent)
     , m_worker(new Worker)
 {
+    init(std::move(resolver));
+}
+
+void ConntrackMonitor::init(std::unique_ptr<qiftop::backend::ProcessResolver> resolver)
+{
+    // Snapshot the resolver's probed capabilities on the main thread BEFORE
+    // handing it to the worker, so capabilities() (called from the main
+    // thread) reads an immutable copy and never races the worker.
+    if (resolver) m_resolverCaps = resolver->capabilities();
+    m_worker->setResolver(std::move(resolver));
+
     m_worker->moveToThread(&m_thread);
 
     connect(&m_thread, &QThread::started,  m_worker, &Worker::start);
@@ -502,11 +566,19 @@ QStringList ConntrackMonitor::capabilities() const
     // Structural tokens the conntrack dump actually delivers: proto (mapped
     // to IANA on the wire / kept as L4Proto in-process) and the TCP
     // conntrack state (ATTR_TCP_STATE). Direction and reason are inferred
-    // client-side, not here, and there's no resolver so no attribution.
-    return {
+    // client-side, not here, so we don't advertise those.
+    QStringList caps{
         QStringLiteral("iana-proto"),
         QStringLiteral("tcp-state"),
     };
+    // Mirror the *-attribution-wire tokens off the wired resolver's probed
+    // capabilities — the same mapping the DBus agent uses in
+    // InterfacesService — so the self-elevated / no-agent in-process path
+    // lights the GUI/TUI Process & Container columns exactly like the agent
+    // path does. Unprivileged runs probe a thinner resolver and advertise
+    // correspondingly fewer tokens; that's honest.
+    caps += qiftop::backend::attributionWireTokens(m_resolverCaps);
+    return caps;
 }
 
 #include "ConntrackMonitor.moc"

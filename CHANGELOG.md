@@ -36,6 +36,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   genuinely attributes. Client-side only: **no DBus wire, `Version`,
   `Capabilities`-property, or token-name changes** — the agent's contract is
   byte-for-byte unchanged.
+- **In-process Linux attribution** — the self-elevated / no-agent Linux flow
+  backend (`ConntrackMonitor`) now does process & container attribution too,
+  closing the last gap in the attribution-columns arc (BSD already attributed
+  in-process; the agent always has). Its worker builds the default
+  `ProcessResolver` on the main thread and runs the shared `attributeFlows()`
+  over each snapshot before emitting, so in-process flows carry pid/comm/uid +
+  container runtime/id/name/chain just like the agent path. `capabilities()`
+  now advertises the `*-attribution-wire` tokens its resolver actually probed
+  (via the shared `attributionWireTokens()` mapping), so the GUI/TUI Process &
+  Container columns light up when running in-process — privileged runs see
+  every flow's owner, unprivileged runs honestly advertise only what they can
+  see (your own processes). As part of this the `attributeFlows()` helper moved
+  from `agent/` to `backend/Attribution.{h,cpp}` (namespace `qiftop::backend`)
+  so the agent and the in-process backend share one implementation. **No DBus
+  wire, `Version`, `Capabilities`-property, or token-name changes** — the
+  agent's contract is byte-for-byte unchanged.
 
 ### Changed
 - The connections **Process / Container column gate dropped its `usingAgent`

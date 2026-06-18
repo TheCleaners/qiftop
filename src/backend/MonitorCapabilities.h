@@ -43,4 +43,28 @@ namespace qiftop::backend {
                              conn ? conn->capabilities() : QStringList{});
 }
 
+// Map a ProcessResolver's advertised capability tokens to the wire-level
+// `*-attribution-wire` tokens a backend should advertise when that resolver
+// is wired in. Shared by the DBus agent (InterfacesService) and the
+// in-process Linux ConntrackMonitor so both derive the same wire contract
+// from the same resolver caps (AGENTS.md §4):
+//   process-attribution                      → process-attribution-wire
+//   container-attribution                    → container-attribution-wire
+//   container-attribution + container-chain  → container-chain-wire
+// chain-wire is a strict superset of leaf container info, so it requires
+// BOTH resolver tokens. Returns tokens in a stable order; callers append
+// them to (and dedup against) their structural token list.
+[[nodiscard]] inline QStringList
+attributionWireTokens(const QStringList &resolverCaps)
+{
+    QStringList out;
+    const bool process   = resolverCaps.contains(QStringLiteral("process-attribution"));
+    const bool container = resolverCaps.contains(QStringLiteral("container-attribution"));
+    const bool chain     = resolverCaps.contains(QStringLiteral("container-chain"));
+    if (process)              out << QStringLiteral("process-attribution-wire");
+    if (container)            out << QStringLiteral("container-attribution-wire");
+    if (container && chain)   out << QStringLiteral("container-chain-wire");
+    return out;
+}
+
 } // namespace qiftop::backend

@@ -150,6 +150,7 @@ add_library(qiftoplib SHARED
     src/backend/ConnectionMonitor.cpp
     src/backend/PlatformInfo.cpp
     src/backend/ProcessResolverFactory.cpp
+    src/backend/Attribution.cpp
     src/backend/dbus/DBusNetworkMonitor.cpp
     src/backend/dbus/DBusConnectionMonitor.cpp
     src/config/Settings.cpp
@@ -228,7 +229,6 @@ if(QIFTOP_PLATFORM STREQUAL "linux")
         src/agent/Config.cpp
         src/agent/InterfacesService.cpp
         src/agent/ConnectionsService.cpp
-        src/agent/Attribution.cpp
         src/agent/IdleManager.cpp
     )
     target_include_directories(qiftop-agent PRIVATE src)

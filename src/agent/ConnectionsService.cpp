@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "IdleManager.h"
-#include "Attribution.h"
+#include "backend/Attribution.h"
 #include "backend/ConnectionMonitor.h"
 #include "backend/PlatformInfo.h"
 #include "util/ConnectionHeuristics.h"
@@ -208,8 +208,8 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
     // Populate process + container attribution from the wired resolver.
     // No-op when resolver is null or returns nothing useful. Socket PID
     // resolution is per-flow, but /proc enrichment and container/chain
-    // lookups are memoised by PID in agent::attributeFlows.
-    attributeFlows(kept, m_resolver, AttributionOptions{m_wantContainerChain});
+    // lookups are memoised by PID in backend::attributeFlows.
+    backend::attributeFlows(kept, m_resolver, backend::AttributionOptions{m_wantContainerChain});
 
     // Explain each flow's attribution outcome (Resolved / Forwarded /
     // Orphaned / NoLocalSocket) once, server-side, reusing the same host

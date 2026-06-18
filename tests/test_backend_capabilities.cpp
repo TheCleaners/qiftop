@@ -8,7 +8,12 @@
 #include <QStringList>
 #include <QtTest/QtTest>
 
+#include <memory>
+#include <optional>
+#include <utility>
+
 #include "backend/MonitorCapabilities.h"
+#include "backend/ProcessResolver.h"
 #include "backend/dbus/DBusConnectionMonitor.h"
 #include "backend/dbus/DBusNetworkMonitor.h"
 
@@ -28,6 +33,29 @@ namespace {
 // Order-independent comparison: clients branch on token PRESENCE, so the
 // contract is "this exact SET", not "this exact list".
 QSet<QString> asSet(const QStringList &l) { return {l.cbegin(), l.cend()}; }
+
+// Minimal resolver whose only job is to report a chosen capability list, so
+// we can inject it into ConntrackMonitor and pin the resolver-caps →
+// *-attribution-wire mapping without needing root or a live sock_diag socket.
+class FakeResolver : public qiftop::backend::ProcessResolver {
+public:
+    explicit FakeResolver(QStringList caps) : m_caps(std::move(caps)) {}
+    bool initialize() override { return true; }
+    QStringList capabilities() const override { return m_caps; }
+    qint32 resolvePid(const Connection &) override { return 0; }
+    std::optional<qiftop::backend::ProcessInfo> enrichPid(qint32) override
+    {
+        return std::nullopt;
+    }
+    std::optional<qiftop::backend::ContainerInfo>
+        resolveContainerForPid(qint32) override
+    {
+        return std::nullopt;
+    }
+
+private:
+    QStringList m_caps;
+};
 } // namespace
 
 class TestBackendCapabilities : public QObject {
@@ -54,6 +82,35 @@ private slots:
         const QStringList one{QStringLiteral("ifindex")};
         QCOMPARE(mergeCapabilities(one, {}), one);
         QCOMPARE(mergeCapabilities({}, one), one);
+    }
+
+    // ---- the resolver-caps → *-attribution-wire mapping ------------------
+    // Shared by the DBus agent (InterfacesService) and the in-process
+    // ConntrackMonitor, so pin it once as a pure function.
+    void attributionWireTokensMapping()
+    {
+        using qiftop::backend::attributionWireTokens;
+        // Nothing in → nothing out.
+        QVERIFY(attributionWireTokens({}).isEmpty());
+        // process-attribution alone lights only the process wire token.
+        QCOMPARE(asSet(attributionWireTokens({QStringLiteral("process-attribution")})),
+                 (QSet<QString>{QStringLiteral("process-attribution-wire")}));
+        // container-attribution alone lights only the container wire token.
+        QCOMPARE(asSet(attributionWireTokens({QStringLiteral("container-attribution")})),
+                 (QSet<QString>{QStringLiteral("container-attribution-wire")}));
+        // chain-wire is a STRICT superset: container-chain without
+        // container-attribution must NOT light it.
+        QVERIFY(!asSet(attributionWireTokens({QStringLiteral("container-chain")}))
+                     .contains(QStringLiteral("container-chain-wire")));
+        // The full resolver lights all three.
+        QCOMPARE(asSet(attributionWireTokens({QStringLiteral("process-attribution"),
+                                              QStringLiteral("container-attribution"),
+                                              QStringLiteral("container-chain")})),
+                 (QSet<QString>{QStringLiteral("process-attribution-wire"),
+                                QStringLiteral("container-attribution-wire"),
+                                QStringLiteral("container-chain-wire")}));
+        // Unknown tokens are ignored.
+        QVERIFY(attributionWireTokens({QStringLiteral("netns-scan")}).isEmpty());
     }
 
     // ---- DBus proxies: agent's merged list rides on the network proxy ----
@@ -107,13 +164,17 @@ private slots:
 
     void conntrackAdvertisesOnlyStructuralTokens()
     {
-        ConntrackMonitor conn;
+        // Inject an inert resolver (empty caps) so the assertion is
+        // deterministic regardless of the CI host's privileges — the default
+        // ctor now wires the real platform resolver, whose probed caps depend
+        // on whether sock_diag/cgroup access is available.
+        ConntrackMonitor conn(std::make_unique<FakeResolver>(QStringList{}));
         const QSet<QString> caps = asSet(conn.capabilities());
         // Structural caps the dump genuinely fills.
         QCOMPARE(caps, (QSet<QString>{QStringLiteral("iana-proto"),
                                       QStringLiteral("tcp-state")}));
-        // No resolver wired ⇒ MUST NOT claim attribution. Direction/reason
-        // are inferred client-side, not produced here.
+        // No (useful) resolver wired ⇒ MUST NOT claim attribution.
+        // Direction/reason are inferred client-side, not produced here.
         QVERIFY(!caps.contains(QStringLiteral("process-attribution-wire")));
         QVERIFY(!caps.contains(QStringLiteral("container-attribution-wire")));
         QVERIFY(!caps.contains(QStringLiteral("container-chain-wire")));
@@ -121,17 +182,57 @@ private slots:
         QVERIFY(!caps.contains(QStringLiteral("attribution-reason")));
     }
 
-    void inProcessLinuxUnionLightsNoAttribution()
+    void conntrackResolverLightsAttributionWire()
     {
-        // The whole point: the in-process Linux union has interface +
-        // structural flow tokens but NO attribution — so the GUI/TUI gate
-        // keeps the Process/Container columns hidden on this path.
+        // A resolver advertising the full attribution stack must light all
+        // three *-attribution-wire tokens (the in-process self-elevated path
+        // now attributes exactly like the agent), on top of the structural
+        // tokens — but still not direction/reason (client-inferred).
+        ConntrackMonitor conn(std::make_unique<FakeResolver>(QStringList{
+            QStringLiteral("process-attribution"),
+            QStringLiteral("container-attribution"),
+            QStringLiteral("container-chain"),
+            QStringLiteral("netns-scan")}));
+        const QSet<QString> caps = asSet(conn.capabilities());
+        QVERIFY(caps.contains(QStringLiteral("iana-proto")));
+        QVERIFY(caps.contains(QStringLiteral("tcp-state")));
+        QVERIFY(caps.contains(QStringLiteral("process-attribution-wire")));
+        QVERIFY(caps.contains(QStringLiteral("container-attribution-wire")));
+        QVERIFY(caps.contains(QStringLiteral("container-chain-wire")));
+        // Still not produced in-process.
+        QVERIFY(!caps.contains(QStringLiteral("direction-on-wire")));
+        QVERIFY(!caps.contains(QStringLiteral("attribution-reason")));
+    }
+
+    void conntrackProcessOnlyResolver()
+    {
+        // A thinner resolver (process attribution only, e.g. unprivileged
+        // with no cgroup access) lights only the process wire token.
+        ConntrackMonitor conn(std::make_unique<FakeResolver>(QStringList{
+            QStringLiteral("process-attribution")}));
+        const QSet<QString> caps = asSet(conn.capabilities());
+        QVERIFY(caps.contains(QStringLiteral("process-attribution-wire")));
+        QVERIFY(!caps.contains(QStringLiteral("container-attribution-wire")));
+        QVERIFY(!caps.contains(QStringLiteral("container-chain-wire")));
+    }
+
+    void inProcessLinuxUnionLightsAttributionViaResolver()
+    {
+        // With an attribution-capable resolver wired into the in-process
+        // flow backend, the in-process Linux union now lights the
+        // attribution wire tokens — so the GUI/TUI Process/Container columns
+        // become available on the self-elevated path, at parity with the
+        // agent. (Without a useful resolver the union stays attribution-free,
+        // covered by conntrackAdvertisesOnlyStructuralTokens.)
         NetlinkMonitor   net;
-        ConntrackMonitor conn;
+        ConntrackMonitor conn(std::make_unique<FakeResolver>(QStringList{
+            QStringLiteral("process-attribution"),
+            QStringLiteral("container-attribution")}));
         const QSet<QString> u = asSet(mergeCapabilities(&net, &conn));
         QVERIFY(u.contains(QStringLiteral("ifindex")));
         QVERIFY(u.contains(QStringLiteral("iana-proto")));
-        QVERIFY(!u.contains(QStringLiteral("process-attribution-wire")));
+        QVERIFY(u.contains(QStringLiteral("process-attribution-wire")));
+        QVERIFY(u.contains(QStringLiteral("container-attribution-wire")));
     }
 #endif
 
