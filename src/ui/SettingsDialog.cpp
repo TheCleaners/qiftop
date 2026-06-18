@@ -18,6 +18,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <cmath>
+
 namespace {
 // Small helper: build a page whose content is a single QFormLayout
 // (the common shape of every Preferences page here). Returns the new
@@ -28,6 +30,22 @@ QWidget *makeFormTab(QFormLayout *&form)
     form = new QFormLayout(page);
     form->setLabelAlignment(Qt::AlignLeft);
     return page;
+}
+
+// Pick black or white text for legibility on `bg`, using the WCAG relative
+// luminance + the 0.179 crossover (the point where black and white text have
+// equal contrast ratio against a colour). More reliable than HSL lightness for
+// muddy mid-tones, so the hex label always stands out against its swatch.
+QColor contrastText(const QColor &bg)
+{
+    const auto lin = [](int c) {
+        const double s = c / 255.0;
+        return s <= 0.03928 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4);
+    };
+    const double luminance = 0.2126 * lin(bg.red())
+                           + 0.7152 * lin(bg.green())
+                           + 0.0722 * lin(bg.blue());
+    return luminance > 0.179 ? QColor(Qt::black) : QColor(Qt::white);
 }
 } // namespace
 
@@ -386,11 +404,20 @@ SettingsDialog::SettingsDialog(Settings *settings,
         btn->setFixedWidth(120);
         const auto refresh = [btn, working] {
             btn->setText(working->name());
-            const bool dark = working->lightness() < 128;
+            const QColor fg = contrastText(*working);
+            // The border + padding are load-bearing, not decoration: a
+            // QPushButton with a background-color-only stylesheet falls back to
+            // the native style and never paints the fill (that's why these
+            // swatches used to render flat grey). Specifying the full box model
+            // makes Qt honour the background. Monospace so the hex lines up.
             btn->setStyleSheet(QStringLiteral(
-                "background-color:%1; color:%2;")
-                .arg(working->name(), dark ? QStringLiteral("white")
-                                           : QStringLiteral("black")));
+                "QPushButton {"
+                " background-color:%1; color:%2;"
+                " border:1px solid rgba(0,0,0,0.4);"
+                " border-radius:4px; padding:5px 10px;"
+                " font-family:monospace; }"
+                "QPushButton:hover { border:1px solid %2; }")
+                .arg(working->name(), fg.name()));
         };
         refresh();
         connect(btn, &QPushButton::clicked, this, [this, working, refresh] {
