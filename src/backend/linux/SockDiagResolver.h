@@ -53,6 +53,11 @@ public:
 
     [[nodiscard]] QStringList capabilities() const override;
 
+    // Live re-tune of the socket-table / proc-walk refresh cadence.
+    // Thread-safe: takes the same Impl mutex the poll loop reads
+    // cacheTtlMs under. Clamps to the resolver's existing floor.
+    void setTuning(const ResolverTuning &tuning) override;
+
     [[nodiscard]] qint32 resolvePid(const Connection &flow) override;
 
     [[nodiscard]] std::optional<ProcessInfo>

@@ -246,6 +246,15 @@ SockDiagResolver::SockDiagResolver(const ResolverTuning &tuning)
     m_d->clock.start();
 }
 
+void SockDiagResolver::setTuning(const ResolverTuning &tuning)
+{
+    // cacheTtlMs is read inside maybeRefresh() under m_d->mu, so write it
+    // under the same lock. safeCacheTtlMs keeps the floor so a runtime
+    // hint can't turn this into a /proc blender either.
+    std::scoped_lock lock(m_d->mu);
+    m_d->cacheTtlMs = safeCacheTtlMs(tuning.cacheRefreshMs);
+}
+
 SockDiagResolver::~SockDiagResolver()
 {
     if (m_d->nlFd >= 0) ::close(m_d->nlFd);

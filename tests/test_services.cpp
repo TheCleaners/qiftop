@@ -5,6 +5,7 @@
 
 #include "agent/ConnectionsService.h"
 #include "agent/InterfacesService.h"
+#include "agent/AttributionHintManager.h"
 #include "backend/PlatformInfo.h"
 #include "backend/ProcessResolver.h"
 #include "dbus/Types.h"
@@ -20,6 +21,12 @@ class FakeResolver final : public ProcessResolver {
 public:
     bool initialize() override { return true; }
     QStringList capabilities() const override { return {}; }
+
+    void setTuning(const qiftop::backend::ResolverTuning &t) override
+    {
+        lastTuning = t;
+        ++tuningApplied;
+    }
 
     qint32 resolvePid(const Connection &flow) override
     {
@@ -69,6 +76,8 @@ public:
     QHash<qint32, int> enrichCalls;
     QHash<qint32, int> containerCalls;
     QHash<qint32, int> chainCalls;
+    qiftop::backend::ResolverTuning lastTuning;
+    int tuningApplied = 0;
 
 private:
     QHash<quint16, qint32> m_pidByLocalPort;
@@ -229,6 +238,64 @@ private slots:
 
         QVERIFY(directionalDto != nullptr);
         QCOMPARE(directionalDto->direction, quint8(Direction::Outbound));
+    }
+
+    void interfacesServiceAdvertisesVersion07AndEagernessToken()
+    {
+        qiftop::tests::FakeNetworkMonitor monitor;
+        qiftop::agent::InterfacesService service(&monitor);
+        QCOMPARE(service.version(), QStringLiteral("0.7"));
+        const auto caps = service.capabilities();
+        QVERIFY2(caps.contains(QStringLiteral("attribution-eagerness-hints")),
+                 qPrintable(caps.join(QStringLiteral(", "))));
+        // Pre-existing tokens must still be present (append-only contract).
+        QVERIFY(caps.contains(QStringLiteral("cadence-hints")));
+        QVERIFY(caps.contains(QStringLiteral("on-demand-process-details")));
+    }
+
+    void attributionEagernessSurfaceMirrorsHintManager()
+    {
+        using Eagerness = qiftop::backend::AttributionEagerness;
+
+        qiftop::tests::FakeConnectionMonitor monitor;
+        qiftop::agent::ConnectionsService service(&monitor);
+
+        FakeResolver resolver;
+        service.setProcessResolver(&resolver, false);
+
+        // Config default balanced. Property reflects it before any hint.
+        qiftop::agent::AttributionHintManager mgr(Eagerness::Balanced, 10'000);
+        service.setAttributionHintManager(&mgr);
+        QCOMPARE(service.attributionEagerness(), QStringLiteral("balanced"));
+
+        QSignalSpy spy(&service,
+                       &qiftop::agent::ConnectionsService::AttributionEagernessChanged);
+        QVERIFY(spy.isValid());
+
+        // An accepted hint (simulating a DBus caller) flips the effective
+        // mode: the service must mirror it on the property, fire the signal,
+        // and re-tune the wired resolver to the matching preset.
+        QVERIFY(mgr.setHint(QStringLiteral(":1.99"), Eagerness::Eager));
+        QCOMPARE(service.attributionEagerness(), QStringLiteral("eager"));
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toString(), QStringLiteral("eager"));
+        QCOMPARE(resolver.tuningApplied, 1);
+        QCOMPARE(resolver.lastTuning, qiftop::backend::eagerResolverTuning());
+
+        // Lowering to off re-tunes again to the off preset (resolver is
+        // re-tuned, never torn down — that's the runtime-off semantics).
+        QVERIFY(mgr.setHint(QStringLiteral(":1.99"), Eagerness::Off));
+        QCOMPARE(service.attributionEagerness(), QStringLiteral("off"));
+        QCOMPARE(resolver.lastTuning, qiftop::backend::offResolverTuning());
+
+        // The method itself always returns the current effective mode. An
+        // in-process call has no bus sender, so it records nothing — but the
+        // return value still reports the live effective mode, and an
+        // unrecognised token is ignored (no extra signal, mode unchanged).
+        const int before = resolver.tuningApplied;
+        QCOMPARE(service.SetDesiredAttributionEagerness(QStringLiteral("garbage")),
+                 QStringLiteral("off"));
+        QCOMPARE(resolver.tuningApplied, before);
     }
 };
 

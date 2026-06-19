@@ -50,9 +50,16 @@ void DBusConnectionMonitor::start()
                  QString::fromLatin1(kIface),
                  QStringLiteral("PermissionDenied"),
                  this, SLOT(onPermissionDenied(QString)));
+    conn.connect(QString::fromLatin1(kService),
+                 QString::fromLatin1(kPath),
+                 QString::fromLatin1(kIface),
+                 QStringLiteral("AttributionEagernessChanged"),
+                 this, SLOT(onAttributionEagernessChanged(QString)));
     requestInitialSnapshot();
     if (m_desiredMs > 0)
         sendDesiredIntervalAsync(m_desiredMs);
+    if (!m_desiredEagerness.isEmpty())
+        setDesiredAttributionEagerness(m_desiredEagerness);
 }
 
 void DBusConnectionMonitor::setDesiredIntervalMs(int ms)
@@ -107,6 +114,28 @@ void DBusConnectionMonitor::requestProcessDetails(qint32 pid)
             });
 }
 
+void DBusConnectionMonitor::setDesiredAttributionEagerness(const QString &mode)
+{
+    // Remember the request so a restart re-asserts it (mirrors m_desiredMs).
+    m_desiredEagerness = mode;
+    if (!m_started) return;
+    auto conn = bus(m_useSessionBus);
+    auto call = QDBusMessage::createMethodCall(QString::fromLatin1(kService),
+                                               QString::fromLatin1(kPath),
+                                               QString::fromLatin1(kIface),
+                                               QStringLiteral("SetDesiredAttributionEagerness"));
+    call << mode;
+    // Fire-and-forget: the resulting effective mode arrives via the
+    // AttributionEagernessChanged signal (or the property). We don't block
+    // on the string return.
+    conn.asyncCall(call);
+}
+
+void DBusConnectionMonitor::onAttributionEagernessChanged(const QString &mode)
+{
+    emit attributionEagernessChanged(mode);
+}
+
 void DBusConnectionMonitor::stop()
 {
     if (!m_started) return;
@@ -118,6 +147,10 @@ void DBusConnectionMonitor::stop()
     conn.disconnect(QString::fromLatin1(kService), QString::fromLatin1(kPath),
                     QString::fromLatin1(kIface), QStringLiteral("PermissionDenied"),
                     this, SLOT(onPermissionDenied(QString)));
+    conn.disconnect(QString::fromLatin1(kService), QString::fromLatin1(kPath),
+                    QString::fromLatin1(kIface),
+                    QStringLiteral("AttributionEagernessChanged"),
+                    this, SLOT(onAttributionEagernessChanged(QString)));
 }
 
 void DBusConnectionMonitor::requestInitialSnapshot()

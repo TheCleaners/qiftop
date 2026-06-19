@@ -69,6 +69,12 @@ public:
 
     [[nodiscard]] QStringList capabilities() const override;
 
+    // Live re-tune of the cross-netns scan cadence. The refresh interval is
+    // an atomic int; the worker thread re-reads it at the top of each tick
+    // and adjusts its own QTimer (QTimer is not thread-safe, so we never
+    // touch it from the agent main thread). Clamps to the netns floor.
+    void setTuning(const ResolverTuning &tuning) override;
+
     [[nodiscard]] qint32 resolvePid(const Connection &flow) override;
 
     [[nodiscard]] std::optional<ProcessInfo>
@@ -82,7 +88,9 @@ private:
     std::atomic<bool>                 m_stop{false};
     QThread                          *m_thread = nullptr;
     NetnsScannerWorker               *m_worker = nullptr;
-    int                               m_refreshIntervalMs = 5000;
+    // Cross-netns scan cadence (ms). Atomic because the agent main thread
+    // re-tunes it via setTuning() while the worker thread reads it each tick.
+    std::atomic<int>                  m_refreshIntervalMs{5000};
 
     // Published cross-netns maps; mutated by worker, read by data thread.
     mutable std::mutex                m_mu;

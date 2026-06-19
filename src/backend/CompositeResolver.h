@@ -43,6 +43,12 @@ public:
         return out;
     }
 
+    void setTuning(const ResolverTuning &tuning) override
+    {
+        // Fan out to every child; each clamps to its own floor.
+        for (auto &c : m_children) c->setTuning(tuning);
+    }
+
     [[nodiscard]] qint32 resolvePid(const Connection &flow) override
     {
         for (auto &c : m_children) {

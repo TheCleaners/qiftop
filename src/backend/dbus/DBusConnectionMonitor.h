@@ -18,9 +18,25 @@ public:
     void setDesiredIntervalMs(int ms) override;
     void requestProcessDetails(qint32 pid) override;
 
+    // Set a runtime attribution-eagerness hint on the agent (capability:
+    // attribution-eagerness-hints). `mode` is one of `off`/`balanced`/
+    // `eager`, or `default`/empty to clear this client's hint. Fire-and-
+    // forget async call; the agent's resulting effective mode arrives via
+    // the attributionEagernessChanged() signal (and can be read from the
+    // AttributionEagerness property). No-op visual plumbing only — the
+    // GUI/TUI controls land in a later PR.
+    void setDesiredAttributionEagerness(const QString &mode);
+
+signals:
+    // Mirrors the agent's AttributionEagernessChanged DBus signal: the new
+    // effective attribution eagerness as a lowercase string (off/balanced/
+    // eager). Emitted whenever the agent's effective mode changes.
+    void attributionEagernessChanged(const QString &mode);
+
 private slots:
     void onConnectionsChanged(const QDBusMessage &msg);
     void onPermissionDenied(const QString &detail);
+    void onAttributionEagernessChanged(const QString &mode);
 
 private:
     void requestInitialSnapshot();
@@ -29,6 +45,7 @@ private:
     bool m_useSessionBus = false;
     bool m_started       = false;
     int  m_desiredMs     = 0;
+    QString m_desiredEagerness;   // last requested eagerness (re-asserted on start)
 };
 
 } // namespace qiftop::backend::dbus_client

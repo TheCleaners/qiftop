@@ -230,6 +230,7 @@ if(QIFTOP_PLATFORM STREQUAL "linux")
         src/agent/InterfacesService.cpp
         src/agent/ConnectionsService.cpp
         src/agent/IdleManager.cpp
+        src/agent/AttributionHintManager.cpp
     )
     target_include_directories(qiftop-agent PRIVATE src)
     target_link_libraries(qiftop-agent PRIVATE Qt6::Core Qt6::DBus Qt6::Network qiftoplib)
