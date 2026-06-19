@@ -1514,8 +1514,9 @@ has none. This is augmenting, not a capture replacement.
 * **Wire struct** — `bpf/birth_events.h` is the byte-for-byte contract
   between the BPF program and the userspace ring-buffer reader: addresses
   are raw network-order bytes (v4 in `[0,4)`), ports host order,
-  `start_time_ns` is `task->start_time` for the PID-reuse guard
-  (§8a rule 2). The userspace reader + `BpfBirthResolver` wiring lands in
+  `start_boottime_ns` is `task->start_boottime` — the field
+  `/proc/<pid>/stat` field 22 is derived from (NOT `start_time`) — which the
+  reader converts to clock ticks for the PID-reuse guard (§8a rule 2). The userspace reader + `BpfBirthResolver` wiring lands in
   a follow-up PR; `BirthCache` / `BpfBirthResolver` (the transport-neutral
   cores, `src/backend/`) already exist and are unit-tested with injected
   births (no kernel).

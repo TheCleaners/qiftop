@@ -70,7 +70,11 @@ struct sock {
 };
 
 struct task_struct {
-    __u64 start_time;
+    /* /proc/<pid>/stat field 22 is derived from start_BOOTTIME (see
+     * fs/proc/array.c: nsec_to_clock_t(timens_add_boottime_ns(start_boottime))),
+     * NOT start_time — capturing the wrong one makes the userspace PID-reuse
+     * guard mismatch every time. CO-RE relocates by name, so the name matters. */
+    __u64 start_boottime;
 };
 
 #pragma clang attribute pop

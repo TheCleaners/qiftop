@@ -87,7 +87,7 @@ static __always_inline void fill_meta(struct qiftop_birth_event *e,
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
 
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    e->start_time_ns = BPF_CORE_READ(task, start_time);
+    e->start_boottime_ns = BPF_CORE_READ(task, start_boottime);
 }
 
 /* Fill family + the 5-tuple from a `struct sock`. local = our bound end. */

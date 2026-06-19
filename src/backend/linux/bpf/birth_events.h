@@ -23,23 +23,23 @@
 /*
  * One captured socket birth, pushed through the ring buffer. Addresses are RAW
  * NETWORK-ORDER bytes (v4 occupies [0..4), v6 the full 16); ports are HOST
- * order. `start_time_ns` is task->start_time (CLOCK_MONOTONIC ns since boot) —
- * the userspace reader reconciles it with /proc field-22 ticks for the
- * PID-reuse guard (AGENTS.md §8a rule 2).
+ * order. `start_boottime_ns` is task->start_boottime (the field /proc/<pid>/stat
+ * field 22 is derived from) — the userspace reader converts it to clock ticks
+ * for the PID-reuse guard (AGENTS.md §8a rule 2).
  *
  * Field order is size-descending to avoid implicit padding so the struct is
  * identical under the BPF and host C ABIs without packing pragmas.
  */
 struct qiftop_birth_event {
-    __u64 ts_ns;          /* bpf_ktime_get_ns() at birth (CLOCK_MONOTONIC)   */
-    __u64 start_time_ns;  /* task->start_time — PID-reuse guard              */
-    __u32 pid;            /* tgid (the userspace-visible PID)                */
-    __u32 uid;            /* real uid of the owning task                     */
-    __u16 local_port;     /* host byte order                                */
-    __u16 remote_port;    /* host byte order                                */
-    __u8  proto;          /* IPPROTO_TCP (6) / IPPROTO_UDP (17)             */
-    __u8  family;         /* AF_INET (2) / AF_INET6 (10)                    */
-    __u8  direction;      /* QIFTOP_BIRTH_DIR_*                             */
+    __u64 ts_ns;              /* bpf_ktime_get_ns() at birth (CLOCK_MONOTONIC)   */
+    __u64 start_boottime_ns;  /* task->start_boottime — PID-reuse guard          */
+    __u32 pid;                /* tgid (the userspace-visible PID)                */
+    __u32 uid;                /* real uid of the owning task                     */
+    __u16 local_port;         /* host byte order                                */
+    __u16 remote_port;        /* host byte order                                */
+    __u8  proto;              /* IPPROTO_TCP (6) / IPPROTO_UDP (17)             */
+    __u8  family;             /* AF_INET (2) / AF_INET6 (10)                    */
+    __u8  direction;          /* QIFTOP_BIRTH_DIR_*                             */
     __u8  _pad;
     __u8  local_addr[QIFTOP_BIRTH_ADDR_LEN];   /* network order, v4 in [0,4) */
     __u8  remote_addr[QIFTOP_BIRTH_ADDR_LEN];
