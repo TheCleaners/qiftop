@@ -168,6 +168,10 @@ qiftop_add_test(test_units test_units.cpp)
 
 qiftop_add_test(test_deep_queue test_deep_queue.cpp)
 
+qiftop_add_test(test_birth_cache test_birth_cache.cpp)
+
+qiftop_add_test(test_bpf_birth_resolver test_bpf_birth_resolver.cpp)
+
 qiftop_add_test(test_deep_worker
     test_deep_worker.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/ResolverDeepWorker.cpp

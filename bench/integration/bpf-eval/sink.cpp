@@ -13,6 +13,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstddef>
 #include <cstring>
 #include <ctime>
 #include <netinet/in.h>
@@ -137,7 +138,7 @@ int main(int argc, char **argv)
         return false;
     };
 
-    std::vector<char> buf(64 * 1024);
+    std::vector<char> buf(std::size_t{64} * 1024);
     std::vector<epoll_event> evs(256);
     const time_t deadline = durationSecs > 0 ? ::time(nullptr) + durationSecs : 0;
 
