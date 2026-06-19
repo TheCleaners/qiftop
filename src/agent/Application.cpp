@@ -113,6 +113,21 @@ bool Application::start()
     m_attrHints->attachBus(m_bus);
     m_connSvc->setAttributionHintManager(m_attrHints);
 
+    // Async deep-pass refinement (capability: attribution-async-refinement).
+    // Only wire it when the resolver can actually attribute processes —
+    // otherwise there's nothing to refine and we'd advertise a no-op. Lives on
+    // the main thread alongside the service so resolver calls stay serialised
+    // with the data path. Starts active unless the config default is `off`.
+    if (m_resolver &&
+        m_resolver->capabilities().contains(QStringLiteral("process-attribution"))) {
+        m_deepWorker = new backend::ResolverDeepWorker(this);
+        m_deepWorker->setResolver(m_resolver.get());
+        m_deepWorker->setTuning(backend::resolverTuningFor(m_attrMode));
+        m_deepWorker->setActive(m_attrMode != backend::AttributionEagerness::Off);
+        m_connSvc->setDeepWorker(m_deepWorker);
+        m_ifaceSvc->setAsyncRefinement(true);
+    }
+
     if (m_netMonitor)  m_netMonitor->start();
     if (m_connMonitor) m_connMonitor->start();
     m_idle->noteActivity(); // ensure we start at the active interval

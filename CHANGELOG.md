@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Async deep-pass attribution refinement (DBus).** Flows the cheap
+  per-snapshot pass couldn't fully attribute (no PID yet, but not a by-design
+  forwarded/NAT flow) are now refined *off the data path* and streamed back via
+  a new `AttributionChanged(t, a(...))` signal on
+  `org.qiftop.NetworkAgent1.Connections` — an attribution-only patch (refined
+  process/container/chain/reason) that updates those columns without disturbing
+  rate math. The agent also merges refinements into its cached snapshot, so
+  `GetConnections` and the next `ConnectionsChanged` carry best-known
+  attribution even for clients that don't subscribe. The shipped worker simply
+  retries the cheap, cache-backed resolver as its caches refresh (so a socket
+  that lands a moment after the snapshot still attributes); the heavier
+  thread/fd + demand-driven netns recovery slots in behind the same seam later.
+  Additive over `NetworkAgent1`: advertises the `attribution-async-refinement`
+  capability token (Version stays **0.7**). Runtime `eagerness=off` quiesces the
+  deep pass; `balanced`/`eager` tune its batch/coalesce budgets.
 - **Runtime attribution-eagerness override (DBus).** Clients can now dial the
   agent's attribution eagerness up or down *at runtime* — no more editing
   `/etc/qiftop/agent.conf` and restarting just to go from `balanced` to

@@ -13,6 +13,7 @@
 #include "AttributionHintManager.h"
 #include "backend/Attribution.h"
 #include "backend/ConnectionMonitor.h"
+#include "backend/DeepAttributionWorker.h"
 #include "backend/PlatformInfo.h"
 #include "util/ConnectionHeuristics.h"
 #include "util/Logging.h"
@@ -115,6 +116,15 @@ void ConnectionsService::setAttributionHintManager(AttributionHintManager *mgr)
     }
 }
 
+void ConnectionsService::setDeepWorker(backend::DeepAttributionWorker *worker)
+{
+    m_deepWorker = worker;
+    if (m_deepWorker) {
+        connect(m_deepWorker, &backend::DeepAttributionWorker::refined,
+                this,         &ConnectionsService::onDeepRefined);
+    }
+}
+
 QString ConnectionsService::SetDesiredAttributionEagerness(const QString &mode)
 {
     if (!m_attrHints)
@@ -158,6 +168,16 @@ void ConnectionsService::onEffectiveEagernessChanged(backend::AttributionEagerne
     // (AGENTS.md §4): runtime-off is "stop refreshing", not "tear down".
     if (m_resolver)
         m_resolver->setTuning(backend::resolverTuningFor(mode));
+    // Off quiesces the deep pass too: clear pending work + suppress further
+    // refinements until a more-eager hint re-activates it. Balanced/eager
+    // re-tune the worker's budgets and re-enable enqueue.
+    if (m_deepWorker) {
+        m_deepWorker->setTuning(backend::resolverTuningFor(mode));
+        if (mode == backend::AttributionEagerness::Off)
+            m_deepWorker->setActive(false);
+        else
+            m_deepWorker->setActive(true);
+    }
     emit AttributionEagernessChanged(backend::eagernessToString(mode));
 }
 
@@ -284,6 +304,80 @@ void ConnectionsService::onConnectionsUpdated(const QList<Connection> &conns)
 
     m_last = dbus::toDtos(kept);
     emit ConnectionsChanged(static_cast<qulonglong>(m_clock.elapsed()), m_last);
+
+    // Keep the Connection-typed mirror + key→row index so a later deep-pass
+    // refinement can re-toDto() the patched flow and locate its row.
+    m_lastConns = kept;
+    ++m_generation;
+    m_keyIndex.clear();
+    m_keyIndex.reserve(m_lastConns.size());
+    for (int i = 0; i < m_lastConns.size(); ++i)
+        m_keyIndex.insert(backend::keyOf(m_lastConns[i]), i);
+
+    // Enqueue weakly-attributed flows for off-data-path refinement. A flow is
+    // "weak" when it has no PID yet but isn't a by-design no-owner case
+    // (forwarded/NAT). The worker retries it against the resolver as caches
+    // refresh; genuinely ownerless flows age out of its queue.
+    if (m_deepWorker) {
+        QList<backend::DeepAttributionRequest> reqs;
+        const auto nowMs = static_cast<quint64>(m_clock.elapsed());
+        for (const Connection &c : std::as_const(m_lastConns)) {
+            if (c.process.valid())
+                continue;
+            if (c.reason == AttributionReason::Forwarded)
+                continue; // no local process by design
+            reqs.append(backend::DeepAttributionRequest{
+                .key                = backend::keyOf(c),
+                .flow               = c,
+                .generation         = m_generation,
+                .monotonicMsQueued  = nowMs,
+                .wantContainerChain = m_wantContainerChain,
+            });
+        }
+        if (!reqs.isEmpty())
+            m_deepWorker->enqueue(reqs);
+    }
+}
+
+void ConnectionsService::onDeepRefined(
+    const QList<backend::DeepAttributionUpdate> &updates)
+{
+    dbus::ConnectionDtoList patched;
+    for (const backend::DeepAttributionUpdate &u : updates) {
+        auto it = m_keyIndex.constFind(u.key);
+        if (it == m_keyIndex.constEnd())
+            continue; // flow gone from the current snapshot — drop
+        const int idx = it.value();
+        if (idx < 0 || idx >= m_lastConns.size())
+            continue;
+
+        // Only patch toward MORE information; never overwrite a good
+        // attribution with an empty one (a later snapshot already owns the
+        // freshest cheap-pass result).
+        Connection &c = m_lastConns[idx];
+        bool changed = false;
+        if (u.process.valid() && !c.process.valid()) {
+            c.process = u.process;
+            c.reason  = u.reason;
+            changed = true;
+        }
+        if (u.container.valid() && !c.container.valid()) {
+            c.container = u.container;
+            changed = true;
+        }
+        if (!u.containerChain.isEmpty() && c.containerChain.isEmpty()) {
+            c.containerChain = u.containerChain;
+            changed = true;
+        }
+        if (!changed)
+            continue;
+
+        m_last[idx] = dbus::toDto(c);
+        patched.append(m_last[idx]);
+    }
+
+    if (!patched.isEmpty())
+        emit AttributionChanged(static_cast<qulonglong>(m_clock.elapsed()), patched);
 }
 
 void ConnectionsService::onPermissionDenied(const QString &detail)

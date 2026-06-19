@@ -2,13 +2,16 @@
 
 #include <QDBusContext>
 #include <QElapsedTimer>
+#include <QHash>
 #include <QObject>
 #include "Config.h"
+#include "backend/DeepAttribution.h"
 #include "dbus/Types.h"
 
 class ConnectionMonitor;
 
 namespace qiftop::backend { class ProcessResolver; }
+namespace qiftop::backend { class DeepAttributionWorker; }
 
 namespace qiftop::agent {
 
@@ -66,6 +69,13 @@ public:
         m_wantContainerChain = wantContainerChain;
     }
 
+    // Wire in the async deep-pass worker (v0.4 §5). When set, flows the cheap
+    // snapshot pass couldn't fully attribute are enqueued for off-data-path
+    // refinement; refinements arrive on onDeepRefined(), which patches m_last
+    // and emits AttributionChanged. Optional — null disables the deep pass and
+    // the `attribution-async-refinement` capability stays unadvertised.
+    void setDeepWorker(backend::DeepAttributionWorker *worker);
+
     // Install the disclosure policy for GetProcessDetails' privileged fields
     // (exe/cwd/cmdline). Defaults to Owner (root or the PID owner) when never
     // set — the safe, documented default.
@@ -101,6 +111,14 @@ signals:
     // set/cleared, a hint expired, or a hinting peer disconnected). Carries
     // the new effective mode string (off/balanced/eager).
     Q_SCRIPTABLE void AttributionEagernessChanged(QString mode);
+    // Attribution-only patch: refined process/container/chain/reason for a
+    // handful of previously-weakly-attributed flows (capability:
+    // attribution-async-refinement). Carries full ConnectionDto rows for
+    // identity, but clients MUST apply only the attribution fields and MUST
+    // NOT feed these into rate/ring-buffer math — the byte counters are a
+    // stale copy of the last ConnectionsChanged snapshot.
+    Q_SCRIPTABLE void AttributionChanged(qulonglong monotonicMs,
+                                         qiftop::dbus::ConnectionDtoList conns);
 
 private slots:
     void onConnectionsUpdated(const QList<Connection> &conns);
@@ -109,6 +127,10 @@ private slots:
     // Mirror the hint manager's effective-mode transition onto the wire:
     // emit AttributionEagernessChanged + re-tune the wired resolver.
     void onEffectiveEagernessChanged(qiftop::backend::AttributionEagerness mode);
+    // Apply a coalesced batch of deep-pass refinements: patch the matching
+    // rows in m_last (and m_lastConns) and emit AttributionChanged for the
+    // rows that actually changed. Stale (flow gone) updates are dropped.
+    void onDeepRefined(const QList<qiftop::backend::DeepAttributionUpdate> &updates);
 
 private:
     // True if the D-Bus caller may see a process's privileged detail fields
@@ -121,9 +143,16 @@ private:
     IdleManager             *m_idle    = nullptr;
     AttributionHintManager  *m_attrHints = nullptr;
     backend::ProcessResolver*m_resolver= nullptr;
+    backend::DeepAttributionWorker *m_deepWorker = nullptr;
     bool                     m_wantContainerChain = false;
     ProcessDetailsPolicy     m_detailsPolicy;   // default: Owner
     dbus::ConnectionDtoList  m_last;
+    // Connection-typed mirror of m_last (same order/indices), kept so a deep
+    // refinement can re-run toDto() on the patched flow. m_keyIndex maps a
+    // flow key to its row index in both lists.
+    QList<Connection>                        m_lastConns;
+    QHash<backend::AttributionFlowKey, int>  m_keyIndex;
+    quint64                  m_generation = 0;   // bumped per emitted snapshot
     bool                     m_accountingEnabled = true;
     QElapsedTimer            m_clock;       // started in ctor; drives snapshot timestamps
 };

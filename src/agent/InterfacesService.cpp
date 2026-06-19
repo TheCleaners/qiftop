@@ -70,6 +70,8 @@ QStringList InterfacesService::capabilities() const
         QStringLiteral("on-demand-process-details"), // Connections.GetProcessDetails(pid) RPC available
         QStringLiteral("attribution-eagerness-hints"), // Connections.SetDesiredAttributionEagerness(s)->s honoured
     };
+    if (m_asyncRefinement)
+        base.append(QStringLiteral("attribution-async-refinement")); // Connections.AttributionChanged(t,a(...)) patches
     if (m_resolver) {
         // Merge resolver tokens (process-attribution, container-attribution,
         // netns-scan, ...) — append-only, never reordered, dedup against the

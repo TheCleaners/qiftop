@@ -166,6 +166,14 @@ target_link_libraries(test_proxies PRIVATE Qt6::Widgets)
 
 qiftop_add_test(test_units test_units.cpp)
 
+qiftop_add_test(test_deep_queue test_deep_queue.cpp)
+
+qiftop_add_test(test_deep_worker
+    test_deep_worker.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/ResolverDeepWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/DeepAttributionWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/Attribution.cpp)
+
 qiftop_add_test(test_priv_escalator
     test_priv_escalator.cpp
     ${CMAKE_SOURCE_DIR}/src/util/PrivilegeEscalator.cpp
@@ -228,6 +236,7 @@ qiftop_add_test(test_services
     ${CMAKE_SOURCE_DIR}/src/agent/InterfacesService.cpp
     ${CMAKE_SOURCE_DIR}/src/agent/AttributionHintManager.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/Attribution.cpp
+    ${CMAKE_SOURCE_DIR}/src/backend/DeepAttributionWorker.cpp
     ${CMAKE_SOURCE_DIR}/src/agent/IdleManager.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/ConnectionMonitor.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/NetworkMonitor.cpp
