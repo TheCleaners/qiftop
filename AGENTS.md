@@ -60,7 +60,11 @@ src/
 │   │   ├── CgroupClassifier.{h,cpp}, CgroupParse.h         # pid → container runtime/id/chain
 │   │   ├── NetnsScanner.{h,cpp}                            # per-netns socket dump (setns)
 │   │   ├── ProcDetails.{h,cpp}                             # on-demand /proc/<pid> reads
-│   │   └── ProcSnapshot.h                                  # /proc/<pid>/stat starttime parser
+│   │   ├── ProcSnapshot.h                                  # /proc/<pid>/stat starttime parser
+│   │   └── bpf/                                            # CO-RE eBPF socket-birth program
+│   │       ├── birth.bpf.c                                 # fexit/fentry probes → ring buffer
+│   │       ├── birth_events.h                              # shared wire struct (BPF ↔ userspace)
+│   │       └── vmlinux_min.h                               # minimal CO-RE type subset (no BTF at build)
 │   ├── dbus/                       # libqiftop DBus source proxies for consumers
 │   │   ├── DBusNetworkMonitor.{h,cpp}
 │   │   └── DBusConnectionMonitor.{h,cpp}
@@ -1456,6 +1460,65 @@ can be dropped with `vagrant destroy default`.
   with "gpg exec failed") — see `dist/repo/build-pages.sh`. If
   `GPG_PRIVATE_KEY` is absent the workflow publishes unsigned
   (`gpgcheck=0 repo_gpgcheck=0`, forks).
+
+---
+
+## 8b. eBPF socket-birth attribution (the birth+conntrack hybrid)
+
+The conntrack+sock_diag resolver path attributes a flow by walking
+`/proc` and sock_diag on a periodic (~1 s) snapshot, so it structurally
+**misses short-lived processes**: the owner has already exited by the
+time the dump runs (Phase-0 measurement: ~100% miss on churny workloads).
+The hybrid closes that gap by capturing the owning pid + direction +
+5-tuple at flow **birth** — synchronously in the owner's context, before
+it can die — with a CO-RE eBPF program, and looking conntrack flows up
+against those births FIRST. conntrack still provides the **bytes**; birth
+has none. This is augmenting, not a capture replacement.
+
+* **Kernel program** — `src/backend/linux/bpf/birth.bpf.c`. Four BPF
+  trampoline probes, mirroring the validated bench
+  `bench/integration/bpf-eval/birth.bt`:
+  `fexit/tcp_v{4,6}_connect` (outbound TCP — at RETURN the ephemeral
+  source port is assigned; the `inet_sock_set_state` SYN_SENT tracepoint
+  fires too early and reports `local_port=0`), `fentry/udp_sendmsg`
+  (outbound connected UDP, deduped per-sock via an LRU map),
+  `fexit/inet_csk_accept` (inbound TCP — the return value is the child
+  sock). Births flow to userspace over a `BPF_MAP_TYPE_RINGBUF`.
+* **Why fexit/fentry, not k(ret)probes** — the bench used kprobes;
+  production uses BPF trampolines because they read args AND the return
+  value with no `pt_regs`/arch register macros and no entry→return
+  sock-stash map, and are cheaper. Semantically identical (fexit on
+  connect == the validated kretprobe). The tradeoff: fentry/fexit need
+  `CONFIG_FUNCTION_TRACER` (+ BTF); a kernel with that disabled falls
+  back to conntrack-only (skip-safe). Distro kernels 6.6–7.1 all ship it.
+* **CO-RE, no vmlinux.h** — every struct-field access is relocated
+  against the target kernel's BTF at load, so one object loads unchanged
+  across kernels. We deliberately do NOT generate a multi-megabyte
+  `vmlinux.h`: `bpf/vmlinux_min.h` hand-declares only the handful of
+  fields read (`sock_common`, `task_struct.start_time`, the map-type
+  enums), each under `preserve_access_index` so the declared offsets are
+  irrelevant. Net effect: **the BUILD host needs no kernel BTF** (CO-RE
+  needs it only at RUNTIME on the target). Anonymous-union kernel members
+  (`skc_daddr`, `skc_dport`, …) are declared flat; CO-RE resolves them by
+  name. If many more types are ever needed, switch to a build-time
+  `bpftool btf dump … format c` with a dev-box-sanitised checked-in
+  fallback — for this field set, minimal wins.
+* **Build** — `src/backend/linux/CMakeLists.txt`, gated on
+  `QIFTOP_HAVE_BPF` (the skip-safe `clang`+`bpftool`+`libbpf>=1.0`
+  detection in the top-level `CMakeLists.txt`). `clang -target bpf` →
+  `birth.bpf.o` → `bpftool gen skeleton` → `birth.skel.h`, which EMBEDS
+  the object bytes, so the program rides inside the agent binary and
+  **nothing extra ships in the package**. `backend_linux` depends on the
+  skeleton target, so CI compiles + validates the program on every push
+  wherever the toolchain is present.
+* **Wire struct** — `bpf/birth_events.h` is the byte-for-byte contract
+  between the BPF program and the userspace ring-buffer reader: addresses
+  are raw network-order bytes (v4 in `[0,4)`), ports host order,
+  `start_time_ns` is `task->start_time` for the PID-reuse guard
+  (§8a rule 2). The userspace reader + `BpfBirthResolver` wiring lands in
+  a follow-up PR; `BirthCache` / `BpfBirthResolver` (the transport-neutral
+  cores, `src/backend/`) already exist and are unit-tested with injected
+  births (no kernel).
 
 ---
 

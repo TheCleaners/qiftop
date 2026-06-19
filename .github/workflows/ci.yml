@@ -42,7 +42,19 @@ jobs:
             libncurses-dev \
             dbus-x11
 
-      - name: Configure
+      - name: Install eBPF toolchain (best-effort; build is skip-safe)
+        run: |
+          # The birth-attribution program needs clang(bpf)+libbpf+bpftool at
+          # BUILD time. clang+libbpf-dev are reliable; bpftool ships standalone
+          # on some images and via linux-tools on others. All best-effort: if
+          # any piece is missing, QIFTOP_HAVE_BPF resolves OFF and the agent
+          # builds conntrack-only (the program is still validated on the images
+          # where the toolchain lands).
+          sudo apt-get install -y --no-install-recommends clang libbpf-dev \
+            && { sudo apt-get install -y --no-install-recommends bpftool \
+                 || sudo apt-get install -y --no-install-recommends "linux-tools-$(uname -r)" \
+                 || echo "::notice::bpftool unavailable — agent builds conntrack-only"; } \
+            || echo "::notice::eBPF toolchain unavailable — agent builds conntrack-only"
         run: |
           # Debug builds enable ASan + UBSan on test targets only (production
           # binaries stay clean). Slower than vanilla Debug but catches
@@ -140,7 +152,8 @@ jobs:
             ncurses-devel \
             dbus-daemon dbus-tools \
             libasan libubsan \
-            shadow-utils"
+            shadow-utils \
+            clang libbpf-devel bpftool"
           ok=0
           for attempt in 1 2 3; do
             if dnf_install $pkgs; then ok=1; break; fi
