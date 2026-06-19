@@ -184,10 +184,14 @@ void MainWindow::setupUi()
     m_netView->horizontalHeader()->setStretchLastSection(false);
     m_netView->horizontalHeader()->setSectionResizeMode(
         static_cast<int>(NetworkModel::Column::Name), QHeaderView::Stretch);
-    auto *ifaceDelegate = new InterfaceNameDelegate(m_netView);
+    auto *ifaceDelegate = new InterfaceNameDelegate(m_netView, m_netView);
     ifaceDelegate->setSettings(m_settings);
     m_netView->setItemDelegateForColumn(
         static_cast<int>(NetworkModel::Column::Name), ifaceDelegate);
+    // General delegate paints the row-spanning bandwidth gauge under the
+    // numeric/status columns; the Name column's InterfaceNameDelegate paints
+    // the same backdrop under its rich text (it inherits RowGaugeDelegate).
+    m_netView->setItemDelegate(new RowGaugeDelegate(m_netView, m_netView));
     // Repaint when the tray-summary selection changes so the eye glyph updates.
     connect(m_settings, &Settings::changed, m_netView, [this] {
         m_netView->viewport()->update();
@@ -778,6 +782,9 @@ void MainWindow::applySettingsToUi()
     m_connModel->setTintRowByDirection(tint);
     // Throughput gauge: feed model state + show/hide the Max columns.
     m_connModel->setThroughputGaugeEnabled(m_settings->throughputGaugeEnabled());
+    // Interfaces-tab bandwidth gauge has its own (default-on) setting.
+    if (m_netModel)
+        m_netModel->setThroughputGaugeEnabled(m_settings->interfaceGaugeEnabled());
     m_connModel->setThroughputMaxMode(
         static_cast<ConnectionModel::ThroughputMaxMode>(
             static_cast<int>(m_settings->throughputMaxMode())));

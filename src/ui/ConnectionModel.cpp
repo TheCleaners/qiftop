@@ -1,4 +1,5 @@
 #include "ConnectionModel.h"
+#include "GaugeRoles.h"
 #include "util/Units.h"
 
 #include <QApplication>
@@ -264,7 +265,7 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
         }
     }
 
-    case GaugeFractionRole: {
+    case qiftop::ui::GaugeFractionRole: {
         if (!m_gaugeEnabled)
             return {};
         if (row.samples < kGaugeWarmupSamples)
@@ -277,7 +278,7 @@ QVariant ConnectionModel::data(const QModelIndex &index, int role) const
         const double cur = row.rxRate + row.txRate;
         return qBound(0.0, cur / ref, 1.0);
     }
-    case GaugeDarkColorRole: {
+    case qiftop::ui::GaugeDarkColorRole: {
         if (!m_gaugeEnabled)
             return {};
         const QColor base = QApplication::palette().color(QPalette::Base);

@@ -1,5 +1,5 @@
 #include "RowGaugeDelegate.h"
-#include "ConnectionModel.h"
+#include "GaugeRoles.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -31,14 +31,14 @@ bool RowGaugeDelegate::paintGaugeBackground(QPainter *painter,
         painted = true;
     }
 
-    const QVariant fracVar = index.data(ConnectionModel::GaugeFractionRole);
+    const QVariant fracVar = index.data(qiftop::ui::GaugeFractionRole);
     if (!fracVar.isValid())
         return painted;
     const double frac = qBound(0.0, fracVar.toDouble(), 1.0);
     if (frac <= 0.0)
         return painted;
 
-    const QVariant darkVar = index.data(ConnectionModel::GaugeDarkColorRole);
+    const QVariant darkVar = index.data(qiftop::ui::GaugeDarkColorRole);
     if (!darkVar.isValid())
         return painted;
     const QColor dark = qvariant_cast<QColor>(darkVar);

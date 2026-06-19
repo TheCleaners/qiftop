@@ -35,6 +35,7 @@ constexpr auto kTintRowByDirection        = "display/tintRowByDirection";
 constexpr auto kShowTcp                   = "display/showTcp";
 constexpr auto kShowUdp                   = "display/showUdp";
 constexpr auto kThroughputGaugeEnabled    = "display/throughputGaugeEnabled";
+constexpr auto kInterfaceGaugeEnabled     = "display/interfaceGaugeEnabled";
 constexpr auto kThroughputMaxMode         = "display/throughputMaxMode";
 constexpr auto kThroughputWindowSecs      = "display/throughputWindowSecs";
 constexpr auto kRateSmoothingMs           = "display/rateSmoothingMs";
@@ -98,6 +99,8 @@ void Settings::load()
     m_showUdp                      = m_store.value(kShowUdp, m_showUdp).toBool();
     m_throughputGaugeEnabled       = m_store.value(kThroughputGaugeEnabled,
                                                 m_throughputGaugeEnabled).toBool();
+    m_interfaceGaugeEnabled        = m_store.value(kInterfaceGaugeEnabled,
+                                                m_interfaceGaugeEnabled).toBool();
     m_throughputMaxMode            = static_cast<ThroughputMaxMode>(
         m_store.value(kThroughputMaxMode,
                       static_cast<int>(m_throughputMaxMode)).toInt());
@@ -300,6 +303,14 @@ void Settings::setThroughputGaugeEnabled(bool v)
     if (v == m_throughputGaugeEnabled) return;
     m_throughputGaugeEnabled = v;
     store(kThroughputGaugeEnabled, v);
+    emit changed();
+}
+
+void Settings::setInterfaceGaugeEnabled(bool v)
+{
+    if (v == m_interfaceGaugeEnabled) return;
+    m_interfaceGaugeEnabled = v;
+    store(kInterfaceGaugeEnabled, v);
     emit changed();
 }
 

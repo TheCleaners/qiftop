@@ -794,6 +794,7 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_forwarded`           | `isForwardedFlow` + `attributionReason` heuristics (Resolved/Forwarded/Orphaned/NoLocalSocket; PID always wins) |
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
 | `test_interface_aggregator` | `InterfaceAggregator` row identity, sorted snapshots, and per-interface rate computation without Qt model/view. |
+| `test_network_model`       | `NetworkModel`'s bandwidth-gauge surface: gauge-off → both gauge roles invalid; gauge-on → `GaugeFractionRole` bounded to [0,1] + valid `GaugeDarkColorRole`; the loopback-excluded view scale (a loud `lo` must not flatten a physical interface's gauge — loudest non-loopback always ≥ ~0.4 via `niceScale`, while `lo` itself clamps to full); `setThroughputGaugeEnabled` emits one `dataChanged` and is idempotent. Shares the scale math (`aggregate/BandwidthScale.h`) with the TUI. |
 | `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, and copy helpers. |
 | `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. Includes the dynamic column model (`columnsFor(View, OptionalColumns, GroupBy)` appends the capability-gated Process/Container columns and drops the grouped-by one), `cellsForConnection` / `groupHeaderCells` consuming the active column list, the `comm [pid]` / attribution-reason / `runtime:name` cell text, stable `ColumnId` sort-field tokens + legacy-index migration, `fieldRows` (the `f` overlay model), `orderedGroupIndices` (the group-display-order policy behind nqiftop's `sortWithinGroups`: frozen first-appearance vs classic aggregate order + stable tiebreak), `wrapToWidth` (word-wrap + hard-break for the modal dialogs' wrapped value column), `groupDetailRows` (the Enter-on-header group-info window: bulk fields + aggregates, plus exe/cmdline/cwd once on-demand details arrive), and the grouped-redundancy parity guard (`groupedChildRowDropsRedundantColumn`: the Process column is hidden when grouped By Process and the Container column when grouped By Container — the TUI analogue of the GUI hiding the redundant attribution column — while the OTHER stays present, and the group header still carries the grouped attribute). |
 | `test_tui_theme`           | Built-in `nqiftop` themes, case-insensitive lookup, fallback, and direction colour/attribute separation. |
@@ -1146,6 +1147,25 @@ can be dropped with `vagrant destroy default`.
   refuses to hide the last visible column. `applySettingsToUi()` still
   force-toggles `RxMax` / `TxMax` based on the throughput-gauge
   setting — those two columns are gauge-dependent, not user-controlled.
+* **The row-spanning bandwidth gauge is shared across frontends.**
+  `RowGaugeDelegate` paints both the Connections view AND the Interfaces
+  view; it reads two transport-neutral roles defined ONCE in
+  `src/ui/GaugeRoles.h` (`qiftop::ui::GaugeFractionRole` /
+  `GaugeDarkColorRole`) — never re-hardcode `ConnectionModel::`-prefixed
+  role ints in the delegate. Both `ConnectionModel` and `NetworkModel`
+  answer those roles. The scale math (`niceScale` / `gaugeFraction`)
+  lives in the Widgets-free `src/aggregate/BandwidthScale.h` (libqiftop)
+  so the nqiftop TUI and the GUI compute the gauge identically; the TUI
+  header re-exports it via `using`. The two gauges have SEPARATE settings
+  on purpose: `interfaceGaugeEnabled` (default **on** — it's the headline
+  of that tab and low-density) vs `throughputGaugeEnabled` (default off,
+  the denser per-flow adaptive gauge + Max columns). The interface gauge
+  scales every row to `niceScale(max combined rate of the loudest
+  *non-loopback* link)` so a busy lo doesn't flatten the physical NICs to
+  nothing (loopback still paints its own clamped-to-full bar). For the
+  gauge to span the Name column, `InterfaceNameDelegate` subclasses
+  `RowGaugeDelegate` (like `ConnectionFlowDelegate`) and calls
+  `paintGaugeBackground()` before its rich text.
 * **Connections view is a QTreeView with a two-proxy chain**:
   `ConnectionModel` → `ConnectionFilterProxy` → `ConnectionGroupProxy`
   → `QTreeView`. Flat mode is the default and is a strict pass-through

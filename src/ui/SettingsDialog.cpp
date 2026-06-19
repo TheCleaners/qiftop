@@ -177,6 +177,14 @@ SettingsDialog::SettingsDialog(Settings *settings,
     sep->setFrameShadow(QFrame::Sunken);
     displayForm->addRow(sep);
 
+    m_interfaceGaugeBox = new QCheckBox(tr("Show bandwidth gauge on Interfaces tab"));
+    m_interfaceGaugeBox->setToolTip(tr(
+        "Paints a bar across each interface row, proportional to its rx+tx "
+        "rate scaled to the busiest physical link (parity with the nqiftop "
+        "TUI). On by default."));
+    m_interfaceGaugeBox->setChecked(m_settings->interfaceGaugeEnabled());
+    displayForm->addRow(m_interfaceGaugeBox);
+
     m_throughputGaugeBox = new QCheckBox(tr("Show adaptive throughput gauge"));
     m_throughputGaugeBox->setToolTip(tr(
         "Tracks each connection's peak (or average) rx+tx rate over time "
@@ -517,6 +525,7 @@ void SettingsDialog::apply()
     m_settings->setColorCodeConnectionFlow(m_colorCodeBox->isChecked());
     m_settings->setTintRowByDirection(m_tintRowBox->isChecked());
     m_settings->setThroughputGaugeEnabled(m_throughputGaugeBox->isChecked());
+    m_settings->setInterfaceGaugeEnabled(m_interfaceGaugeBox->isChecked());
     m_settings->setThroughputMaxMode(
         static_cast<Settings::ThroughputMaxMode>(
             m_throughputModeCombo->currentData().toInt()));

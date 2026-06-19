@@ -1,5 +1,10 @@
 #include "NetworkModel.h"
+#include "GaugeRoles.h"
+#include "aggregate/BandwidthScale.h"
 #include "util/Units.h"
+
+#include <QApplication>
+#include <QPalette>
 
 NetworkModel::NetworkModel(QObject *parent)
     : QAbstractTableModel(parent)
@@ -72,6 +77,20 @@ QVariant NetworkModel::data(const QModelIndex &index, int role) const
         return row.current.isLoopback;
     case IsUpRole:
         return row.current.isUp;
+
+    case qiftop::ui::GaugeFractionRole: {
+        if (!m_gaugeEnabled)
+            return {};
+        const double combined = row.rxRate + row.txRate;
+        return qiftop::aggregate::gaugeFraction(combined, viewScale());
+    }
+    case qiftop::ui::GaugeDarkColorRole: {
+        if (!m_gaugeEnabled)
+            return {};
+        const QColor base = QApplication::palette().color(QPalette::Base);
+        const bool   dark = base.lightness() < 128;
+        return dark ? QColor(90, 90, 90) : QColor(190, 190, 190);
+    }
     case DetailsRole: {
         QStringList parts;
         if (!row.current.type.isEmpty())
@@ -154,5 +173,31 @@ QVariantList NetworkModel::exportRow(int row) const
 void NetworkModel::updateStats(QList<InterfaceStats> stats)
 {
     m_agg.updateStats(std::move(stats));
+}
+
+void NetworkModel::setThroughputGaugeEnabled(bool v)
+{
+    if (v == m_gaugeEnabled)
+        return;
+    m_gaugeEnabled = v;
+    if (m_agg.rowCount() > 0)
+        emit dataChanged(index(0, 0),
+                         index(m_agg.rowCount() - 1,
+                               static_cast<int>(Column::ColumnCount) - 1));
+}
+
+double NetworkModel::viewScale() const
+{
+    // Scale to the loudest *physical* interface so a real link's bar is
+    // readable; loopback can carry huge throughput and would otherwise
+    // flatten every other interface's gauge to nothing. Loopback still gets
+    // its own bar (clamped to full) since its fraction exceeds the scale.
+    double maxRate = 0.0;
+    for (const Row &r : m_agg.rows()) {
+        if (r.current.isLoopback)
+            continue;
+        maxRate = std::max(maxRate, r.rxRate + r.txRate);
+    }
+    return qiftop::aggregate::niceScale(maxRate);
 }
 
