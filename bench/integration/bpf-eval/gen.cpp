@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstddef>
 #include <cstring>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -166,7 +167,7 @@ bool runFlow(const Target &tgt, bool udp, uint64_t bytes, int holdMs,
     std::string lip; uint16_t lport = 0;
     localEndpoint(fd, lip, lport);
 
-    std::vector<char> chunk(16 * 1024, 'x');
+    std::vector<char> chunk(std::size_t{16} * 1024, 'x');
     uint64_t sent = 0;
     while (sent < bytes) {
         const size_t want = static_cast<size_t>(std::min<uint64_t>(chunk.size(), bytes - sent));
@@ -179,7 +180,7 @@ bool runFlow(const Target &tgt, bool udp, uint64_t bytes, int holdMs,
     uint64_t recvd = 0;
     if (!udp) {
         ::shutdown(fd, SHUT_WR);
-        std::vector<char> rb(16 * 1024);
+        std::vector<char> rb(std::size_t{16} * 1024);
         for (;;) {
             const ssize_t r = ::recv(fd, rb.data(), rb.size(), 0);
             if (r <= 0) break;

@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **eBPF socket-birth attribution (scaffolding).** Groundwork for the
+  birth+conntrack attribution hybrid that the measure-first investigation
+  greenlit (`bench/integration/bpf-eval/`): capturing a flow's owning PID at
+  `connect()`/`accept()`/first-UDP-send — before short-lived processes exit —
+  recovers the attribution conntrack+sock_diag misses (measured: short-flow
+  attribution 0→100%, UDP 19→99%, at <1% of a core). This change lands the
+  transport-neutral, fully unit-tested core: a bounded, TTL'd, PID-reuse-guarded
+  `BirthCache` keyed on the direction-agnostic 5-tuple, and a `BpfBirthResolver`
+  that sits first in the resolver chain (sock_diag fallback) and is inert until
+  the eBPF program loads — so a kernel without BPF/BTF degrades cleanly to the
+  existing conntrack-only attribution. The eBPF program + loader follow.
 - **Runtime attribution-eagerness controls in the GUI & TUI.** The agent's
   runtime eagerness override (added earlier in this cycle) now has a front end:
   the GUI gains an "Attribution:" toolbar dropdown (Default / Off / Balanced /
