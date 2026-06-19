@@ -54,6 +54,7 @@ private:
     int                        m_batchMax = 256;
     int                        m_maxAttempts = 12;
     int                        m_coalesceMs = 100;
+    bool                       m_demandNetnsScan = false;
 };
 
 } // namespace qiftop::backend

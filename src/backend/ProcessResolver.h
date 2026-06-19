@@ -37,6 +37,11 @@ struct ResolverTuning {
     int deepBatchMax    = 256;  // requests reprocessed per coalesce tick
     int deepCoalesceMs  = 100;  // stream refinements without signal storms
     int deepMaxAttempts = 12;   // age a flow out after N unresolved retries
+    // When set, the deep worker asks the resolver to refresh its expensive
+    // sources early (Linux: an immediate cross-netns sock_diag sweep) for
+    // top-talker flows the cheap retry can't crack. Eager-only by default —
+    // demand scans cost setns(2) + per-netns netlink dumps.
+    bool deepDemandNetnsScan = false;
 
     friend bool operator==(const ResolverTuning &, const ResolverTuning &) = default;
 };
@@ -54,6 +59,7 @@ struct ResolverTuning {
         .netnsRefreshMs = 1000,
         .deepBatchMax   = 2048, // catch up faster on busy hosts
         .deepCoalesceMs = 50,   // stream refinements sooner
+        .deepDemandNetnsScan = true, // kick early netns sweeps for misses
     };
 }
 
@@ -229,6 +235,22 @@ public:
     // single relaxed int write is acceptable (a torn read of an int cadence
     // is benign — worst case one stale refresh interval). See AGENTS.md §4.
     virtual void setTuning(const ResolverTuning &) {}
+
+    // Demand-driven deep scan hook (v0.4 §5). The async deep-pass worker calls
+    // this when a weakly-attributed top-talker flow has resisted the cheap
+    // cache-backed retries, asking the resolver to refresh its EXPENSIVE data
+    // sources early instead of waiting for the next periodic tick. The only
+    // current implementor is the Linux NetnsScanner, which kicks an immediate
+    // (rate-limited) cross-netns sock_diag sweep on its own worker thread so a
+    // container flow whose socket lives in a not-yet-scanned netns attributes
+    // sooner. Default no-op: resolvers with no expensive periodic source (host
+    // sock_diag, cgroup, BSD, Null) ignore it. CompositeResolver fans out.
+    //
+    // THREADING: invoked from the agent main thread (the deep worker lives
+    // there); implementations MUST NOT block — NetnsScanner just posts a queued
+    // tick to its worker thread and returns. Safe to call frequently; callees
+    // rate-limit so a burst of unresolved flows can't storm the scanner.
+    virtual void requestDeepScan() {}
 
     // Cheaply look up the PID owning the local end of `flow`. Returns 0
     // when the resolver cannot attribute (flow originates from a netns it

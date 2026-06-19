@@ -15,10 +15,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process/container/chain/reason) that updates those columns without disturbing
   rate math. The agent also merges refinements into its cached snapshot, so
   `GetConnections` and the next `ConnectionsChanged` carry best-known
-  attribution even for clients that don't subscribe. The shipped worker simply
+  attribution even for clients that don't subscribe. The shipped worker
   retries the cheap, cache-backed resolver as its caches refresh (so a socket
-  that lands a moment after the snapshot still attributes); the heavier
-  thread/fd + demand-driven netns recovery slots in behind the same seam later.
+  that lands a moment after the snapshot still attributes) and — in `eager`
+  mode — nudges the resolver to refresh its expensive sources early: the Linux
+  `NetnsScanner` runs an immediate, rate-limited cross-netns sweep so a fresh
+  **container** flow whose socket lives in a not-yet-scanned namespace
+  attributes in ~one scan instead of waiting up to a full periodic cycle.
   Additive over `NetworkAgent1`: advertises the `attribution-async-refinement`
   capability token (Version stays **0.7**). Runtime `eagerness=off` quiesces the
   deep pass; `balanced`/`eager` tune its batch/coalesce budgets.

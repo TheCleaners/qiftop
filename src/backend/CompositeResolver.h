@@ -49,6 +49,12 @@ public:
         for (auto &c : m_children) c->setTuning(tuning);
     }
 
+    void requestDeepScan() override
+    {
+        // Fan out: only the netns scanner acts on it; the rest no-op.
+        for (auto &c : m_children) c->requestDeepScan();
+    }
+
     [[nodiscard]] qint32 resolvePid(const Connection &flow) override
     {
         for (auto &c : m_children) {
