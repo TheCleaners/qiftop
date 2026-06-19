@@ -151,6 +151,8 @@ add_library(qiftoplib SHARED
     src/backend/PlatformInfo.cpp
     src/backend/ProcessResolverFactory.cpp
     src/backend/Attribution.cpp
+    src/backend/DeepAttributionWorker.cpp
+    src/backend/ResolverDeepWorker.cpp
     src/backend/dbus/DBusNetworkMonitor.cpp
     src/backend/dbus/DBusConnectionMonitor.cpp
     src/config/Settings.cpp

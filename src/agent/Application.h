@@ -8,6 +8,7 @@
 #include "Config.h"
 #include "IdleManager.h"
 #include "backend/ProcessResolver.h"
+#include "backend/ResolverDeepWorker.h"
 
 class NetworkMonitor;
 class ConnectionMonitor;
@@ -78,6 +79,7 @@ private:
     ConnectionsService  *m_connSvc  = nullptr;
     IdleManager         *m_idle     = nullptr;
     AttributionHintManager *m_attrHints = nullptr;
+    backend::ResolverDeepWorker *m_deepWorker = nullptr;
 
     bool                 m_nameOwned = false;
     QString              m_lastError;

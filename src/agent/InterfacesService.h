@@ -41,6 +41,11 @@ public:
     // attribution features are compiled out or the runtime probe failed.
     void setProcessResolver(backend::ProcessResolver *resolver);
 
+    // Advertise the `attribution-async-refinement` capability. Set by the
+    // agent only when a deep-pass worker is actually wired to the Connections
+    // service, so we never claim refinements we won't emit.
+    void setAsyncRefinement(bool enabled) { m_asyncRefinement = enabled; }
+
     [[nodiscard]] QString     version()      const;
     [[nodiscard]] QStringList capabilities() const;
 
@@ -83,6 +88,7 @@ private:
     NetworkMonitor              *m_monitor  = nullptr;
     IdleManager                 *m_idle     = nullptr;
     backend::ProcessResolver    *m_resolver = nullptr;
+    bool                         m_asyncRefinement = false;
     dbus::InterfaceStatsDtoList  m_last;
     QElapsedTimer                m_clock;        // started in ctor; drives snapshot timestamps
 };

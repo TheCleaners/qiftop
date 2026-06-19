@@ -198,7 +198,7 @@ Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 | Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
 |----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
 | `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged(t, a(...))`, `CadenceChanged(u)`         | `Version: s`, `Capabilities: as` |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uusssst)`, `SetDesiredIntervalMs(u)`, `SetDesiredAttributionEagerness(s) → s` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged`, `AttributionEagernessChanged(s)` | `AttributionEagerness: s` |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uusssst)`, `SetDesiredIntervalMs(u)`, `SetDesiredAttributionEagerness(s) → s` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged`, `AttributionEagernessChanged(s)`, `AttributionChanged(t, a(...))` | `AttributionEagerness: s` |
 
 Both data signals carry a leading `quint64 monotonicMs` (a
 `QElapsedTimer`-based, agent-process-local monotonic millisecond
@@ -360,6 +360,7 @@ older agents. Tokens currently emitted:
 | `container-chain-wire` | `ConnectionDto.containerChain` is populated when applicable. Strict superset of `container-attribution-wire`: a flow with no nesting still yields a single-entry chain. Advertised when the resolver provides BOTH `container-attribution` AND `container-chain` (see Application.cpp). Today CgroupClassifier always ships both, but the two flags must stay separable. |
 | `on-demand-process-details` | `Connections.GetProcessDetails(pid u) → (pid u, uid u, comm s, exe s, cmdline s, cwd s, startTimeJiffies t)` RPC is available. Returns an all-zero struct (pid=0) on unknown / disappeared PID, never a DBus error. Cache key for clients is `(pid, startTimeJiffies)` — startTime distinguishes PID reuse within one boot. Advertised unconditionally on Linux; non-Linux backends return empty. |
 | `attribution-eagerness-hints` | `Connections.SetDesiredAttributionEagerness(s) → s` is honoured — clients can raise/lower the agent's attribution eagerness at runtime via TTL'd, most-eager-wins hints, observe the result via the `AttributionEagerness` property + `AttributionEagernessChanged(s)` signal, and clear with `default`/empty. Config `eagerness=off` is an uncancellable kill switch (the runtime hint can't re-enable it). See the "Runtime attribution-eagerness override" section above. |
+| `attribution-async-refinement` | `Connections.AttributionChanged(t, a(...))` may stream attribution-only patches: refined `pid`/`uid`/`comm`/container/chain/`reason` for a handful of flows the cheap snapshot pass couldn't fully attribute, resolved off the data path and arriving a moment after `ConnectionsChanged`. Advertised only when a deep-pass worker is wired (the resolver advertises `process-attribution`). Clients MUST treat the rows as an attribution patch — update those columns, NEVER feed them into rate/ring-buffer math (the byte counters are a stale copy). Absent ⇒ don't subscribe; the agent still merges refinements into `m_last` so the next `ConnectionsChanged` / `GetConnections` carries best-known attribution for fallback clients. See "Async deep-pass refinement" below. |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.
@@ -669,6 +670,54 @@ member with a mutex take the same lock, `NetnsScanner` uses a
 worker's own `tick()`), and every resolver still clamps the new cadence to
 its existing floor so a runtime hint can't create a `/proc` blender.
 
+### Async deep-pass refinement
+
+Capability token: `attribution-async-refinement` (Version 0.7). The cheap
+snapshot pass stays synchronous and bounded — cap to top-4096, infer
+direction, run `attributeFlows()` against the resolver's *current* caches,
+emit `ConnectionsChanged` promptly. Flows it couldn't fully attribute (no
+PID, but not `Forwarded` — those have no local owner by design) are then
+enqueued into a deep-pass worker for refinement OFF the data path. The
+worker streams results back via `AttributionChanged(t, a(...))`, which the
+service applies as an **attribution-only patch**: it patches the matching
+rows in `m_last` (so `GetConnections` + the next `ConnectionsChanged` carry
+the better attribution for fallback clients) and re-emits just the changed
+`ConnectionDto` rows. **Clients must not feed `AttributionChanged` rows into
+rate math** — the byte counters are a stale copy of the last snapshot; only
+the attribution columns are fresh.
+
+Pieces (all libqiftop `backend/`, Qt Core only):
+
+* `DeepAttribution.h` — `AttributionFlowKey` (proto + local/remote + ifIndex
+  + **direction**, matching `Connection::key()` identity), `keyOf()`,
+  `DeepAttributionRequest` (cheap-fields flow snapshot + generation +
+  attempts), `DeepAttributionUpdate` (process/container/chain/reason patch).
+* `DeepAttributionQueue.h` — bounded, dedup-by-key (latest generation wins,
+  attempts carried forward), priority-by-bytes (top talkers first), hard cap
+  drops the quietest + warns once. Pure; pinned by `test_deep_queue`.
+* `DeepAttributionWorker.h` — abstract `QObject` seam (`enqueue` / `setActive`
+  / `clear` / `setTuning`, signal `refined`). `setActive(false)` is the
+  off-mode kill switch (clear + suppress).
+* `ResolverDeepWorker.{h,cpp}` — concrete worker shipped today: re-runs the
+  cheap, cache-backed `attributeFlows()` against enqueued flows on a
+  coalescing `QTimer`, emitting a refinement once a retry finds a PID/
+  container/chain the snapshot missed (the win is **timing** — a socket that
+  lands in the resolver cache just after the snapshot — not new kernel work).
+  Runs on the agent's main thread alongside `ConnectionsService`, so resolver
+  calls stay serialised with the data path (no concurrent resolver access).
+  Unresolved flows retry until `deepMaxAttempts`, then age out. Pinned by
+  `test_deep_worker`.
+
+The genuinely expensive recovery (per-PID thread/fd enumeration, demand-driven
+netns scans on a dedicated thread) is the next deep-pass increment and slots in
+behind the same `DeepAttributionWorker` seam — `ConnectionsService` and the wire
+don't change. On effective `off`, the service calls `setActive(false)` and stops
+enqueuing; `balanced`/`eager` re-tune the worker's batch/coalesce budgets via
+`ResolverTuning` (`deepBatchMax`, `deepCoalesceMs`, `deepQueueMax`,
+`deepMaxAttempts`). The token is advertised only when a worker is actually wired
+(`InterfacesService::setAsyncRefinement(true)`), so the agent never claims
+refinements it won't emit.
+
 
 
 `/etc/qiftop/agent.conf` — INI parsed by `QSettings(IniFormat)`, read once
@@ -774,7 +823,9 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_sockdiag_parse`      | `qiftop::backend::sockDiagParse` — netlink dump message parsing edge cases (IPv4/IPv6, multi-message dumps, truncated tail); plus the local 2-tuple key ambiguity guard (a local key with two distinct inodes must not yield a confident PID). Pure parser, no socket. |
 | `test_conntrack_orient`    | `qiftop::backend::linux::orientConntrackFlow` — pure per-flow local/remote orientation + tx/rx-from-ORIG/REPL mapping: outbound (src local), inbound (dst local), forwarded (neither local → ORIG tuple kept), both-local edge. No live conntrack handle. |
 | `test_flow_topk`           | `qiftop::backend::linux::admitFlowTopK` (FlowTopK.h) — the bounded top-K-by-bytes min-heap that caps the in-process `ConntrackMonitor` snapshot at the loudest 4096 (mirrors the agent cap): below-cap keeps all, at-cap keeps the loudest regardless of arrival order, ranks by rx+tx total, strictly-greater admission (ties keep the incumbent), `cap<=0` is unbounded, and the min-heap front invariant holds after every op. Pure — no live conntrack handle. |
-| `test_services`            | `ConnectionsService` / `InterfacesService` driven in-process via the fake monitors (no real D-Bus bus): snapshot cap (4099→4096 top-by-bytes), dropped-flow skip, process/container/chain attribution, server-side direction; interface-stat caching. |
+| `test_services`            | `ConnectionsService` / `InterfacesService` driven in-process via the fake monitors (no real D-Bus bus): snapshot cap (4099→4096 top-by-bytes), dropped-flow skip, process/container/chain attribution, server-side direction; interface-stat caching. v0.4 §5 deep pass: a `FakeDeepWorker` proves weak (NoLocalSocket) flows are enqueued, `AttributionChanged` patches `m_last` on refine (with the real post-direction key), stale/unknown-key and no-new-info updates are dropped, and a runtime `off` hint suppresses enqueue; plus the `attribution-async-refinement` token gate. |
+| `test_deep_queue`          | `DeepAttributionQueue` discipline: dedup by key (latest generation wins, attempts carried forward), priority-by-bytes dequeue (top talkers first), hard-cap drops the quietest, `clear`, and zero-capacity keeps/admits nothing. Pure. |
+| `test_deep_worker`         | `ResolverDeepWorker` (v0.4 §5): retries weakly-attributed flows on a fast coalescing timer and emits exactly one `refined()` once a fake resolver finally attributes the flow (reason → Resolved), drains afterward; ages out an unresolvable flow at `deepMaxAttempts` without emitting; an inactive worker ignores enqueue. Drives a real event loop. |
 | `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
 | `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
 | `test_proc_snapshot`       | `qiftop::backend::procsnap::pidStartTime` — `/proc/<pid>/stat` field-22 parser robustness (commands with spaces / parens / nested quotes), live self-PID round-trip, missing PID returns nullopt. |

@@ -29,6 +29,15 @@ struct ResolverTuning {
     int containerCacheMs = 2000;
     int netnsRefreshMs = 5000;
 
+    // Async deep-pass budgets (v0.4 §5). Read by the DeepAttributionWorker,
+    // ignored by the resolvers themselves (they only honour the refresh
+    // intervals above). Kept in the same struct so a single eagerness preset
+    // tunes both the resolver cadences and the deep-pass limits.
+    int deepQueueMax    = 8192; // bounded queue memory (~2 capped snapshots)
+    int deepBatchMax    = 256;  // requests reprocessed per coalesce tick
+    int deepCoalesceMs  = 100;  // stream refinements without signal storms
+    int deepMaxAttempts = 12;   // age a flow out after N unresolved retries
+
     friend bool operator==(const ResolverTuning &, const ResolverTuning &) = default;
 };
 
@@ -43,6 +52,8 @@ struct ResolverTuning {
         .cacheRefreshMs = 250,
         .containerCacheMs = 1000,
         .netnsRefreshMs = 1000,
+        .deepBatchMax   = 2048, // catch up faster on busy hosts
+        .deepCoalesceMs = 50,   // stream refinements sooner
     };
 }
 

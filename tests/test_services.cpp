@@ -6,12 +6,15 @@
 #include "agent/ConnectionsService.h"
 #include "agent/InterfacesService.h"
 #include "agent/AttributionHintManager.h"
+#include "backend/DeepAttributionWorker.h"
 #include "backend/PlatformInfo.h"
 #include "backend/ProcessResolver.h"
 #include "dbus/Types.h"
 #include "fakes/FakeMonitors.h"
 
 using qiftop::backend::ContainerInfo;
+using qiftop::backend::DeepAttributionRequest;
+using qiftop::backend::DeepAttributionUpdate;
 using qiftop::backend::ProcessInfo;
 using qiftop::backend::ProcessResolver;
 
@@ -99,6 +102,44 @@ Connection makeFlow(quint16 localPort, quint64 bytes)
     c.rxBytes = bytes;
     return c;
 }
+
+// A flow whose local end is loopback, so attributionReason classifies it as
+// NoLocalSocket (a genuine weak miss) rather than Forwarded — which is what
+// makes ConnectionsService enqueue it for the deep pass.
+Connection makeWeakLocalFlow(quint16 localPort, quint64 bytes)
+{
+    Connection c = makeFlow(localPort, bytes);
+    c.local.address  = QHostAddress(QStringLiteral("127.0.0.1"));
+    c.remote.address = QHostAddress(QStringLiteral("203.0.113.7"));
+    return c;
+}
+
+// Records what the service enqueues (with the real post-direction keys) and
+// lets the test stream refinements back through the production signal path.
+class FakeDeepWorker final : public qiftop::backend::DeepAttributionWorker {
+public:
+    void enqueue(const QList<DeepAttributionRequest> &reqs) override
+    {
+        if (!m_active)
+            return;
+        enqueued += reqs;
+    }
+    void setActive(bool active) override
+    {
+        m_active = active;
+        if (!active)
+            enqueued.clear();
+    }
+    void clear() override { enqueued.clear(); }
+
+    void emitRefined(const QList<DeepAttributionUpdate> &u) { emit refined(u); }
+    [[nodiscard]] bool active() const { return m_active; }
+
+    QList<DeepAttributionRequest> enqueued;
+
+private:
+    bool m_active = true;
+};
 
 } // namespace
 
@@ -248,6 +289,12 @@ private slots:
         const auto caps = service.capabilities();
         QVERIFY2(caps.contains(QStringLiteral("attribution-eagerness-hints")),
                  qPrintable(caps.join(QStringLiteral(", "))));
+        // attribution-async-refinement is gated on a deep worker being wired:
+        // absent by default, present once advertised.
+        QVERIFY(!caps.contains(QStringLiteral("attribution-async-refinement")));
+        service.setAsyncRefinement(true);
+        QVERIFY(service.capabilities().contains(
+            QStringLiteral("attribution-async-refinement")));
         // Pre-existing tokens must still be present (append-only contract).
         QVERIFY(caps.contains(QStringLiteral("cadence-hints")));
         QVERIFY(caps.contains(QStringLiteral("on-demand-process-details")));
@@ -296,6 +343,111 @@ private slots:
         QCOMPARE(service.SetDesiredAttributionEagerness(QStringLiteral("garbage")),
                  QStringLiteral("off"));
         QCOMPARE(resolver.tuningApplied, before);
+    }
+
+    void deepWorkerEnqueuesWeakFlowsAndPatchesOnRefine()
+    {
+        qiftop::tests::FakeConnectionMonitor monitor;
+        qiftop::agent::ConnectionsService service(&monitor);
+        FakeDeepWorker worker;
+        service.setDeepWorker(&worker);
+
+        QSignalSpy attrChanged(
+            &service, &qiftop::agent::ConnectionsService::AttributionChanged);
+        QVERIFY(attrChanged.isValid());
+
+        // One weak (NoLocalSocket) flow + one ordinary outbound flow. No
+        // resolver is wired, so both are unattributed on the cheap pass; the
+        // weak loopback flow is the one that should be enqueued.
+        monitor.emitSnapshot({makeWeakLocalFlow(40000, 500)});
+
+        QCOMPARE(worker.enqueued.size(), 1);
+        const DeepAttributionRequest req = worker.enqueued.front();
+        QVERIFY(!req.flow.process.valid());
+
+        // The deep worker resolves it later and streams a refinement using the
+        // exact post-direction key the service handed it.
+        ProcessInfo proc;
+        proc.pid  = 999;
+        proc.uid  = 1000;
+        proc.comm = QStringLiteral("wget");
+        DeepAttributionUpdate u;
+        u.key     = req.key;
+        u.process = proc;
+        u.reason  = AttributionReason::Resolved;
+        worker.emitRefined({u});
+
+        // AttributionChanged fires with exactly the patched row, carrying the
+        // newly-resolved pid; m_last (GetConnections) is patched too.
+        QCOMPARE(attrChanged.size(), 1);
+        const auto patched = attrChanged.takeFirst().at(1)
+            .value<qiftop::dbus::ConnectionDtoList>();
+        QCOMPARE(patched.size(), 1);
+        QCOMPARE(patched.front().pid, quint32(999));
+        QCOMPARE(patched.front().comm, QStringLiteral("wget"));
+
+        const auto current = service.GetConnections();
+        QCOMPARE(current.size(), 1);
+        QCOMPARE(current.front().pid, quint32(999));
+    }
+
+    void deepRefineDropsStaleAndUnknownKeys()
+    {
+        qiftop::tests::FakeConnectionMonitor monitor;
+        qiftop::agent::ConnectionsService service(&monitor);
+        FakeDeepWorker worker;
+        service.setDeepWorker(&worker);
+
+        QSignalSpy attrChanged(
+            &service, &qiftop::agent::ConnectionsService::AttributionChanged);
+
+        monitor.emitSnapshot({makeWeakLocalFlow(40001, 500)});
+        QCOMPARE(worker.enqueued.size(), 1);
+
+        // A refinement for a key not present in the current snapshot must be
+        // dropped silently (no AttributionChanged).
+        ProcessInfo proc;
+        proc.pid = 777;
+        DeepAttributionUpdate bogus;
+        bogus.key = qiftop::backend::keyOf(makeWeakLocalFlow(59999, 1));
+        bogus.process = proc;
+        bogus.reason  = AttributionReason::Resolved;
+        worker.emitRefined({bogus});
+        QCOMPARE(attrChanged.size(), 0);
+
+        // An update that carries no NEW information (invalid process, empty
+        // container) must not emit either.
+        DeepAttributionUpdate empty;
+        empty.key = worker.enqueued.front().key;
+        worker.emitRefined({empty});
+        QCOMPARE(attrChanged.size(), 0);
+    }
+
+    void deepWorkerSuppressedWhenEagernessOff()
+    {
+        using Eagerness = qiftop::backend::AttributionEagerness;
+
+        qiftop::tests::FakeConnectionMonitor monitor;
+        qiftop::agent::ConnectionsService service(&monitor);
+        FakeDeepWorker worker;
+        service.setDeepWorker(&worker);
+
+        qiftop::agent::AttributionHintManager mgr(Eagerness::Balanced, 10'000);
+        service.setAttributionHintManager(&mgr);
+
+        // A runtime 'off' hint quiesces the deep worker (active=false), so a
+        // subsequent snapshot enqueues nothing.
+        QVERIFY(mgr.setHint(QStringLiteral(":1.42"), Eagerness::Off));
+        QVERIFY(!worker.active());
+
+        monitor.emitSnapshot({makeWeakLocalFlow(40002, 500)});
+        QCOMPARE(worker.enqueued.size(), 0);
+
+        // Re-raising to balanced re-activates it; now weak flows enqueue again.
+        QVERIFY(mgr.setHint(QStringLiteral(":1.42"), Eagerness::Balanced));
+        QVERIFY(worker.active());
+        monitor.emitSnapshot({makeWeakLocalFlow(40002, 500)});
+        QCOMPARE(worker.enqueued.size(), 1);
     }
 };
 
