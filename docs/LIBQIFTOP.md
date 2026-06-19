@@ -33,6 +33,13 @@ a daemon). `qiftop` (GUI) and `qiftop-agent` both link it.
   `connectionsUpdated`. (The privileged in-process capture path —
   `backend/linux` — is *not* shipped in the lib; consumers stream from the
   agent. That keeps libqiftop unprivileged and platform-agnostic.)
+  `DBusConnectionMonitor` also re-emits the agent's deep-pass
+  `AttributionChanged` patches on `connectionsAttributionRefined` (an
+  attribution-only delta — feed it to the aggregator, never into rate math),
+  and exposes `setDesiredAttributionEagerness()` /
+  `attributionEagernessChanged()` so a consumer can dial the agent's runtime
+  attribution effort (both gated on the `attribution-eagerness-hints` /
+  `attribution-async-refinement` capability tokens; no-ops otherwise).
 * **Aggregators** — `InterfaceAggregator` / `ConnectionAggregator` are plain
   `QObject`s that own the derived view: per-interface and per-flow rates,
   the 3-layer EMA rate-smoothing pipeline, UDP peer-aggregation, direction
@@ -41,6 +48,9 @@ a daemon). `qiftop` (GUI) and `qiftop-agent` both link it.
     - **batch** — query `rows()` / `rowAt(i)` for the current snapshot;
     - **stream** — connect to their change signals (`rowsChanged`,
       `rowsUpdated`, `rowsInserted`/`Removed`, `didReset`) for deltas.
+  `ConnectionAggregator::applyAttributionPatch()` applies a deep-pass
+  refinement (wire it to the monitor's `connectionsAttributionRefined`) so
+  process/container/chain/reason update in place without disturbing rates.
 * **Filter** — `qiftop::filter` (the `proto:tcp and rate_total>1M`
   mini-language) evaluates against a `Context` built from a `Connection`,
   so any consumer can filter without re-implementing the grammar.

@@ -188,7 +188,8 @@ int main(int argc, char *argv[])
 
     Settings settings;
     // Show off the v0.2 attribution columns (capability-gated below) and the
-    // signature per-row throughput gauge + Max columns.
+    // signature per-row throughput gauge + Max columns. The Interfaces-tab
+    // bandwidth gauge defaults on, so it shows without extra setup.
     settings.setShowProcessColumn(true);
     settings.setShowContainerColumn(true);
     settings.setThroughputGaugeEnabled(true);
@@ -207,13 +208,16 @@ int main(int argc, char *argv[])
     MainWindow win(&settings, &netMon, &connMon, &dns);
     // Pretend we're talking to a full-featured agent so the Process /
     // Container columns un-gate (applySettingsToUi AND-gates pref ∧ wire cap).
-    win.setBackendInfo(true, QStringLiteral("0.5"), QStringList{
+    win.setBackendInfo(true, QStringLiteral("0.7"), QStringList{
         QStringLiteral("iana-proto"), QStringLiteral("direction-on-wire"),
         QStringLiteral("tcp-state"), QStringLiteral("ifindex"),
         QStringLiteral("process-attribution-wire"),
         QStringLiteral("container-attribution-wire"),
         QStringLiteral("container-chain-wire"),
         QStringLiteral("on-demand-process-details"),
+        // v0.4: light up the runtime attribution-eagerness toolbar control.
+        QStringLiteral("attribution-eagerness-hints"),
+        QStringLiteral("attribution-async-refinement"),
     });
     win.resize(width, height);
     win.show();
