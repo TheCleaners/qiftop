@@ -20,10 +20,14 @@
 #include <memory>
 
 #include <QCoreApplication>
+#include <QHostAddress>
+#include <QSet>
 #include <QTimer>
 
 #include "backend/Connection.h"
+#include "backend/PlatformInfo.h"
 #include "backend/linux/ConntrackMonitor.h"
+#include "util/ConnectionHeuristics.h"
 
 namespace {
 
@@ -78,10 +82,24 @@ int main(int argc, char **argv)
     auto monitor = std::make_unique<ConntrackMonitor>();
     monitor->setPollIntervalMs(pollMs);
 
+    // Apply the SAME server-side direction + attribution-reason inference the
+    // agent's ConnectionsService does, so we measure the conntrack path at
+    // production parity (ConntrackMonitor itself emits Direction::Unknown —
+    // inference is done at the service boundary). Host context is captured
+    // once; local addresses don't change during a run.
+    const QSet<QHostAddress> localAddrs    = qiftop::platform::localAddresses();
+    const QSet<QHostAddress> loopbackAddrs = qiftop::platform::loopbackAddresses();
+    const auto [ephLow, ephHigh]           = qiftop::platform::ephemeralPortRange();
+
     QObject::connect(monitor.get(), &ConnectionMonitor::connectionsUpdated,
-                     [out](const QList<Connection> &conns) {
+                     [&, out](const QList<Connection> &conns) {
         const long long ts = monoMs();
-        for (const Connection &c : conns) {
+        for (const Connection &raw : conns) {
+            Connection c = raw;
+            c.direction = qiftop::heuristics::inferDirection(
+                c, localAddrs, loopbackAddrs, ephLow, ephHigh);
+            c.reason = qiftop::heuristics::attributionReason(
+                c, localAddrs, loopbackAddrs);
             std::fprintf(out,
                 "{\"ts_ms\":%lld,\"proto\":\"%s\",\"local_ip\":\"%s\","
                 "\"local_port\":%u,\"remote_ip\":\"%s\",\"remote_port\":%u,"

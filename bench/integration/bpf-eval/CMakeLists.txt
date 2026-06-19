@@ -38,3 +38,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/score.py
                ${CMAKE_BINARY_DIR}/bpf-eval/score.py COPYONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/run-bpf-eval.sh
                ${CMAKE_BINARY_DIR}/bpf-eval/run-bpf-eval.sh COPYONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/birth.bt
+               ${CMAKE_BINARY_DIR}/bpf-eval/birth.bt COPYONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cost-bpf-eval.sh
+               ${CMAKE_BINARY_DIR}/bpf-eval/cost-bpf-eval.sh COPYONLY)
