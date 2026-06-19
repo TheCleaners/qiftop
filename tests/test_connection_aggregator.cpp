@@ -69,6 +69,41 @@ private slots:
         QVERIFY(qFuzzyCompare(agg.rowAt(0).rxRate, 2.0 * agg.rowAt(0).txRate));
     }
 
+    void attributionPatchUpdatesAttributionNotRates()
+    {
+        ConnectionAggregator agg;
+        agg.updateConnections({makeFlow(L4Proto::Tcp, "10.0.0.1", 5000, "1.1.1.1", 443, 1000, 500)});
+        QTest::qWait(5);
+        agg.updateConnections({makeFlow(L4Proto::Tcp, "10.0.0.1", 5000, "1.1.1.1", 443, 9000, 4500)});
+
+        const double rxBefore = agg.rowAt(0).rxRate;
+        QVERIFY(rxBefore > 0.0);
+        QCOMPARE(agg.rowAt(0).current.process.pid, qint32(0)); // unattributed
+
+        // A deep-pass refinement for the same flow key, carrying a resolved
+        // process. applyAttributionPatch updates attribution only.
+        Connection patch = makeFlow(L4Proto::Tcp, "10.0.0.1", 5000, "1.1.1.1", 443, 0, 0);
+        patch.process.pid  = 4242;
+        patch.process.comm = QStringLiteral("curl");
+        patch.reason       = AttributionReason::Resolved;
+
+        QSignalSpy spy(&agg, &ConnectionAggregator::viewDataChanged);
+        agg.applyAttributionPatch({patch});
+
+        QCOMPARE(agg.rowAt(0).current.process.pid, qint32(4242));
+        QCOMPARE(agg.rowAt(0).current.process.comm, QStringLiteral("curl"));
+        QCOMPARE(agg.rowAt(0).current.reason, AttributionReason::Resolved);
+        // Rates/bytes are NOT disturbed by the patch.
+        QCOMPARE(agg.rowAt(0).rxRate, rxBefore);
+        QCOMPARE(spy.count(), 1);
+
+        // A patch for a flow not in the table is a silent no-op (no repaint).
+        Connection unknown = makeFlow(L4Proto::Tcp, "10.0.0.9", 6000, "2.2.2.2", 80, 0, 0);
+        unknown.process.pid = 99;
+        agg.applyAttributionPatch({unknown});
+        QCOMPARE(spy.count(), 1);
+    }
+
     void disappearingFlowGoesStaleThenPruned()
     {
         ConnectionAggregator agg;

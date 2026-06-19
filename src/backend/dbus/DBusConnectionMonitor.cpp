@@ -55,6 +55,11 @@ void DBusConnectionMonitor::start()
                  QString::fromLatin1(kIface),
                  QStringLiteral("AttributionEagernessChanged"),
                  this, SLOT(onAttributionEagernessChanged(QString)));
+    conn.connect(QString::fromLatin1(kService),
+                 QString::fromLatin1(kPath),
+                 QString::fromLatin1(kIface),
+                 QStringLiteral("AttributionChanged"),
+                 this, SLOT(onAttributionChanged(QDBusMessage)));
     requestInitialSnapshot();
     if (m_desiredMs > 0)
         sendDesiredIntervalAsync(m_desiredMs);
@@ -151,6 +156,10 @@ void DBusConnectionMonitor::stop()
                     QString::fromLatin1(kIface),
                     QStringLiteral("AttributionEagernessChanged"),
                     this, SLOT(onAttributionEagernessChanged(QString)));
+    conn.disconnect(QString::fromLatin1(kService), QString::fromLatin1(kPath),
+                    QString::fromLatin1(kIface),
+                    QStringLiteral("AttributionChanged"),
+                    this, SLOT(onAttributionChanged(QDBusMessage)));
 }
 
 void DBusConnectionMonitor::requestInitialSnapshot()
@@ -204,6 +213,25 @@ void DBusConnectionMonitor::onConnectionsChanged(const QDBusMessage &msg)
     qiftop::dbus::ConnectionDtoList list;
     arg >> list;
     emit connectionsUpdated(qiftop::dbus::fromDtos(list));
+}
+
+void DBusConnectionMonitor::onAttributionChanged(const QDBusMessage &msg)
+{
+    // Same (t monotonicMs, a(...) conns) layout as ConnectionsChanged, but the
+    // rows are an attribution-only patch — emit on the refinement signal so the
+    // aggregator updates attribution columns without touching the rate series.
+    const auto args = msg.arguments();
+    QDBusArgument arg;
+    if (args.size() >= 2)
+        arg = args.at(1).value<QDBusArgument>();
+    else if (args.size() == 1)
+        arg = args.at(0).value<QDBusArgument>();
+    else
+        return;
+    qiftop::dbus::ConnectionDtoList list;
+    arg >> list;
+    if (!list.isEmpty())
+        emit connectionsAttributionRefined(qiftop::dbus::fromDtos(list));
 }
 
 void DBusConnectionMonitor::onPermissionDenied(const QString &detail)

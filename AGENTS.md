@@ -739,6 +739,27 @@ On effective `off`, the service calls `setActive(false)` and stops enqueuing;
 worker is actually wired (`InterfacesService::setAsyncRefinement(true)`), so the
 agent never claims refinements it won't emit.
 
+**Client consumption.** `ConnectionMonitor` exposes a second signal
+`connectionsAttributionRefined(QList<Connection>)` alongside the usual
+`connectionsUpdated`. The `DBusConnectionMonitor` subscribes to the agent's
+`AttributionChanged` and re-emits it on that signal (it always subscribes — an
+agent that never emits is a harmless no-op; old/in-process backends simply never
+fire it). Consumers apply it via `ConnectionAggregator::applyAttributionPatch()`,
+which looks each row up by `Connection::key()` and updates ONLY
+process/container/chain/reason (toward more information — never overwriting a
+good value with an empty one), then emits the coarse `viewDataChanged()` repaint.
+**Bytes, rates, smoothing state and timestamps are deliberately untouched**, so a
+refinement arriving between polls can't perturb the rate series — this is the
+whole reason it's a separate signal and not just another `connectionsUpdated`.
+The GUI wires it through `MainWindow::onConnectionsAttributionRefined` →
+`ConnectionModel::applyAttributionPatch` (honouring pause); the TUI connects the
+monitor signal straight to the aggregator slot. A patch key that no longer
+matches a live row (flow gone, or a UDP-aggregated row with a synthetic key) is
+skipped. Even a client that ignores the signal entirely still converges: the
+agent merges every refinement into `m_last`, so the next `ConnectionsChanged`
+carries the better attribution. Pinned by
+`test_connection_aggregator::attributionPatchUpdatesAttributionNotRates`.
+
 
 
 `/etc/qiftop/agent.conf` — INI parsed by `QSettings(IniFormat)`, read once
@@ -816,7 +837,7 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_ema`                 | `emaUpdate`, `easeOutCubic`                                       |
 | `test_interface_aggregator` | `InterfaceAggregator` row identity, sorted snapshots, and per-interface rate computation without Qt model/view. |
 | `test_network_model`       | `NetworkModel`'s bandwidth-gauge surface: gauge-off → both gauge roles invalid; gauge-on → `GaugeFractionRole` bounded to [0,1] + valid `GaugeDarkColorRole`; the loopback-excluded view scale (a loud `lo` must not flatten a physical interface's gauge — loudest non-loopback always ≥ ~0.4 via `niceScale`, while `lo` itself clamps to full); `setThroughputGaugeEnabled` emits one `dataChanged` and is idempotent. Shares the scale math (`aggregate/BandwidthScale.h`) with the TUI. |
-| `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, and copy helpers. |
+| `test_connection_aggregator` | `ConnectionAggregator` flow insertion/update/removal, raw rates, stale pruning, UDP peer aggregation, copy helpers, and `applyAttributionPatch` (v0.4 §5 deep-pass: patches process/container/chain/reason by key + fires `viewDataChanged` WITHOUT disturbing the rate series; unknown key is a silent no-op). |
 | `test_tui_format`          | Pure TUI formatting/sorting/grouping/detail helpers (`TuiFormat.h`, `Expansion.h`) over aggregator rows — no ncurses event loop. Includes the dynamic column model (`columnsFor(View, OptionalColumns, GroupBy)` appends the capability-gated Process/Container columns and drops the grouped-by one), `cellsForConnection` / `groupHeaderCells` consuming the active column list, the `comm [pid]` / attribution-reason / `runtime:name` cell text, stable `ColumnId` sort-field tokens + legacy-index migration, `fieldRows` (the `f` overlay model), `orderedGroupIndices` (the group-display-order policy behind nqiftop's `sortWithinGroups`: frozen first-appearance vs classic aggregate order + stable tiebreak), `wrapToWidth` (word-wrap + hard-break for the modal dialogs' wrapped value column), `groupDetailRows` (the Enter-on-header group-info window: bulk fields + aggregates, plus exe/cmdline/cwd once on-demand details arrive), and the grouped-redundancy parity guard (`groupedChildRowDropsRedundantColumn`: the Process column is hidden when grouped By Process and the Container column when grouped By Container — the TUI analogue of the GUI hiding the redundant attribution column — while the OTHER stays present, and the group header still carries the grouped attribute). |
 | `test_tui_theme`           | Built-in `nqiftop` themes, case-insensitive lookup, fallback, and direction colour/attribute separation. |
 | `test_gui_theme`           | GUI colour-theme model (`src/ui/GuiTheme.h`): `builtinGuiThemes()` ships System-first (the only `followSystem`) plus the named set; `guiThemeIndexByName` is case-insensitive and returns -1 for unknown; named themes carry a valid, non-default palette and distinct flow accents; System ships invalid accents (delegate keeps its auto defaults); Dark/Light differ in Base luminance. Headless QtGui (no window). |

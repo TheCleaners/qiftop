@@ -78,6 +78,7 @@ public:
 private slots:
     void onStatsUpdated(const QList<InterfaceStats> &stats);
     void onConnectionsUpdated(const QList<Connection> &conns);
+    void onConnectionsAttributionRefined(const QList<Connection> &patch);
     void onSettingsChanged();
     void togglePaused(bool paused);
     void openSettingsDialog();

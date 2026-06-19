@@ -49,6 +49,16 @@ signals:
     void connectionsUpdated(QList<Connection> connections);
     void permissionDenied(QString detail);
 
+    // Attribution-only refinement (v0.4 §5 deep pass). Carries a small patch
+    // of flows whose process/container/chain/reason was resolved off the data
+    // path AFTER the last connectionsUpdated snapshot. Consumers apply it to
+    // existing rows' attribution fields (ConnectionAggregator::
+    // applyAttributionPatch) and MUST NOT feed it into rate math — the byte
+    // counters are a stale copy. Backends that don't do deferred attribution
+    // (in-process today) never emit it; the DBus proxy emits it on the agent's
+    // AttributionChanged signal.
+    void connectionsAttributionRefined(QList<Connection> patch);
+
     // Emitted (once) when the backend determines that the kernel is not
     // recording per-flow byte/packet counters (e.g. Linux's
     // `net.netfilter.nf_conntrack_acct` sysctl is off and we couldn't turn
