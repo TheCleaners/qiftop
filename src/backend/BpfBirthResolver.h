@@ -69,6 +69,16 @@ public:
             if (m_enrichByPid.size() > m_cache.maxEntries())
                 m_enrichByPid.clear(); // clear-on-overflow, mirrors the cache
         }
+        // Periodically reap TTL-expired births. find() only TTL-FILTERS (it
+        // can't mutate a const cache), so without this, unmatched births would
+        // pile up to the hard cap and the clear-on-overflow would then drop
+        // FRESH births too. Pruning every kPruneInterval inserts keeps the live
+        // set far below the cap on churny hosts, so the overflow path is a
+        // last-ditch safety net rather than a routine event.
+        if (++m_sincePrune >= kPruneInterval) {
+            m_sincePrune = 0;
+            m_cache.prune(now);
+        }
     }
 
     // Mark the resolver active (the eBPF program loaded + probes attached).
@@ -155,12 +165,15 @@ public:
     }
 
 private:
+    static constexpr int kPruneInterval = 4096; // inserts between TTL reaps
+
     mutable std::mutex                 m_mu;
     BirthCache                         m_cache;
     QHash<qint32, ProcessInfo>         m_enrichByPid; // pid → comm/uid from birth
     std::function<quint64(qint32)>     m_startTimeProbe;
     std::function<qint64()>            m_clockMs;
     bool                               m_loaded = false;
+    int                                m_sincePrune = 0;
 };
 
 } // namespace qiftop::backend

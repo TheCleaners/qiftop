@@ -26,6 +26,9 @@
 #  ifdef QIFTOP_ENABLE_NETNS_SCAN
 #    include "linux/NetnsScanner.h"
 #  endif
+#  ifdef QIFTOP_HAVE_BPF
+#    include "linux/BpfBirthSource.h"
+#  endif
 #endif
 
 namespace qiftop::backend {
@@ -46,6 +49,23 @@ createProcessResolver(const ProcessResolverConfig &cfg)
 
 #ifdef QIFTOP_HAS_LINUX_ATTRIBUTION
     auto composite = std::make_unique<CompositeResolver>();
+#  ifdef QIFTOP_HAVE_BPF
+    // eBPF socket-birth goes FIRST: it captures the owning pid at connect()/
+    // accept() time, recovering short-lived processes that sock_diag misses
+    // because they've already exited by the periodic dump. Skip-safe — if the
+    // program can't load/attach (no BTF / trampolines / CAP_BPF) the source's
+    // initialize() returns false and we just don't add it (conntrack-only).
+    if (cfg.processAttribution) {
+        auto r = std::make_unique<linuximpl::BpfBirthSource>();
+        if (r->initialize()) {
+            qCInfo(lcVerbose) << "ProcessResolverFactory: BpfBirthSource added (eBPF birth, first)";
+            composite->add(std::move(r));
+        } else {
+            qCInfo(lcVerbose) << "ProcessResolverFactory: eBPF birth unavailable "
+                                 "(no BTF/trampoline/CAP_BPF) — conntrack-only attribution";
+        }
+    }
+#  endif
 #  ifdef QIFTOP_ENABLE_PROCESS_ATTRIBUTION
     if (cfg.processAttribution) {
         auto r = std::make_unique<linuximpl::SockDiagResolver>(cfg.tuning);
