@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-18
+
 ### Added
 - **`bench_dbus_types`** (developer tooling) — a new opt-in benchmark for the
   wire conversion layer (`toDtos` / `fromDtos`) the agent and every client run
