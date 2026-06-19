@@ -201,6 +201,8 @@ protected:
     QAction               *m_connIfaceFilterMenuAct    = nullptr; // QAction wrapping the submenu
     class QComboBox       *m_connViewModeCombo         = nullptr;
     QAction               *m_connViewModeToolbarAct    = nullptr;
+    class QComboBox       *m_attrEagernessCombo        = nullptr;
+    QAction               *m_attrEagernessToolbarAct   = nullptr;
     // Mirror of the toolbar view-mode dropdown under View → "Group
     // Connections" (radio submenu). Enabled only on the Connections tab,
     // kept in sync with Settings::connectionViewMode in applySettingsToUi().

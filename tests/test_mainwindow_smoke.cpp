@@ -397,6 +397,38 @@ private slots:
                  "container-attribution-wire");
     }
 
+    // The runtime attribution-eagerness toolbar combo is gated on the active
+    // backend advertising `attribution-eagerness-hints`: hidden without it,
+    // shown (and synced to the persisted choice) with it.
+    void eagernessComboGatedOnCapability()
+    {
+        SettingsSandbox sandbox;
+        Settings settings;
+        settings.setAttributionEagerness(QStringLiteral("eager"));
+
+        FakeNetworkMonitor    netMon;
+        FakeConnectionMonitor connMon;
+        FakeDnsResolver       dns;
+
+        MainWindow w(&settings, &netMon, &connMon, &dns);
+        w.setBackendInfo(false, QString(), QStringList{}); // no eagerness cap
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        auto *combo = w.findChild<QComboBox*>(QStringLiteral("attrEagernessCombo"));
+        QVERIFY(combo);
+        QVERIFY2(!combo->isVisible(),
+                 "eagerness combo visible without attribution-eagerness-hints cap");
+
+        w.setBackendInfo(true, QStringLiteral("0.7"),
+                         QStringList{ QStringLiteral("attribution-eagerness-hints") });
+        QTest::qWait(20);
+        QVERIFY2(combo->isVisible(),
+                 "eagerness combo hidden despite attribution-eagerness-hints cap");
+        // Synced to the persisted "eager" choice.
+        QCOMPARE(combo->currentData().toString(), QStringLiteral("eager"));
+    }
+
     // Unattributed flows carry a server-side reason; the Process column must
     // render a colour-coded synthetic label ("— forwarded —", etc.) rather
     // than a bare dash, so router/NAT traffic isn't mistaken for an

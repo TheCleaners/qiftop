@@ -43,6 +43,7 @@ constexpr auto kRateSmoothingSecsLegacy   = "display/rateSmoothingSecs"; // pre-
 constexpr auto kShowStatusInTitle         = "display/showStatusInTitle";
 constexpr auto kConnectionFilterExpr      = "connections/filterExpr";
 constexpr auto kGuiThemeName              = "display/guiTheme";
+constexpr auto kAttributionEagerness      = "monitoring/attributionEagerness";
 constexpr auto kConnectionViewMode        = "connections/viewMode";
 constexpr auto kShowProcessColumn         = "connections/showProcessColumn";
 constexpr auto kShowContainerColumn       = "connections/showContainerColumn";
@@ -128,6 +129,8 @@ void Settings::load()
                                                 m_connFilterExpr).toString();
     m_guiThemeName                 = m_store.value(kGuiThemeName,
                                                 m_guiThemeName).toString();
+    m_attributionEagerness         = m_store.value(kAttributionEagerness,
+                                                m_attributionEagerness).toString();
     {
         const int mode = m_store.value(kConnectionViewMode,
                                        static_cast<int>(m_connViewMode)).toInt();
@@ -376,6 +379,14 @@ void Settings::setGuiThemeName(const QString &name)
     if (name == m_guiThemeName) return;
     m_guiThemeName = name;
     store(kGuiThemeName, name);
+    emit changed();
+}
+
+void Settings::setAttributionEagerness(const QString &mode)
+{
+    if (mode == m_attributionEagerness) return;
+    m_attributionEagerness = mode;
+    store(kAttributionEagerness, mode);
     emit changed();
 }
 

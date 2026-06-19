@@ -220,6 +220,28 @@ private slots:
         Settings reopened;
         QCOMPARE(reopened.guiThemeName(), QStringLiteral("Nord"));
     }
+
+    void attributionEagernessDefaultsEmptyAndRoundTrips()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        redirectSettings(dir.path());
+
+        {
+            Settings s;
+            // Default is empty = "no hint, use the agent's config default".
+            QVERIFY(s.attributionEagerness().isEmpty());
+            s.setAttributionEagerness(QStringLiteral("eager"));
+            QCOMPARE(s.attributionEagerness(), QStringLiteral("eager"));
+        }
+        Settings reopened;
+        QCOMPARE(reopened.attributionEagerness(), QStringLiteral("eager"));
+
+        // Clearing back to empty round-trips too.
+        reopened.setAttributionEagerness(QString());
+        Settings again;
+        QVERIFY(again.attributionEagerness().isEmpty());
+    }
 };
 
 QTEST_MAIN(TestSettingsMigration)

@@ -25,13 +25,7 @@ public:
     // the attributionEagernessChanged() signal (and can be read from the
     // AttributionEagerness property). No-op visual plumbing only — the
     // GUI/TUI controls land in a later PR.
-    void setDesiredAttributionEagerness(const QString &mode);
-
-signals:
-    // Mirrors the agent's AttributionEagernessChanged DBus signal: the new
-    // effective attribution eagerness as a lowercase string (off/balanced/
-    // eager). Emitted whenever the agent's effective mode changes.
-    void attributionEagernessChanged(const QString &mode);
+    void setDesiredAttributionEagerness(const QString &mode) override;
 
 private slots:
     void onConnectionsChanged(const QDBusMessage &msg);

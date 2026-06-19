@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Runtime attribution-eagerness controls in the GUI & TUI.** The agent's
+  runtime eagerness override (added earlier in this cycle) now has a front end:
+  the GUI gains an "Attribution:" toolbar dropdown (Default / Off / Balanced /
+  Eager) and the TUI an `e` key that cycles the same values. The choice is
+  persisted and re-asserted on the existing agent heartbeat so it survives the
+  hint TTL, and both controls are capability-gated on `attribution-eagerness-hints`
+  (hidden against an in-process backend or an agent that doesn't support it).
+  "Default" clears the client's hint so the agent falls back to its configured
+  eagerness.
 - **Async deep-pass attribution refinement (DBus).** Flows the cheap
   per-snapshot pass couldn't fully attribute (no PID yet, but not a by-design
   forwarded/NAT flow) are now refined *off the data path* and streamed back via
