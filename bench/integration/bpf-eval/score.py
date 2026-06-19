@@ -29,8 +29,12 @@ def load_ndjson(path):
         with open(path) as f:
             for line in f:
                 line = line.strip()
-                if line:
+                if not line or line[0] != "{":
+                    continue  # skip blanks + tool banners (e.g. bpftrace "Attaching…")
+                try:
                     rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue  # tolerate a torn final line from a killed collector
     except FileNotFoundError:
         print(f"score: {path} not found — skipping", file=sys.stderr)
     return rows

@@ -1,0 +1,90 @@
+#!/usr/bin/env bpftrace
+/*
+ * bpf-eval Phase 2: eBPF socket-BIRTH attribution collector.
+ *
+ * Phase-0 finding: conntrack capture is fine, but short-lived processes are
+ * 100% unattributed — the owning process has EXITED by the time the 1 s
+ * snapshot + sock_diag runs. This collector tests the fix: capture pid +
+ * direction + the full tuple at flow BIRTH, in the owning process's context,
+ * before it can die.
+ *
+ * Why kretprobe:tcp_v{4,6}_connect and NOT the inet_sock_set_state tracepoint:
+ * in tcp_v4_connect the kernel sets state=SYN_SENT BEFORE inet_hash_connect()
+ * assigns the ephemeral source port, so the tracepoint reports local_port=0.
+ * At the connect kRETprobe the port is assigned AND we're still synchronously
+ * in the caller's process context, so `pid` is the real owner. We stash the
+ * `struct sock *` from the kprobe entry (arg0) keyed by tid and read it back.
+ *
+ * Emits the SAME NDJSON flow schema as the conntrack collector (no bytes —
+ * birth has none; the hybrid gets those from conntrack), so the one scorer
+ * grades both. `nsecs` is CLOCK_MONOTONIC, comparable to the generator's clock.
+ *
+ * Throwaway measurement instrument. Reads struct sock via BTF/CO-RE. Run as
+ * root; the orchestrator is skip-safe when bpftrace is absent.
+ */
+
+kprobe:tcp_v4_connect { @sk4[tid] = arg0; }
+
+kretprobe:tcp_v4_connect /@sk4[tid]/
+{
+    $sk = (struct sock *)@sk4[tid];
+    $dport = (uint16)((($sk->__sk_common.skc_dport >> 8) & 0xff) |
+                      (($sk->__sk_common.skc_dport << 8) & 0xff00));
+    printf("{\"ts_ms\":%llu,\"proto\":\"tcp\",\"local_ip\":\"%s\",\"local_port\":%d,\"remote_ip\":\"%s\",\"remote_port\":%d,\"rx\":0,\"tx\":0,\"dir\":\"outbound\",\"reason\":0,\"pid\":%d}\n",
+        nsecs / 1000000,
+        ntop($sk->__sk_common.skc_rcv_saddr), $sk->__sk_common.skc_num,
+        ntop($sk->__sk_common.skc_daddr), $dport,
+        pid);
+    delete(@sk4[tid]);
+}
+
+kprobe:tcp_v6_connect { @sk6[tid] = arg0; }
+
+kretprobe:tcp_v6_connect /@sk6[tid]/
+{
+    $sk = (struct sock *)@sk6[tid];
+    $dport = (uint16)((($sk->__sk_common.skc_dport >> 8) & 0xff) |
+                      (($sk->__sk_common.skc_dport << 8) & 0xff00));
+    printf("{\"ts_ms\":%llu,\"proto\":\"tcp\",\"local_ip\":\"%s\",\"local_port\":%d,\"remote_ip\":\"%s\",\"remote_port\":%d,\"rx\":0,\"tx\":0,\"dir\":\"outbound\",\"reason\":0,\"pid\":%d}\n",
+        nsecs / 1000000,
+        ntop($sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr8), $sk->__sk_common.skc_num,
+        ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8), $dport,
+        pid);
+    delete(@sk6[tid]);
+}
+
+/* UDP outbound birth: udp_sendmsg(struct sock *sk, ...) runs in the sending
+ * process's context. Our generator uses connected UDP (connect()+send), so the
+ * sock carries skc_daddr/skc_dport; gate on a non-zero remote port to skip
+ * unconnected sends whose dest lives in the msghdr, not the sock. We emit per
+ * send — the scorer dedups by flow key (first-seen), so no unbounded in-kernel
+ * map. */
+kprobe:udp_sendmsg
+/((struct sock *)arg0)->__sk_common.skc_dport != 0/
+{
+    $sk = (struct sock *)arg0;
+    $dport = (uint16)((($sk->__sk_common.skc_dport >> 8) & 0xff) |
+                      (($sk->__sk_common.skc_dport << 8) & 0xff00));
+    printf("{\"ts_ms\":%llu,\"proto\":\"udp\",\"local_ip\":\"%s\",\"local_port\":%d,\"remote_ip\":\"%s\",\"remote_port\":%d,\"rx\":0,\"tx\":0,\"dir\":\"outbound\",\"reason\":0,\"pid\":%d}\n",
+        nsecs / 1000000,
+        ntop($sk->__sk_common.skc_rcv_saddr), $sk->__sk_common.skc_num,
+        ntop($sk->__sk_common.skc_daddr), $dport,
+        pid);
+}
+
+/* INBOUND birth: inet_csk_accept returns the freshly-accepted child sock in the
+ * accepting process's context (pid correct, accept is synchronous). local = the
+ * listener (skc_rcv_saddr/skc_num), remote = the client. Exercised only when the
+ * host is the SERVER (role-reversed scenario); harmless otherwise. */
+kretprobe:inet_csk_accept
+/retval != 0/
+{
+    $sk = (struct sock *)retval;
+    $dport = (uint16)((($sk->__sk_common.skc_dport >> 8) & 0xff) |
+                      (($sk->__sk_common.skc_dport << 8) & 0xff00));
+    printf("{\"ts_ms\":%llu,\"proto\":\"tcp\",\"local_ip\":\"%s\",\"local_port\":%d,\"remote_ip\":\"%s\",\"remote_port\":%d,\"rx\":0,\"tx\":0,\"dir\":\"inbound\",\"reason\":0,\"pid\":%d}\n",
+        nsecs / 1000000,
+        ntop($sk->__sk_common.skc_rcv_saddr), $sk->__sk_common.skc_num,
+        ntop($sk->__sk_common.skc_daddr), $dport,
+        pid);
+}

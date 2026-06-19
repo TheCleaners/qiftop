@@ -21,7 +21,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstddef>
 #include <cstring>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -285,7 +284,7 @@ int main(int argc, char **argv)
                     }
                     std::string lip; uint16_t lport = 0;
                     localEndpoint(fd, lip, lport);
-                    std::vector<char> chunk(std::min(bytes, 16 * 1024), 'x');
+                    std::vector<char> chunk(std::min<uint64_t>(bytes, std::size_t{16} * 1024), 'x');
                     uint64_t sent = 0;
                     while (sent < static_cast<uint64_t>(bytes)) {
                         const size_t want = std::min(chunk.size(), static_cast<size_t>(bytes) - sent);
