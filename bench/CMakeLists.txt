@@ -28,6 +28,11 @@ qiftop_add_benchmark(bench_filter
     bench_filter.cpp
     ${CMAKE_SOURCE_DIR}/src/util/ConnectionFilter.cpp)
 
+qiftop_add_benchmark(bench_dbus_types
+    bench_dbus_types.cpp
+    ${CMAKE_SOURCE_DIR}/src/dbus/Types.cpp)
+target_link_libraries(bench_dbus_types PRIVATE Qt6::DBus)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_benchmark(bench_flow_topk
         bench_flow_topk.cpp)

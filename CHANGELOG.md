@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`bench_dbus_types`** (developer tooling) — a new opt-in benchmark for the
+  wire conversion layer (`toDtos` / `fromDtos`) the agent and every client run
+  per snapshot: ~1 ms at the 4096-flow cap, ~30 ms at 100k. It's our code (22
+  fields incl. the nested container chain), so it's the baseline to watch
+  before the v0.4 async `AttributionChanged` patch signal starts re-converting
+  refined rows. See `docs/HACKING.md` §5.8.
 - **GUI colour themes** — the Qt Widgets client gained named colour themes,
   the desktop analogue of nqiftop's `z`-cycled themes. A new `GuiTheme` model
   (`src/ui/GuiTheme.h`) ships **System** (the default — leaves the native Qt
