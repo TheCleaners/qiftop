@@ -104,6 +104,57 @@ option(QIFTOP_ENABLE_NETNS_SCAN
     "Enable cross-network-namespace socket scanning (setns + sock_diag; Linux only, needs CAP_SYS_ADMIN)"
     ${QIFTOP_ATTRIBUTION_DEFAULT})
 
+# --- eBPF socket-birth attribution toolchain (Linux only) -------------------
+# The birth+conntrack attribution hybrid captures a flow's owning PID at
+# connect()/accept() time via a CO-RE eBPF program, recovering short-lived
+# processes that the periodic conntrack+sock_diag path misses. This is the
+# OPTIONAL, augmenting path — the agent always runs conntrack-only without it.
+#
+# Toolchain (decided): runtime needs ONLY libbpf (>= 1.0, for the skeleton +
+# ring-buffer API); clang (bpf target) + bpftool are BUILD-TIME ONLY (compile
+# the .bpf.c, generate the skeleton + vmlinux.h). libelf/zlib come transitively
+# via libbpf and are never declared directly. We deliberately do NOT use BCC
+# (it embeds LLVM at runtime — wrong footprint for an agent).
+#
+# QIFTOP_ENABLE_BPF defaults ON (per design), but this block NEVER fails
+# configure: if any toolchain piece is missing it disables the feature with a
+# STATUS message, and the agent builds + runs conntrack-only. QIFTOP_HAVE_BPF
+# is the resolved truth the rest of the build keys off.
+option(QIFTOP_ENABLE_BPF
+    "Build the eBPF socket-birth attribution path (Linux; needs clang+bpftool+libbpf). Falls back to conntrack-only when the toolchain or kernel BTF is unavailable."
+    ON)
+
+set(QIFTOP_HAVE_BPF OFF)
+if(QIFTOP_ENABLE_BPF AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(PkgConfig)
+    find_program(QIFTOP_CLANG_BPF NAMES clang)
+    find_program(QIFTOP_BPFTOOL   NAMES bpftool /usr/sbin/bpftool)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIBBPF libbpf>=1.0)        # not REQUIRED — optional
+    endif()
+    # A clang that can actually target BPF (some minimal clangs can't).
+    set(_bpf_clang_ok OFF)
+    if(QIFTOP_CLANG_BPF)
+        execute_process(COMMAND ${QIFTOP_CLANG_BPF} -print-targets
+            OUTPUT_VARIABLE _clang_targets ERROR_QUIET)
+        if(_clang_targets MATCHES "bpf")
+            set(_bpf_clang_ok ON)
+        endif()
+    endif()
+
+    if(_bpf_clang_ok AND QIFTOP_BPFTOOL AND LIBBPF_FOUND)
+        set(QIFTOP_HAVE_BPF ON)
+        message(STATUS "qiftop: eBPF birth attribution ENABLED "
+                       "(clang=${QIFTOP_CLANG_BPF}, bpftool=${QIFTOP_BPFTOOL}, libbpf=${LIBBPF_VERSION})")
+    else()
+        message(STATUS "qiftop: eBPF birth attribution DISABLED — missing toolchain "
+                       "(clang-bpf=${_bpf_clang_ok}, bpftool=${QIFTOP_BPFTOOL}, "
+                       "libbpf=${LIBBPF_FOUND}); agent will run conntrack-only.")
+    endif()
+elseif(QIFTOP_ENABLE_BPF)
+    message(STATUS "qiftop: eBPF birth attribution requested but platform is not Linux — disabled.")
+endif()
+
 # Expose the toggles to all targets as compile definitions, so the
 # resolver factory and concrete impls can #ifdef on them. Non-Linux
 # builds get NONE of these defines regardless of the user's setting.
@@ -119,6 +170,9 @@ function(qiftop_apply_attribution_defs target)
     endif()
     if(QIFTOP_ENABLE_NETNS_SCAN)
         target_compile_definitions(${target} PRIVATE QIFTOP_ENABLE_NETNS_SCAN)
+    endif()
+    if(QIFTOP_HAVE_BPF)
+        target_compile_definitions(${target} PRIVATE QIFTOP_HAVE_BPF)
     endif()
 endfunction()
 
@@ -651,7 +705,12 @@ set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_DEPENDS    "libc6, libnl-3-200, libnl-rout
 # conntrack so IPv6 flows actually show up. Soft-recommend so the package
 # still installs on hosts that don't have it (the unit fails the
 # ExecStartPre silently in that case and you just don't get v6 visibility).
-set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables")
+#
+# libbpf is the runtime for the OPTIONAL eBPF socket-birth attribution path
+# (better attribution of short-lived processes). It is a Recommends, NOT a
+# Depends: the agent runs fine conntrack-only when libbpf or kernel BTF is
+# absent — so we never make the default install fail for want of it.
+set(CPACK_DEBIAN_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables, libbpf1")
 set(CPACK_DEBIAN_QIFTOP-AGENT_DESCRIPTION
 "Privileged DBus agent for qiftop.
 qiftop-agent is a small system-bus daemon that publishes per-interface
@@ -743,7 +802,7 @@ set(CPACK_RPM_QIFTOP_PACKAGE_RECOMMENDS "qiftop-agent = ${CPACK_PACKAGE_VERSION}
 set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_NAME    "qiftop-agent")
 set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_SUMMARY "Privileged DBus agent for qiftop")
 set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_REQUIRES   "dbus, shadow-utils")
-set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables")
+set(CPACK_RPM_QIFTOP-AGENT_PACKAGE_RECOMMENDS "nftables, libbpf")
 
 # libqiftop runtime + dev subpackages. RPM auto-req resolves the SONAME
 # (qiftop-libs Provides libqiftop.so.0()(64bit); qiftop/qiftop-agent

@@ -144,6 +144,7 @@ The Connections view and libqiftop consumers share `src/util/ConnectionFilter.{h
 - libnl-3 + libnl-route-3 (`libnl-3-dev`, `libnl-route-3-dev` on Debian/Ubuntu), discovered via `pkg-config`
 - libnetfilter_conntrack (`libnetfilter-conntrack-dev`) for per-connection accounting
 - `nftables` (Recommends) — agent loads an inert `inet qiftop` shim to ensure v4+v6 conntrack tracking
+- **eBPF socket-birth attribution (optional, `QIFTOP_ENABLE_BPF=ON` by default)** — the birth+conntrack attribution hybrid. Runtime: **libbpf ≥ 1.0** only (`libbpf1`, a **Recommends** — NOT a hard dep; the agent runs conntrack-only without it). Build-time only: **clang** (bpf target) + **bpftool** (skeleton + `vmlinux.h` generation). libelf/zlib come transitively via libbpf — never declared. The CMake detection is **skip-safe**: any missing piece sets `QIFTOP_HAVE_BPF=OFF` with a STATUS message and the build proceeds conntrack-only. We deliberately do **not** use BCC (runtime LLVM = wrong footprint).
 - Linux kernel headers (`<linux/if.h>`, `<linux/rtnetlink.h>`, sock_diag/netns headers) for the Linux backend
 - `rpm-build` / distro RPM tooling only when producing `.rpm` packages
 
