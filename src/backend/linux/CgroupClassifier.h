@@ -38,6 +38,10 @@ public:
 
     [[nodiscard]] QStringList capabilities() const override;
 
+    // Live re-tune of the per-PID container cache TTL. Thread-safe: writes
+    // m_cacheTtlMs under the same m_mu the lookup path reads it under.
+    void setTuning(const ResolverTuning &tuning) override;
+
     [[nodiscard]] qint32 resolvePid(const Connection &) override { return 0; }
 
     [[nodiscard]] std::optional<ProcessInfo>

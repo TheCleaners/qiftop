@@ -16,6 +16,7 @@ namespace qiftop::agent {
 
 class InterfacesService;
 class ConnectionsService;
+class AttributionHintManager;
 
 // RAII wrapper around the agent's DBus surface — service objects,
 // well-known-name acquisition, and IdleManager wiring. Extracted from
@@ -37,6 +38,8 @@ public:
                 ConnectionMonitor                             *connMonitor,
                 IdleManager::Config                            idleCfg,
                 std::unique_ptr<backend::ProcessResolver>      resolver,
+                backend::AttributionEagerness                  attrMode =
+                    backend::AttributionEagerness::Balanced,
                 QObject                                       *parent = nullptr);
     ~Application() override;
 
@@ -59,6 +62,7 @@ public:
     [[nodiscard]] InterfacesService  *interfacesService()  const { return m_ifaceSvc; }
     [[nodiscard]] ConnectionsService *connectionsService() const { return m_connSvc; }
     [[nodiscard]] IdleManager        *idleManager()        const { return m_idle; }
+    [[nodiscard]] AttributionHintManager *attributionHintManager() const { return m_attrHints; }
     [[nodiscard]] backend::ProcessResolver *processResolver() const { return m_resolver.get(); }
 
 private:
@@ -66,12 +70,14 @@ private:
     NetworkMonitor      *m_netMonitor  = nullptr;
     ConnectionMonitor   *m_connMonitor = nullptr;
     IdleManager::Config  m_idleCfg;
+    backend::AttributionEagerness m_attrMode = backend::AttributionEagerness::Balanced;
     ProcessDetailsPolicy m_detailsPolicy;   // default: Owner
     std::unique_ptr<backend::ProcessResolver> m_resolver;
 
     InterfacesService   *m_ifaceSvc = nullptr;
     ConnectionsService  *m_connSvc  = nullptr;
     IdleManager         *m_idle     = nullptr;
+    AttributionHintManager *m_attrHints = nullptr;
 
     bool                 m_nameOwned = false;
     QString              m_lastError;

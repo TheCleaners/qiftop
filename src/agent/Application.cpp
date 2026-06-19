@@ -4,6 +4,7 @@
 
 #include "ConnectionsService.h"
 #include "InterfacesService.h"
+#include "AttributionHintManager.h"
 #include "backend/ConnectionMonitor.h"
 #include "backend/NetworkMonitor.h"
 #include "util/Logging.h"
@@ -21,12 +22,14 @@ Application::Application(QDBusConnection                                bus,
                          ConnectionMonitor                             *connMonitor,
                          IdleManager::Config                            idleCfg,
                          std::unique_ptr<backend::ProcessResolver>      resolver,
+                         backend::AttributionEagerness                  attrMode,
                          QObject                                       *parent)
     : QObject(parent)
     , m_bus(std::move(bus))
     , m_netMonitor(netMonitor)
     , m_connMonitor(connMonitor)
     , m_idleCfg(idleCfg)
+    , m_attrMode(attrMode)
     , m_resolver(std::move(resolver))
 {}
 
@@ -40,6 +43,7 @@ Application::~Application()
         m_bus.unregisterObject(QString::fromLatin1(kIfacesPath));
     if (m_connSvc)
         m_bus.unregisterObject(QString::fromLatin1(kConnsPath));
+    delete m_attrHints;
     delete m_idle;
     delete m_connSvc;
     delete m_ifaceSvc;
@@ -98,6 +102,16 @@ bool Application::start()
     m_idle->attachBus(m_bus); // drop hints immediately on peer disconnect
     m_ifaceSvc->setIdleManager(m_idle);
     m_connSvc->setIdleManager(m_idle);
+
+    // Runtime attribution-eagerness override (capability:
+    // attribution-eagerness-hints). Starts at the config default; clients
+    // can raise/lower it at runtime via SetDesiredAttributionEagerness. The
+    // hint TTL matches the cadence hint TTL so a client can reuse one
+    // heartbeat for both. On every effective-mode change the ConnectionsService
+    // re-tunes the live resolver and mirrors AttributionEagernessChanged.
+    m_attrHints = new AttributionHintManager(m_attrMode, m_idleCfg.hintTtlMs);
+    m_attrHints->attachBus(m_bus);
+    m_connSvc->setAttributionHintManager(m_attrHints);
 
     if (m_netMonitor)  m_netMonitor->start();
     if (m_connMonitor) m_connMonitor->start();

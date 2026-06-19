@@ -141,7 +141,7 @@ public slots:
         m_anchorInode = st.st_ino;
 
         m_timer = new QTimer(this);
-        m_timer->setInterval(m_owner->m_refreshIntervalMs);
+        m_timer->setInterval(m_owner->m_refreshIntervalMs.load());
         connect(m_timer, &QTimer::timeout, this, &NetnsScannerWorker::tick);
         QTimer::singleShot(0, this, &NetnsScannerWorker::tick);  // warm up
         m_timer->start();
@@ -158,6 +158,14 @@ private slots:
     {
         if (m_stop && m_stop->load()) return;
         if (m_anchorFd < 0)            return;
+
+        // Pick up any runtime re-tune (setTuning publishes to the atomic on
+        // the agent main thread; we own the QTimer so we re-arm it here).
+        if (m_timer) {
+            const int want = m_owner->m_refreshIntervalMs.load();
+            if (m_timer->interval() != want)
+                m_timer->setInterval(want);
+        }
 
         // 1) Walk /proc once, grouping pids by netns inode. The first pid
         //    in each bucket remains the representative used for setns().
@@ -406,6 +414,14 @@ private:
 NetnsScanner::NetnsScanner(const ResolverTuning &tuning)
     : m_refreshIntervalMs(safeRefreshIntervalMs(tuning.netnsRefreshMs))
 {
+}
+
+void NetnsScanner::setTuning(const ResolverTuning &tuning)
+{
+    // Just publish the new cadence; the worker re-reads it at the top of
+    // its next tick and re-arms its own QTimer (we must not touch the
+    // worker-thread QTimer from here). Clamped to the netns floor.
+    m_refreshIntervalMs.store(safeRefreshIntervalMs(tuning.netnsRefreshMs));
 }
 
 NetnsScanner::~NetnsScanner()

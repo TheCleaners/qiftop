@@ -130,7 +130,7 @@ private slots:
             QString::fromLatin1(kIfacesIface),
             QStringLiteral("Version"));
         QVERIFY2(vReply.isValid(), qPrintable(vReply.error().message()));
-        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.6"));
+        QCOMPARE(vReply.value().variant().toString(), QStringLiteral("0.7"));
 
         QDBusReply<QDBusVariant> cReply = props.call(
             QStringLiteral("Get"),
@@ -147,7 +147,8 @@ private slots:
                                 "direction-on-wire", "snapshot-timestamp",
                                 "ifindex", "oper-state", "link-errors",
                                 "tcp-state", "attribution-reason",
-                                "on-demand-process-details"}) {
+                                "on-demand-process-details",
+                                "attribution-eagerness-hints"}) {
             QVERIFY2(caps.contains(QString::fromLatin1(tok)),
                      qPrintable(QStringLiteral("missing capability '%1'; got: [%2]")
                                     .arg(QString::fromLatin1(tok),
@@ -292,6 +293,46 @@ private slots:
         QCOMPARE(pid, quint32(0));
         QVERIFY(comm.isEmpty());
         QVERIFY(cmdline.isEmpty());
+    }
+
+    void attributionEagernessHintRoundTrips()
+    {
+        // Drive the v0.7 runtime attribution-eagerness override over the bus:
+        // SetDesiredAttributionEagerness("eager") must return the new effective
+        // mode, and the AttributionEagerness property must reflect it.
+        auto bus = QDBusConnection::sessionBus();
+        const auto connsPath  = QStringLiteral("/org/qiftop/NetworkAgent1/Connections");
+        const auto connsIface = QStringLiteral("org.qiftop.NetworkAgent1.Connections");
+
+        QDBusInterface conns(QString::fromLatin1(kBusName), connsPath, connsIface, bus);
+        QVERIFY(conns.isValid());
+
+        QDBusReply<QString> setReply = conns.call(
+            QStringLiteral("SetDesiredAttributionEagerness"), QStringLiteral("eager"));
+        QVERIFY2(setReply.isValid(), qPrintable(setReply.error().message()));
+        QCOMPARE(setReply.value(), QStringLiteral("eager"));
+
+        // Property mirrors the effective mode.
+        QDBusInterface props(QString::fromLatin1(kBusName), connsPath,
+                             QStringLiteral("org.freedesktop.DBus.Properties"), bus);
+        QVERIFY(props.isValid());
+        QDBusReply<QDBusVariant> pReply = props.call(
+            QStringLiteral("Get"), connsIface, QStringLiteral("AttributionEagerness"));
+        QVERIFY2(pReply.isValid(), qPrintable(pReply.error().message()));
+        QCOMPARE(pReply.value().variant().toString(), QStringLiteral("eager"));
+
+        // Clearing this client's hint reverts to the agent's config default
+        // (balanced out of the box).
+        QDBusReply<QString> clearReply = conns.call(
+            QStringLiteral("SetDesiredAttributionEagerness"), QStringLiteral("default"));
+        QVERIFY2(clearReply.isValid(), qPrintable(clearReply.error().message()));
+        QCOMPARE(clearReply.value(), QStringLiteral("balanced"));
+
+        // An unrecognised mode is ignored and reports the current effective.
+        QDBusReply<QString> junkReply = conns.call(
+            QStringLiteral("SetDesiredAttributionEagerness"), QStringLiteral("turbo"));
+        QVERIFY2(junkReply.isValid(), qPrintable(junkReply.error().message()));
+        QCOMPARE(junkReply.value(), QStringLiteral("balanced"));
     }
 };
 

@@ -69,6 +69,7 @@ int main(int argc, char *argv[])
     qRegisterMetaType<QList<InterfaceStats>>();
     qRegisterMetaType<Connection>();
     qRegisterMetaType<QList<Connection>>();
+    qRegisterMetaType<qiftop::backend::AttributionEagerness>();
 
     QDBusConnection bus = parser.isSet(sessionOpt)
         ? QDBusConnection::sessionBus()
@@ -93,7 +94,8 @@ int main(int argc, char *argv[])
         qiftop::agent::loadProcessDetailsPolicy(configPath);
     auto resolver = qiftop::backend::createProcessResolver(attrCfg);
     qiftop::agent::Application application(bus, &netMonitor, &connMonitor,
-                                           idleCfg, std::move(resolver));
+                                           idleCfg, std::move(resolver),
+                                           attrCfg.eagerness);
     application.setProcessDetailsPolicy(detailsPolicy);
     if (!application.start()) {
         qCritical().noquote() << "agent:" << application.errorString();

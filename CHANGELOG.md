@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Runtime attribution-eagerness override (DBus).** Clients can now dial the
+  agent's attribution eagerness up or down *at runtime* — no more editing
+  `/etc/qiftop/agent.conf` and restarting just to go from `balanced` to
+  `eager` for a debugging session. New on `org.qiftop.NetworkAgent1.Connections`:
+  the `SetDesiredAttributionEagerness(s) → s` method (input `off`/`balanced`/
+  `eager`/`default`, returns the resulting effective mode), the
+  `AttributionEagernessChanged(s)` signal, and the read-only
+  `AttributionEagerness: s` property. Requests are TTL'd, per-client hints
+  (modelled on the cadence-hint `IdleManager`): most-eager-wins across all live
+  clients, dropped on disconnect via `NameOwnerChanged`, 64-sender cap that
+  rejects when full. Config `eagerness=off` stays an uncancellable kill switch —
+  a runtime hint can't re-enable attribution the config turned off. On every
+  effective-mode change the live resolver is re-tuned in place (no teardown).
+  Additive over `NetworkAgent1` (no `NetworkAgent2`): bumps the agent `Version`
+  to **0.7** and advertises the `attribution-eagerness-hints` capability token.
+  This PR ships the agent surface + the `DBusConnectionMonitor` client plumbing;
+  GUI/TUI visual controls land separately.
+
 ## [0.3.2] - 2026-06-18
 
 ### Added

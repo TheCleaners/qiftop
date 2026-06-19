@@ -198,7 +198,7 @@ Well-known name: `org.qiftop.NetworkAgent1` (system bus in production;
 | Object path                                  | Interface                                  | Methods                                                   | Signals                                                | Properties                  |
 |----------------------------------------------|--------------------------------------------|-----------------------------------------------------------|--------------------------------------------------------|-----------------------------|
 | `/org/qiftop/NetworkAgent1/Interfaces`       | `org.qiftop.NetworkAgent1.Interfaces`      | `GetInterfaces()`, `SetDesiredIntervalMs(u)`              | `StatsChanged(t, a(...))`, `CadenceChanged(u)`         | `Version: s`, `Capabilities: as` |
-| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uusssst)`, `SetDesiredIntervalMs(u)` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged` | |
+| `/org/qiftop/NetworkAgent1/Connections`      | `org.qiftop.NetworkAgent1.Connections`     | `GetConnections()`, `GetProcessDetails(u) → (uusssst)`, `SetDesiredIntervalMs(u)`, `SetDesiredAttributionEagerness(s) → s` | `ConnectionsChanged(t, a(...))`, `PermissionDenied`, `AccountingChanged`, `AttributionEagernessChanged(s)` | `AttributionEagerness: s` |
 
 Both data signals carry a leading `quint64 monotonicMs` (a
 `QElapsedTimer`-based, agent-process-local monotonic millisecond
@@ -301,7 +301,7 @@ Per-field notes:
 
 ### Contract version & capabilities
 
-`Version` is a free-form string (currently `"0.6"`) bumped only for
+`Version` is a free-form string (currently `"0.7"`) bumped only for
 *additive* changes to the agent surface that clients may care about.
 **Breaking** changes (DTO signature, method removal/rename) still require
 a fresh `org.qiftop.NetworkAgent2` interface per §8.
@@ -319,7 +319,13 @@ a fresh `org.qiftop.NetworkAgent2` interface per §8.
 > change). The 0.5 → 0.6 bump appended a `reason` byte
 > (`AttributionReason`) to `ConnectionDto` so consumers can tell a
 > forwarded/orphaned flow (no local process by design) from a genuine
-> attribution miss. Since only pre-release alphas existed in those
+> attribution miss. The 0.6 → 0.7 bump added the
+> `Connections.SetDesiredAttributionEagerness(s) → s` method, the
+> `AttributionEagernessChanged(s)` signal, and the read-only
+> `AttributionEagerness: s` property — the runtime attribution-eagerness
+> override (capability `attribution-eagerness-hints`). No DTO change (the
+> method/signal/property carry plain strings), so it's additive over
+> `NetworkAgent1`. Since only pre-release alphas existed in those
 > windows we reshaped in place rather than branching `NetworkAgent2`.
 > Older alpha clients failing to unmarshal fall back cleanly to the
 > in-process backend via the existing probe. Post-v0.1 stable
@@ -353,6 +359,7 @@ older agents. Tokens currently emitted:
 | `container-attribution-wire` | `ConnectionDto` carries `containerRuntime`, `containerId`, `containerName` populated server-side. Implies `container-attribution` resolver capability. |
 | `container-chain-wire` | `ConnectionDto.containerChain` is populated when applicable. Strict superset of `container-attribution-wire`: a flow with no nesting still yields a single-entry chain. Advertised when the resolver provides BOTH `container-attribution` AND `container-chain` (see Application.cpp). Today CgroupClassifier always ships both, but the two flags must stay separable. |
 | `on-demand-process-details` | `Connections.GetProcessDetails(pid u) → (pid u, uid u, comm s, exe s, cmdline s, cwd s, startTimeJiffies t)` RPC is available. Returns an all-zero struct (pid=0) on unknown / disappeared PID, never a DBus error. Cache key for clients is `(pid, startTimeJiffies)` — startTime distinguishes PID reuse within one boot. Advertised unconditionally on Linux; non-Linux backends return empty. |
+| `attribution-eagerness-hints` | `Connections.SetDesiredAttributionEagerness(s) → s` is honoured — clients can raise/lower the agent's attribution eagerness at runtime via TTL'd, most-eager-wins hints, observe the result via the `AttributionEagerness` property + `AttributionEagernessChanged(s)` signal, and clear with `default`/empty. Config `eagerness=off` is an uncancellable kill switch (the runtime hint can't re-enable it). See the "Runtime attribution-eagerness override" section above. |
 
 Add a token here when shipping a new optional behaviour; **never remove
 or rename a token** — pre-existing clients use them as feature flags.
@@ -602,9 +609,67 @@ the default policy and a matching `<allow>` to the privileged stanza.
   summoned. Plain minimize keeps the window "visible" and does NOT
   suspend the heartbeat.
 
----
+### Runtime attribution-eagerness override
 
-## 5. Configuration
+Capability token: `attribution-eagerness-hints`. Added in Version 0.7,
+additive over `NetworkAgent1` (no `NetworkAgent2`). Lets a client raise or
+lower the agent's *attribution* eagerness at runtime without editing
+`/etc/qiftop/agent.conf` and restarting — the runtime sibling of the
+`[attribution] eagerness` config knob (§5). The control lives on
+`/Connections` only (it's the only service that runs the resolver chain):
+
+* **Method** `SetDesiredAttributionEagerness(s mode) → s` — `mode` is one
+  of `off` / `balanced` / `eager` / `default` (case-insensitive; empty ==
+  `default`). A recognised value records a TTL'd hint keyed by the
+  caller's unique bus name; `default`/empty CLEARS this caller's hint; an
+  unrecognised token is ignored (records nothing). Always returns the
+  resulting **effective** mode string — never a DBus error, so scripting
+  clients can treat it as a total function. Only an *accepted* hint counts
+  as `IdleManager` activity (same anti-abuse rule as cadence hints: a peer
+  rejected from the capped hint table can't pin the agent out of idle).
+* **Signal** `AttributionEagernessChanged(s mode)` — fires whenever the
+  effective mode *transitions*, carrying the new effective mode string.
+* **Property** `AttributionEagerness: s` (read-only, `NOTIFY`s the above) —
+  the current effective mode (`off`/`balanced`/`eager`).
+
+Effective mode is computed by `AttributionHintManager` (modelled on
+`IdleManager`) across all live hints:
+
+1. **Config `off` is an uncancellable kill switch** — if the config
+   default is `off`, the effective mode is ALWAYS `off`, no matter what
+   clients hint. (Config `off` builds a `NullResolver` at startup, so
+   there's nothing to re-enable anyway.)
+2. Otherwise, if any live (non-expired) hint exists, the effective mode is
+   the **most eager** of those hints (`eager > balanced > off`). The config
+   default does NOT participate here, so a lone client CAN lower a config
+   `eager` to `balanced`. Most-eager-wins stops a low-priority background
+   client from disabling attribution another active client needs.
+3. Otherwise (no live hints) → the config default.
+
+Hints expire after the cadence hint TTL (`idle.hint_ttl_secs`, default
+10 s); clients re-assert at ~half-TTL. A `NameOwnerChanged` subscription
+drops a peer's hint the instant it disconnects, and a periodic prune timer
+(~half-TTL) makes an expiring hint that *lowers* the effective mode fire
+`AttributionEagernessChanged` without waiting for a fresh inbound call. The
+table caps at 64 senders and REJECTS (never evicts) when full.
+
+On every effective-mode change the agent pushes the matching
+`ResolverTuning` preset into the *live* resolver via
+`ProcessResolver::setTuning()` (`off → offResolverTuning`, `balanced →
+balanced`, `eager → eager`). **Runtime-off vs config-off asymmetry**
+(intentional): a runtime `off` hint just quiesces the existing resolver's
+refresh cadences — it does NOT tear the resolver down and rebuild a
+`NullResolver` (too heavy + racy across the worker threads). Config
+`eagerness=off` is the only path that builds `NullResolver`. So
+runtime-off means "stop refreshing", config-off means "no resolver at
+all". `setTuning` is invoked from the agent main thread while `resolve*()`
+may run on a worker thread; Linux resolvers that guard their cadence
+member with a mutex take the same lock, `NetnsScanner` uses a
+`std::atomic<int>` (its QTimer lives on a worker thread, re-armed in the
+worker's own `tick()`), and every resolver still clamps the new cadence to
+its existing floor so a runtime hint can't create a `/proc` blender.
+
+
 
 `/etc/qiftop/agent.conf` — INI parsed by `QSettings(IniFormat)`, read once
 at startup. See the shipped file (`dist/conf/agent.conf`) for the

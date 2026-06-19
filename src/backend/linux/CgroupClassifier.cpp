@@ -8,16 +8,28 @@
 
 namespace qiftop::backend::linuximpl {
 
+namespace {
+// Resolve a container-cache TTL request against the floor. 0 (or anything
+// non-positive) means "preset default"; positive values are clamped up to
+// the floor so a runtime hint can't turn this into a /proc/<pid>/cgroup
+// blender. Shared by the ctor and the live setTuning() path.
+[[nodiscard]] int safeContainerTtlMs(int raw, int defaultMs, int minMs) noexcept
+{
+    if (raw <= 0) return defaultMs;
+    return raw >= minMs ? raw : minMs;
+}
+} // namespace
+
 CgroupClassifier::CgroupClassifier(const ResolverTuning &tuning)
 {
-    if (tuning.containerCacheMs <= 0) {
-        m_cacheTtlMs = kCacheTtlMs;
-    } else {
-        m_cacheTtlMs = tuning.containerCacheMs >= kMinCacheTtlMs
-            ? tuning.containerCacheMs
-            : kMinCacheTtlMs;
-    }
+    m_cacheTtlMs = safeContainerTtlMs(tuning.containerCacheMs, kCacheTtlMs, kMinCacheTtlMs);
     m_clock.start();
+}
+
+void CgroupClassifier::setTuning(const ResolverTuning &tuning)
+{
+    std::scoped_lock lock(m_mu);
+    m_cacheTtlMs = safeContainerTtlMs(tuning.containerCacheMs, kCacheTtlMs, kMinCacheTtlMs);
 }
 
 bool CgroupClassifier::initialize()

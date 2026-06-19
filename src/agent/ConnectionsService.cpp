@@ -10,10 +10,12 @@
 #include <vector>
 
 #include "IdleManager.h"
+#include "AttributionHintManager.h"
 #include "backend/Attribution.h"
 #include "backend/ConnectionMonitor.h"
 #include "backend/PlatformInfo.h"
 #include "util/ConnectionHeuristics.h"
+#include "util/Logging.h"
 
 #ifdef BACKEND_LINUX
 #include "backend/linux/ProcDetails.h"
@@ -96,6 +98,67 @@ void ConnectionsService::SetDesiredIntervalMs(uint intervalMs)
     // hints as activity (see commit message for rationale).
     if (m_idle->setClientHint(sender, static_cast<int>(intervalMs)))
         m_idle->noteActivity();
+}
+
+QString ConnectionsService::attributionEagerness() const
+{
+    return m_attrHints ? m_attrHints->effectiveModeString()
+                       : backend::eagernessToString(backend::AttributionEagerness::Balanced);
+}
+
+void ConnectionsService::setAttributionHintManager(AttributionHintManager *mgr)
+{
+    m_attrHints = mgr;
+    if (m_attrHints) {
+        connect(m_attrHints, &AttributionHintManager::effectiveModeChanged,
+                this,        &ConnectionsService::onEffectiveEagernessChanged);
+    }
+}
+
+QString ConnectionsService::SetDesiredAttributionEagerness(const QString &mode)
+{
+    if (!m_attrHints)
+        return attributionEagerness();   // no manager wired (bare unit test)
+
+    const QString sender = calledFromDBus() ? message().service() : QString();
+    const QString trimmed = mode.trimmed();
+
+    // `default`/empty → clear this client's hint.
+    bool accepted = false;
+    if (trimmed.isEmpty() || trimmed.compare(QLatin1String("default"),
+                                             Qt::CaseInsensitive) == 0) {
+        accepted = m_attrHints->clearHint(sender);
+    } else if (const auto parsed = backend::eagernessFromString(trimmed)) {
+        accepted = m_attrHints->setHint(sender, *parsed);
+    } else {
+        // Unrecognised token: ignore it (record nothing), just report the
+        // current effective mode back. No sendErrorReply — keeping the call
+        // total (always returns a string) is friendlier to scripting clients.
+        qCInfo(lcVerbose).noquote()
+            << "SetDesiredAttributionEagerness: ignoring unrecognised mode"
+            << mode << "from" << sender;
+    }
+
+    // Anti-abuse, mirroring the cadence hints: only an ACCEPTED hint counts
+    // as activity, so a peer rejected from the (capped) hint table can't pin
+    // the agent out of idle by hammering this method.
+    if (accepted && m_idle)
+        m_idle->noteActivity();
+
+    return m_attrHints->effectiveModeString();
+}
+
+void ConnectionsService::onEffectiveEagernessChanged(backend::AttributionEagerness mode)
+{
+    // Re-tune the live resolver to the new effective cadence. We never tear
+    // down / rebuild the resolver at runtime (too heavy + racy across the
+    // worker threads): a runtime `off` hint just quiesces refresh via the
+    // off-preset cadences, whereas a config `eagerness=off` builds a
+    // NullResolver at startup. That asymmetry is intentional and documented
+    // (AGENTS.md §4): runtime-off is "stop refreshing", not "tear down".
+    if (m_resolver)
+        m_resolver->setTuning(backend::resolverTuningFor(mode));
+    emit AttributionEagernessChanged(backend::eagernessToString(mode));
 }
 
 dbus::ProcessDetailsDto ConnectionsService::GetProcessDetails(uint pid)

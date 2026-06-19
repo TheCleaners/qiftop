@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QMetaType>
 #include <QString>
 #include <QStringList>
 
@@ -81,6 +82,35 @@ resolverTuningFor(AttributionEagerness eagerness,
         tuning.netnsRefreshMs = netnsRefreshOverrideMs;
     }
     return tuning;
+}
+
+// Stable lowercase wire spelling of an eagerness mode, shared by the agent
+// DBus surface (SetDesiredAttributionEagerness / the AttributionEagerness
+// property) and the unit tests. Keep these tokens append-only — clients
+// branch on the exact strings.
+[[nodiscard]] inline QString eagernessToString(AttributionEagerness mode)
+{
+    switch (mode) {
+    case AttributionEagerness::Off:      return QStringLiteral("off");
+    case AttributionEagerness::Balanced: return QStringLiteral("balanced");
+    case AttributionEagerness::Eager:    return QStringLiteral("eager");
+    }
+    return QStringLiteral("balanced");
+}
+
+// Parse a runtime eagerness token (case-insensitive, surrounding
+// whitespace ignored). Recognises `off`/`balanced`/`eager`. Returns
+// nullopt for everything else, INCLUDING `default` and the empty string —
+// the caller decides what "no concrete mode" means (clear the hint for
+// default/empty; ignore unrecognised garbage).
+[[nodiscard]] inline std::optional<AttributionEagerness>
+eagernessFromString(const QString &s)
+{
+    const QString t = s.trimmed().toLower();
+    if (t == QLatin1String("off"))      return AttributionEagerness::Off;
+    if (t == QLatin1String("balanced")) return AttributionEagerness::Balanced;
+    if (t == QLatin1String("eager"))    return AttributionEagerness::Eager;
+    return std::nullopt;
 }
 
 // Configuration knobs threaded through from the agent's runtime config
@@ -170,9 +200,24 @@ public:
     // semantics" — but is logged.
     virtual bool initialize() = 0;
 
-    // Runtime-detected capability tokens. Subset of the compile-time
+    // Runtime detected capability tokens. Subset of the compile-time
     // feature set, intersected with whatever the runtime probe found.
     [[nodiscard]] virtual QStringList capabilities() const = 0;
+
+    // Runtime re-tune hook. Called when the agent's effective attribution
+    // eagerness changes at runtime (a client sent
+    // SetDesiredAttributionEagerness over DBus, or an existing hint
+    // expired). Default no-op: resolvers with no tunable refresh cadence
+    // (NullResolver, BSD socket resolver) simply ignore it. Concrete Linux
+    // resolvers update their refresh-cadence member(s) live and clamp to
+    // their existing floors; CompositeResolver fans out to its children.
+    //
+    // THREADING: invoked from the agent main thread, while resolve*() may be
+    // running on a worker thread. Implementations that already guard their
+    // cadence members with a mutex MUST take the same lock here; otherwise a
+    // single relaxed int write is acceptable (a torn read of an int cadence
+    // is benign — worst case one stale refresh interval). See AGENTS.md §4.
+    virtual void setTuning(const ResolverTuning &) {}
 
     // Cheaply look up the PID owning the local end of `flow`. Returns 0
     // when the resolver cannot attribute (flow originates from a netns it
@@ -228,3 +273,8 @@ public:
 };
 
 } // namespace qiftop::backend
+
+// Lets AttributionEagerness ride Qt signals/slots and be inspected via
+// QSignalSpy (AttributionHintManager::effectiveModeChanged) and queued
+// connections. Harmless for the Widgets-free libqiftop surface (Qt Core).
+Q_DECLARE_METATYPE(qiftop::backend::AttributionEagerness)
