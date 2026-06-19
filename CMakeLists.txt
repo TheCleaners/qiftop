@@ -858,3 +858,18 @@ if(QIFTOP_BUILD_BENCHMARKS)
     enable_testing()
     add_subdirectory(bench)
 endif()
+
+# --- conntrack-vs-BPF/pcap capture measurement harness (measure-first) -------
+# Opt-in, Linux-only, VM-only, live-kernel. Designed to NEVER break a normal
+# build: the subdirectory is only added when explicitly enabled, and inside it
+# every component whose prerequisites are missing is skipped with a STATUS
+# message instead of failing configure. See bench/integration/bpf-eval/.
+option(QIFTOP_BUILD_BPF_EVAL
+       "Build the conntrack-vs-BPF capture measurement harness (Linux, VM-only)" OFF)
+if(QIFTOP_BUILD_BPF_EVAL)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_subdirectory(bench/integration/bpf-eval)
+    else()
+        message(STATUS "QIFTOP_BUILD_BPF_EVAL: not Linux — skipping capture-eval harness")
+    endif()
+endif()
