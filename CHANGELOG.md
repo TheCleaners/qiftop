@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-19
+
 ### Added
 - **Runtime attribution-eagerness controls in the GUI & TUI.** The agent's
   runtime eagerness override (added earlier in this cycle) now has a front end:
