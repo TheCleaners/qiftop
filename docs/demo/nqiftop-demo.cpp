@@ -122,6 +122,15 @@ int main(int argc, char *argv[])
                             QStringLiteral("dark"), 1000,
                             QStringLiteral("connections"), QStringLiteral("off"));
 
+    // Pretend we're talking to a full-capability agent so the v0.3 Process /
+    // Container columns and the Fields-overlay column toggles un-gate (the
+    // fakes carry process + container attribution).
+    tui.setBackendInfo(true, QStringLiteral("0.6"),
+                       QStringList{
+                           QStringLiteral("process-attribution-wire"),
+                           QStringLiteral("container-attribution-wire"),
+                       });
+
     // Per-interface synthetic counters, grown from the flows that use them.
     struct IfaceCtr { quint64 rx = 0, tx = 0; };
     auto flows = makeFlows();
@@ -174,6 +183,12 @@ int main(int argc, char *argv[])
         {1500, 'k'},                 // browse back up
         {1600, '\n'},                // close the detail overlay
         {1200, 'g'},                 // group by container
+        {1800, 'g'},                 // ungroup (back to flat) so all columns show
+        {1800, 'f'},                 // open the Fields overlay (sort + columns)
+        {1400, 'j'}, {900, 'j'},     // move down the field list
+        {1200, ' '},                 // toggle a column's visibility
+        {1400, ' '},                 // toggle it back on
+        {1400, 'f'},                 // close the Fields overlay
         {2400, 'S'},                 // open Settings
         {1200, 'j'}, {500, 'j'},     // move to "Bandwidth gauge"
         {1200, 'S'},                 // close Settings
@@ -183,7 +198,6 @@ int main(int argc, char *argv[])
         {1500, '\n'},                // inspect an interface (detail overlay)
         {2200, '\n'},                // close
         {1200, '2'},                 // back to Connections
-        {1200, 'g'},                 // ungroup (back to flat)
         {2200, 'z'},                 // back toward dark
         {1600, 'q'},                 // quit
     };

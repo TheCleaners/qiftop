@@ -40,17 +40,24 @@ TUI capture only needs `xterm` + a Unicode monospace TTF (`fonts-dejavu-core`).
 
 ## Regenerating the demo media
 
-The animated GIF shown in the README is **not committed to the repo** (to
-keep it lean) — it is attached as an asset to the **`v0.2-rc1`** GitHub
-Release, and both the README and the release-notes preamble pin that one
-fixed URL. The GIF is **not regenerated per release**: every release
-reuses the `v0.2-rc1` asset unless the UI changes fundamentally enough to
-warrant a fresh capture.
+The animated GIFs shown in the README are **not committed to the repo** (to
+keep it lean) — each one is attached as an asset to the GitHub Release where
+the media was **last refreshed** (the "media release"). The README and the
+release-notes preamble both point at that release's URL. As of writing the
+media release is **`v0.3.2`**.
 
-To refresh it (only on a fundamental UI change): regenerate, re-upload to
-the **same pinned tag**, and the existing URLs resolve to the new GIF
-automatically — no README / workflow edits needed. If you instead pin a
-new tag, update the URL in `README.md` *and* `.github/workflows/release.yml`.
+**Policy — pin to the refresh release, never clobber history.** Older releases
+keep whatever media they shipped with, so a v0.2 release's demo roughly
+reflects the v0.2 UI rather than getting silently rewritten. When the UI
+changes enough to warrant a fresh capture, you upload the new GIFs to the
+**next** release and re-point the README — you do **not** overwrite the assets
+on old tags.
+
+The demo GIF only appears in the notes of **stable** releases; RCs and
+pre-releases (tags with a `-`, e.g. `v0.4.0-rc1`) skip it — see the
+`prerelease` gate in `.github/workflows/release.yml`.
+
+To refresh (on a fundamental UI change):
 
 ```sh
 cmake -B build -DQIFTOP_BUILD_DEMO=ON
@@ -60,19 +67,22 @@ cmake --build build --target qiftop-demo nqiftop-demo -j"$(nproc)"
 bash docs/demo/capture-gif.sh /tmp/demo.gif Adwaita-Dark 26
 gifsicle -O3 --lossy=80 /tmp/demo.gif -o /tmp/demo.gif
 
-# TUI: ncurses tour → /tmp/nqiftop-demo.gif (self-driving; ~34 s)
-bash docs/demo/capture-tui-gif.sh /tmp/nqiftop-demo.gif 34
+# TUI: ncurses tour → /tmp/nqiftop-demo.gif (self-driving; ~40 s)
+bash docs/demo/capture-tui-gif.sh /tmp/nqiftop-demo.gif 40
 
-# overwrite the pinned assets so every release's URL resolves to the update:
-gh release upload v0.2-rc1 /tmp/demo.gif /tmp/nqiftop-demo.gif --clobber
+# Upload to the NEW media release (the version that ships the refreshed UI),
+# NOT --clobber onto an old tag:
+gh release upload v0.3.2 /tmp/demo.gif /tmp/nqiftop-demo.gif
 ```
 
-Both GIFs are pinned to the **`v0.2-rc1`** release and reused across
-releases; `nqiftop-demo.gif` is the terminal front-end capture shown
-second in the README.
+Then update the media tag in **three** places so everything resolves to the
+new assets: the two URLs in `README.md`, and the `MEDIA_TAG` env in
+`.github/workflows/release.yml`. (This file's "media release" line too, while
+you're at it.)
 
-`capture-still.sh` produces a single PNG frame — handy for iterating on
-the look or for a static thumbnail, though the README uses only the GIF.
+`nqiftop-demo.gif` is the terminal front-end capture shown second in the
+README. `capture-still.sh` produces a single PNG frame — handy for iterating
+on the look or for a static thumbnail, though the README uses only the GIFs.
 
 The `qiftop-demo` / `nqiftop-demo` targets are never built by default and
 are not installed — they exist purely for documentation media.
