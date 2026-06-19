@@ -20,10 +20,10 @@ points.
   building your own qiftop-powered tools.
 
 ![qiftop grouping live synthetic traffic by process and touring the
-preferences dialog](https://github.com/TheCleaners/qiftop/releases/download/v0.2-rc1/demo.gif)
+preferences dialog](https://github.com/TheCleaners/qiftop/releases/download/v0.3.2/demo.gif)
 
 ![nqiftop showing connections grouped by container with the row gauge, the
-settings panel and live theme switching](https://github.com/TheCleaners/qiftop/releases/download/v0.2-rc1/nqiftop-demo.gif)
+settings panel and live theme switching](https://github.com/TheCleaners/qiftop/releases/download/v0.3.2/nqiftop-demo.gif)
 
 > Both captures are driven entirely by **synthetic data** (reserved
 > documentation addresses + `example.*` hostnames) — see

@@ -63,11 +63,16 @@ drive() {
     # By Process -> Flat
     xdotool mousemove $VIEW; sleep 0.3; xdotool click 1; sleep 1.0
     xdotool key Home Return; sleep 1.6
-    # Open Preferences (gear) and tour the side-nav (Display, then Colours)
-    xdotool mousemove $PREFS; sleep 0.5; xdotool click 1; sleep 1.8
-    xdotool mousemove 286 88;  sleep 0.5; xdotool click 1; sleep 1.8   # Display
-    xdotool mousemove 284 154; sleep 0.5; xdotool click 1; sleep 2.4   # Colors
-    xdotool mousemove 873 625; sleep 0.5; xdotool click 1; sleep 1.0   # Cancel
+    # Open Preferences (gear), then tour the side-nav by KEYBOARD so we don't
+    # depend on exact row pixels (the list gains/loses pages over time — a
+    # stale Y coordinate is how the Colours page silently stopped being shown).
+    # Click the top row once to focus + select "Monitoring", then arrow down:
+    # Monitoring -> Display (1) -> ... -> Colors (4 downs total).
+    xdotool mousemove $PREFS; sleep 0.5; xdotool click 1; sleep 1.6
+    xdotool mousemove 297 56; sleep 0.4; xdotool click 1; sleep 1.0   # focus list (Monitoring)
+    xdotool key Down; sleep 1.8                                       # Display
+    xdotool key Down Down Down; sleep 2.8                             # -> Colors (theme + swatches)
+    xdotool key Escape; sleep 1.0                                     # close the dialog (robust)
     xdotool mousemove $PARK; sleep 0.8
 }
 drive >/tmp/drive.log 2>&1 &

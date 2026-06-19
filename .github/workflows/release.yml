@@ -327,6 +327,36 @@ jobs:
       - name: List assets
         run: ls -la dist
 
+      # Compose the release-notes preamble. The animated demo GIF is only
+      # embedded for STABLE releases — RCs / pre-releases (tags with a '-')
+      # skip it, since they're not the version users land on. The GIF is NOT
+      # committed to the repo (keeps it lean); it lives as an asset on the
+      # release where the media was last refreshed (MEDIA_TAG below), and
+      # historical releases keep their own period-appropriate media — we never
+      # clobber old tags. Bump MEDIA_TAG when you refresh the demo (see
+      # docs/demo/README.md).
+      - name: Compose release notes preamble
+        id: notes
+        env:
+          MEDIA_TAG: v0.3.2
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+        run: |
+          {
+            if [[ "$REF" != *-* ]]; then
+              echo "![qiftop demo](https://github.com/$REPO/releases/download/$MEDIA_TAG/demo.gif)"
+              echo
+            fi
+            echo "*Animated walkthrough driven by synthetic data (reserved"
+            echo "documentation addresses + \`example.*\` hostnames). Build / usage"
+            echo "docs are in the [README](https://github.com/$REPO/blob/$REF/README.md).*"
+            echo
+            echo "**Packages:** \`.deb\` (Debian/Ubuntu) and \`.rpm\` (Fedora) for \`amd64\`/\`x86_64\`."
+            echo
+            echo "---"
+          } > "$RUNNER_TEMP/relbody.md"
+          echo "body_path=$RUNNER_TEMP/relbody.md" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -335,23 +365,7 @@ jobs:
           draft: false
           # Mark as prerelease automatically for tags like v0.2-rc1, v0.2-beta.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # Custom preamble (animated demo) prepended above the auto-generated
-          # notes. The demo GIF is NOT committed to the repo (keeps it lean)
-          # and is NOT re-generated per release — every release reuses the one
-          # uploaded to the v0.2-rc1 release, unless the UI changes
-          # fundamentally enough to warrant a fresh capture (then upload a new
-          # GIF to a release and bump the pinned tag below). The README pins
-          # the same URL.
-          body: |
-            ![qiftop demo](https://github.com/${{ github.repository }}/releases/download/v0.2-rc1/demo.gif)
-
-            *Animated walkthrough driven by synthetic data (reserved
-            documentation addresses + `example.*` hostnames). Build / usage
-            docs are in the [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md).*
-
-            **Packages:** `.deb` (Debian/Ubuntu) and `.rpm` (Fedora) for `amd64`/`x86_64`.
-
-            ---
+          body_path: ${{ steps.notes.outputs.body_path }}
           # Auto-generated notes diff against the previous tag, appended below
           # the body above. Customizable via .github/release.yml if you want
           # curated categories / excluded labels.
