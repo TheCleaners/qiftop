@@ -10,3 +10,6 @@ build-*/
 *.swp
 *.swo
 .DS_Store
+
+# session resume helper (local, not repo content)
+resume.sh

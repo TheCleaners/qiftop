@@ -834,6 +834,8 @@ is cheap, so the agent's poll cadence — not the pipeline — is the budget.
 | `ConnectionFilter` evaluate (parse once) | ~0.03 ms | ~1 ms |
 | `admitFlowTopK` (top-4096 admission) | ~0.21 ms | ~22 ms |
 | **full pipeline tick** (cap → aggregate → filter) | ~9 ms | **~35 ms** |
+| `toDtos` (Connection → ConnectionDto) | ~1 ms | ~31 ms |
+| `fromDtos` (ConnectionDto → Connection) | ~1 ms | ~33 ms |
 
 Takeaways: the **aggregator dominates** and is the thing to watch when
 raising flow caps; filtering and top-K are nearly free; even at 100k flows
@@ -846,6 +848,15 @@ aggregate 100k uncapped — because the **top-K cap means aggregation only ever
 touches 4096 flows**; the raw count only flows through the cheap cap scan. So
 the cap is exactly what keeps "eager" cadence safe: the poll interval, not the
 pipeline, is the ceiling.
+
+`bench_dbus_types` baselines the wire **conversion** layer (`toDtos`/`fromDtos`)
+that the agent and every client run per snapshot — ~1 ms at the 4096-flow cap,
+~30 ms at 100k. It's our code (22 fields incl. the nested container chain), so
+it's the number to watch before the v0.4 async `AttributionChanged` patch
+signal starts re-converting refined rows. The actual QtDBus
+marshal/demarshal needs a live bus and is an integration-tier concern (a
+`QDBusArgument` can't even be marshalled into standalone in-process — it
+aborts), so it's deliberately out of this pure-microbench set.
 
 ---
 
