@@ -125,10 +125,13 @@ int main(int argc, char *argv[])
     // Pretend we're talking to a full-capability agent so the v0.3 Process /
     // Container columns and the Fields-overlay column toggles un-gate (the
     // fakes carry process + container attribution).
-    tui.setBackendInfo(true, QStringLiteral("0.6"),
+    tui.setBackendInfo(true, QStringLiteral("0.7"),
                        QStringList{
                            QStringLiteral("process-attribution-wire"),
                            QStringLiteral("container-attribution-wire"),
+                           // v0.4: surface the 'e' attribution-eagerness key + footer hint.
+                           QStringLiteral("attribution-eagerness-hints"),
+                           QStringLiteral("attribution-async-refinement"),
                        });
 
     // Per-interface synthetic counters, grown from the flows that use them.

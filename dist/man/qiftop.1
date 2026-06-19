@@ -10,11 +10,13 @@ is a graphical, iftop\-style network monitor with two live views:
 .IP \(bu 3
 .B Interfaces
 \(em per\-interface throughput, totals, link state, addresses and
-error/drop counters.
+error/drop counters, with an optional per\-row bandwidth gauge.
 .IP \(bu 3
 .B Connections
 \(em active flows with rates, totals, direction, reverse DNS, and optional
-grouping by interface, process or container.
+grouping by interface, process or container. When the agent advertises it, a
+toolbar control adjusts the runtime attribution eagerness
+.RB ( default / off / balanced / eager ).
 .PP
 On startup qiftop tries to use the privileged
 .BR qiftop\-agent (8)
