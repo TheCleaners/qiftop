@@ -19,6 +19,7 @@ void ResolverDeepWorker::setTuning(const ResolverTuning &tuning)
     m_batchMax    = tuning.deepBatchMax    > 0 ? tuning.deepBatchMax    : 1;
     m_maxAttempts = tuning.deepMaxAttempts > 0 ? tuning.deepMaxAttempts : 1;
     m_coalesceMs  = tuning.deepCoalesceMs  > 0 ? tuning.deepCoalesceMs  : 50;
+    m_demandNetnsScan = tuning.deepDemandNetnsScan;
     m_queue.setCapacity(tuning.deepQueueMax);
     if (m_timer->isActive())
         m_timer->setInterval(m_coalesceMs);
@@ -102,8 +103,16 @@ void ResolverDeepWorker::process()
         }
     }
 
-    if (!retry.isEmpty())
+    if (!retry.isEmpty()) {
         m_queue.enqueue(retry);
+        // Some flows still won't resolve from the cheap cache — ask the
+        // resolver to refresh its expensive sources early (Linux: an immediate
+        // cross-netns sweep). Eager-only and rate-limited inside the resolver,
+        // so this is a cheap nudge that lets a fresh container flow attribute
+        // in ~one netns scan instead of waiting up to a full periodic cycle.
+        if (m_demandNetnsScan && m_resolver)
+            m_resolver->requestDeepScan();
+    }
 
     if (!updates.isEmpty())
         emit refined(updates);

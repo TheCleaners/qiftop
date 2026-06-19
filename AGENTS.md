@@ -708,15 +708,36 @@ Pieces (all libqiftop `backend/`, Qt Core only):
   Unresolved flows retry until `deepMaxAttempts`, then age out. Pinned by
   `test_deep_worker`.
 
-The genuinely expensive recovery (per-PID thread/fd enumeration, demand-driven
-netns scans on a dedicated thread) is the next deep-pass increment and slots in
-behind the same `DeepAttributionWorker` seam — `ConnectionsService` and the wire
-don't change. On effective `off`, the service calls `setActive(false)` and stops
-enqueuing; `balanced`/`eager` re-tune the worker's batch/coalesce budgets via
+**Demand-driven netns scanning** (the genuine deep recovery, shipped). When a
+top-talker flow resists the cheap retries and the active tuning has
+`deepDemandNetnsScan` set (**eager-only** by default — it costs `setns(2)` +
+per-netns netlink dumps), the worker calls `ProcessResolver::requestDeepScan()`.
+The only implementor is the Linux `NetnsScanner`: it posts a **queued `tick()`
+to its own worker thread** (`QMetaObject::invokeMethod(..., Qt::QueuedConnection)`)
+so an immediate cross-netns sweep runs early instead of waiting up to a full
+periodic cycle (5 s balanced / 1 s eager). It's **rate-limited** inside the
+scanner (≈ `netnsRefreshMs/4`, floor 250 ms) so a burst of misses can't storm
+it, and all the `setns()` dancing stays on the netns worker thread (AGENTS.md
+§8a rule 5) — the deep worker never touches a namespace. `CompositeResolver`
+fans `requestDeepScan()` out to every child; non-netns resolvers no-op. This is
+what recovers a fresh container flow whose socket lives in a not-yet-scanned
+netns in ~one scan. Pinned by `test_deep_worker`
+(`requestsDemandScanForFlowsThatResistWhenEnabled` / `noDemandScanWhenDisabled`)
+and `test_composite_resolver` (`requestDeepScanFansOutToEveryChild`).
+
+**Why no per-thread `/proc/<pid>/task/<tid>/fd` enumeration** (a tempting
+"deep" recovery): on Linux the fd table is **process-wide** — all threads share
+it — so `/proc/<pid>/task/<tid>/fd` can never surface a socket that the plain
+`/proc/<pid>/fd` walk (which `SockDiagResolver` already does) didn't. It would
+be pure cost for zero new attribution, so it's deliberately omitted. The real
+gap deep recovery closes is **cross-netns visibility** (above), not thread fds.
+
+On effective `off`, the service calls `setActive(false)` and stops enqueuing;
+`balanced`/`eager` re-tune the worker's batch/coalesce budgets via
 `ResolverTuning` (`deepBatchMax`, `deepCoalesceMs`, `deepQueueMax`,
-`deepMaxAttempts`). The token is advertised only when a worker is actually wired
-(`InterfacesService::setAsyncRefinement(true)`), so the agent never claims
-refinements it won't emit.
+`deepMaxAttempts`, `deepDemandNetnsScan`). The token is advertised only when a
+worker is actually wired (`InterfacesService::setAsyncRefinement(true)`), so the
+agent never claims refinements it won't emit.
 
 
 
@@ -812,7 +833,7 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_dbus_types`          | `ConnectionDto` wire round-trip: IANA proto mapping, direction field, out-of-range direction clamp; v0.4 attribution round-trip + defaults; v0.5 `reason` round-trip + out-of-range clamp to NoLocalSocket. |
 | `test_wire_compat`         | Forward-compat: a real session-bus service returns OLD-shaped (shorter) `ConnectionDto`/`InterfaceStatsDto` structs (no `reason` / no v0.3 iface tail); the PRODUCTION `operator>>` must decode them via its `atEnd()` guards (missing tail fields default) instead of reading past the struct end and aborting — the new-client-vs-old-agent crash. |
 | `test_attribution`         | `backend::attributeFlows` — null-resolver no-op, process-only / container-only / chain attribution paths, per-PID memoisation (50 flows from same PID = 1 container lookup), chain opt-in obeys `wantContainerChain` flag, flow without PID never triggers `resolveContainerForPid(0)`. Uses a FakeResolver — no /proc, no sock_diag. |
-| `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited). Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
+| `test_composite_resolver`  | `qiftop::backend::CompositeResolver` — empty composite is a no-op; first-non-nullopt fan-out for resolvePid / enrichPid / resolveContainerForPid; capability tokens are unioned and de-duplicated in first-seen order; `resolveContainerChainForPid` deliberately bypasses the base-class single-wrap fallback so chain-capable children get to provide the real OUTER→INNER ancestry; initialize() probes EVERY child (not short-circuited); `requestDeepScan()` fans out to every child. Uses a programmable FakeResolver — no Qt Widgets, no DBus. |
 | `test_proc_details`        | `readProcessDetails` (Linux on-demand RPC backend) — invalid/missing PID returns `valid=false` without crashing; self-PID round-trips pid/uid/cmdline/exe; `/proc/<pid>/stat` field-22 starttime parser is non-zero; alternate procRoot parameter is honoured (fixtureability seam). |
 | `test_mainwindow_smoke`    | Offscreen widget smoke coverage for MainWindow construction, sorting/filtering/grouping, settings propagation, attribution capability gates, stale rows, DNS rerendering, pause/resume, heartbeats, and tooltip escaping. Includes both sides of the transport-neutral cap gate: `processColumnHiddenWithoutWireCapability` (no token ⇒ hidden) and `attributionColumnsShowOnInProcessBackendWithCaps` (in-process backend, `usingAgent=false`, advertising the tokens ⇒ shown). |
 | `test_backend_capabilities` | Transport-neutral `NetworkMonitor::capabilities()` / `ConnectionMonitor::capabilities()` contract: the `mergeCapabilities` union helper (dedup + first-seen order); the shared `attributionWireTokens` resolver-caps→`*-attribution-wire` mapping (process/container/chain, chain-wire a strict superset needing BOTH tokens); the DBus proxies (agent's merged list rides on `DBusNetworkMonitor`, `DBusConnectionMonitor` empty, union == agent list); in-process Linux `NetlinkMonitor` (`ifindex`/`oper-state`/`link-errors`) and `ConntrackMonitor` — structural `iana-proto`/`tcp-state` always, plus `*-attribution-wire` tokens derived from an INJECTED resolver (test-only ctor seam): inert resolver ⇒ structural only, full resolver ⇒ all three wire tokens, process-only ⇒ just `process-attribution-wire`, and the in-process union lights attribution via the resolver; never `direction-on-wire`/`attribution-reason` in-process; plus compile-guarded BSD assertions (`#ifdef BACKEND_BSD`) that `BsdConnectionMonitor` advertises `process-attribution-wire` + FreeBSD-only `container-attribution-wire`. |
@@ -825,7 +846,7 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_flow_topk`           | `qiftop::backend::linux::admitFlowTopK` (FlowTopK.h) — the bounded top-K-by-bytes min-heap that caps the in-process `ConntrackMonitor` snapshot at the loudest 4096 (mirrors the agent cap): below-cap keeps all, at-cap keeps the loudest regardless of arrival order, ranks by rx+tx total, strictly-greater admission (ties keep the incumbent), `cap<=0` is unbounded, and the min-heap front invariant holds after every op. Pure — no live conntrack handle. |
 | `test_services`            | `ConnectionsService` / `InterfacesService` driven in-process via the fake monitors (no real D-Bus bus): snapshot cap (4099→4096 top-by-bytes), dropped-flow skip, process/container/chain attribution, server-side direction; interface-stat caching. v0.4 §5 deep pass: a `FakeDeepWorker` proves weak (NoLocalSocket) flows are enqueued, `AttributionChanged` patches `m_last` on refine (with the real post-direction key), stale/unknown-key and no-new-info updates are dropped, and a runtime `off` hint suppresses enqueue; plus the `attribution-async-refinement` token gate. |
 | `test_deep_queue`          | `DeepAttributionQueue` discipline: dedup by key (latest generation wins, attempts carried forward), priority-by-bytes dequeue (top talkers first), hard-cap drops the quietest, `clear`, and zero-capacity keeps/admits nothing. Pure. |
-| `test_deep_worker`         | `ResolverDeepWorker` (v0.4 §5): retries weakly-attributed flows on a fast coalescing timer and emits exactly one `refined()` once a fake resolver finally attributes the flow (reason → Resolved), drains afterward; ages out an unresolvable flow at `deepMaxAttempts` without emitting; an inactive worker ignores enqueue. Drives a real event loop. |
+| `test_deep_worker`         | `ResolverDeepWorker` (v0.4 §5): retries weakly-attributed flows on a fast coalescing timer and emits exactly one `refined()` once a fake resolver finally attributes the flow (reason → Resolved), drains afterward; ages out an unresolvable flow at `deepMaxAttempts` without emitting; an inactive worker ignores enqueue; with `deepDemandNetnsScan` on it nudges the resolver's `requestDeepScan()` for flows that resist, and never does so when the flag is off. Drives a real event loop. |
 | `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
 | `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
 | `test_proc_snapshot`       | `qiftop::backend::procsnap::pidStartTime` — `/proc/<pid>/stat` field-22 parser robustness (commands with spaces / parens / nested quotes), live self-PID round-trip, missing PID returns nullopt. |

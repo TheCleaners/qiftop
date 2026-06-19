@@ -5,6 +5,8 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+
+#include <chrono>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -422,6 +424,30 @@ void NetnsScanner::setTuning(const ResolverTuning &tuning)
     // its next tick and re-arms its own QTimer (we must not touch the
     // worker-thread QTimer from here). Clamped to the netns floor.
     m_refreshIntervalMs.store(safeRefreshIntervalMs(tuning.netnsRefreshMs));
+}
+
+void NetnsScanner::requestDeepScan()
+{
+    if (!m_ready || m_worker == nullptr)
+        return;
+
+    // Rate-limit so a burst of unresolved top-talkers can't storm the scanner
+    // with setns()/per-netns dumps. One demand scan per ~quarter of the
+    // periodic cadence (floor 250 ms) is plenty to recover a fresh container
+    // flow without thrashing.
+    const auto nowMs = static_cast<qint64>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    const qint64 last = m_lastDemandMs.load(std::memory_order_relaxed);
+    const int cooldown = std::max(250, m_refreshIntervalMs.load() / 4);
+    if (last != 0 && nowMs - last < cooldown)
+        return;
+    m_lastDemandMs.store(nowMs, std::memory_order_relaxed);
+
+    // Queue an extra tick on the worker's own thread. Non-blocking; all the
+    // setns() dancing stays where it belongs (AGENTS.md §8a rule 5).
+    QMetaObject::invokeMethod(m_worker, "tick", Qt::QueuedConnection);
 }
 
 NetnsScanner::~NetnsScanner()

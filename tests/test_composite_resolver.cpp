@@ -50,9 +50,12 @@ public:
     int callsEnrichPid = 0;
     int callsContainer = 0;
     int callsChain = 0;
+    int callsDeepScan = 0;
 
     bool initialize() override { return true; }
     QStringList capabilities() const override { return caps; }
+
+    void requestDeepScan() override { ++callsDeepScan; }
 
     qint32 resolvePid(const Connection &flow) override
     {
@@ -339,6 +342,22 @@ private slots:
         QCOMPARE(aRaw->initCalls, 1);
         QCOMPARE(bRaw->initCalls, 1);
         QCOMPARE(cRaw->initCalls, 1);
+    }
+
+    void requestDeepScanFansOutToEveryChild()
+    {
+        auto a = std::make_unique<FakeResolver>();
+        auto b = std::make_unique<FakeResolver>();
+        auto *aRaw = a.get(), *bRaw = b.get();
+
+        CompositeResolver comp;
+        comp.add(std::move(a));
+        comp.add(std::move(b));
+
+        comp.requestDeepScan();
+        comp.requestDeepScan();
+        QCOMPARE(aRaw->callsDeepScan, 2);
+        QCOMPARE(bRaw->callsDeepScan, 2);
     }
 
     // resolveFlow() is inherited from the base class (resolvePid +

@@ -43,11 +43,15 @@ public:
         return std::nullopt;
     }
 
+    void requestDeepScan() override { ++m_deepScans; }
+
     [[nodiscard]] int calls() const { return m_calls; }
+    [[nodiscard]] int deepScans() const { return m_deepScans; }
 
 private:
     int m_threshold;
     int m_calls = 0;
+    int m_deepScans = 0;
 };
 
 DeepAttributionRequest mkRequest()
@@ -147,6 +151,39 @@ private slots:
         // Give any stray timer a chance; nothing should fire.
         QTest::qWait(50);
         QCOMPARE(spy.count(), 0);
+    }
+
+    void requestsDemandScanForFlowsThatResistWhenEnabled()
+    {
+        // Never attributes from cache → the worker keeps retrying and, with
+        // demand-netns-scan enabled (eager), nudges the resolver to refresh
+        // its expensive sources early.
+        LateResolver resolver(/*attributeOnCall=*/9999);
+        ResolverDeepWorker worker;
+        worker.setResolver(&resolver);
+        ResolverTuning t = fastTuning();
+        t.deepDemandNetnsScan = true;
+        t.deepMaxAttempts     = 6;
+        worker.setTuning(t);
+
+        worker.enqueue({mkRequest()});
+        QTRY_VERIFY_WITH_TIMEOUT(resolver.deepScans() >= 1, 2000);
+    }
+
+    void noDemandScanWhenDisabled()
+    {
+        LateResolver resolver(/*attributeOnCall=*/9999);
+        ResolverDeepWorker worker;
+        worker.setResolver(&resolver);
+        ResolverTuning t = fastTuning();
+        t.deepDemandNetnsScan = false; // balanced: no early scans
+        t.deepMaxAttempts     = 4;
+        worker.setTuning(t);
+
+        worker.enqueue({mkRequest()});
+        // Let it churn through its retries and age out.
+        QTRY_COMPARE_WITH_TIMEOUT(worker.pendingCount(), 0, 2000);
+        QCOMPARE(resolver.deepScans(), 0);
     }
 };
 

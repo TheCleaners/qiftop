@@ -75,6 +75,12 @@ public:
     // touch it from the agent main thread). Clamps to the netns floor.
     void setTuning(const ResolverTuning &tuning) override;
 
+    // Demand-driven early scan (v0.4 §5). Posts a queued tick to the worker
+    // thread so an unresolved container flow's netns is swept now instead of
+    // at the next periodic refresh. Rate-limited internally (≈ netnsRefresh/4,
+    // floor 250 ms) so a burst of misses can't storm the scanner. Non-blocking.
+    void requestDeepScan() override;
+
     [[nodiscard]] qint32 resolvePid(const Connection &flow) override;
 
     [[nodiscard]] std::optional<ProcessInfo>
@@ -91,6 +97,8 @@ private:
     // Cross-netns scan cadence (ms). Atomic because the agent main thread
     // re-tunes it via setTuning() while the worker thread reads it each tick.
     std::atomic<int>                  m_refreshIntervalMs{5000};
+    // Monotonic ms of the last demand scan, for rate-limiting requestDeepScan.
+    std::atomic<qint64>               m_lastDemandMs{0};
 
     // Published cross-netns maps; mutated by worker, read by data thread.
     mutable std::mutex                m_mu;
