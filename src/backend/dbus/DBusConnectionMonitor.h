@@ -35,6 +35,7 @@ signals:
 
 private slots:
     void onConnectionsChanged(const QDBusMessage &msg);
+    void onAttributionChanged(const QDBusMessage &msg);
     void onPermissionDenied(const QString &detail);
     void onAttributionEagernessChanged(const QString &mode);
 

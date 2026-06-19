@@ -468,6 +468,37 @@ void ConnectionAggregator::updateConnections(QList<Connection> connections)
     m_prev = std::move(incoming);
 }
 
+void ConnectionAggregator::applyAttributionPatch(const QList<Connection> &patch)
+{
+    bool any = false;
+    for (const Connection &p : patch) {
+        auto it = m_keyToIdx.constFind(p.key());
+        if (it == m_keyToIdx.constEnd())
+            continue; // flow gone, or a UDP-aggregated row with a synthetic key
+        Connection &cur = m_rows[it.value()].current;
+
+        // Patch toward MORE information only; never overwrite a good value
+        // with an empty one (a later full snapshot owns the freshest cheap
+        // result). Bytes/rates/timestamps are deliberately untouched.
+        if (p.process.valid() && cur.process != p.process) {
+            cur.process = p.process;
+            cur.reason  = p.reason;
+            any = true;
+        }
+        if (p.container.valid() && cur.container != p.container) {
+            cur.container = p.container;
+            any = true;
+        }
+        if (!p.containerChain.isEmpty() && cur.containerChain != p.containerChain) {
+            cur.containerChain = p.containerChain;
+            any = true;
+        }
+    }
+    // Coarse repaint: attribution columns re-render, rates are unaffected.
+    if (any)
+        emit viewDataChanged();
+}
+
 void ConnectionAggregator::advanceSmoothing()
 {
     if (m_rateSmoothingMs <= 0 || m_rows.isEmpty())

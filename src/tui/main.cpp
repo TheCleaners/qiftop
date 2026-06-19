@@ -237,6 +237,10 @@ int main(int argc, char *argv[])
                      &ifaceAgg, &InterfaceAggregator::updateStats);
     QObject::connect(connMon.get(), &ConnectionMonitor::connectionsUpdated,
                      &connAgg, &ConnectionAggregator::updateConnections);
+    // Deep-pass attribution refinements (v0.4 §5): patch attribution columns
+    // in place without disturbing the rate series.
+    QObject::connect(connMon.get(), &ConnectionMonitor::connectionsAttributionRefined,
+                     &connAgg, &ConnectionAggregator::applyAttributionPatch);
 
     // Keep the connection aggregator's notion of "our own addresses" current,
     // so direction inference + forwarded-flow detection (and therefore the

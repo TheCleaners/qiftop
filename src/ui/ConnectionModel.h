@@ -131,6 +131,9 @@ public:
 
 public slots:
     void updateConnections(QList<Connection> connections) { m_agg.updateConnections(std::move(connections)); }
+    // Apply a deep-pass attribution patch (no rate disturbance). See
+    // ConnectionAggregator::applyAttributionPatch.
+    void applyAttributionPatch(const QList<Connection> &patch) { m_agg.applyAttributionPatch(patch); }
     void advanceSmoothing() { m_agg.advanceSmoothing(); }
 
 private:

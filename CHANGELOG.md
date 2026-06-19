@@ -13,7 +13,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a new `AttributionChanged(t, a(...))` signal on
   `org.qiftop.NetworkAgent1.Connections` — an attribution-only patch (refined
   process/container/chain/reason) that updates those columns without disturbing
-  rate math. The agent also merges refinements into its cached snapshot, so
+  rate math. GUI and TUI clients consume these patches live (via a new
+  `ConnectionMonitor::connectionsAttributionRefined` signal →
+  `ConnectionAggregator::applyAttributionPatch`), lighting up the
+  Process/Container columns the moment a refinement lands instead of waiting for
+  the next poll. The agent also merges refinements into its cached snapshot, so
   `GetConnections` and the next `ConnectionsChanged` carry best-known
   attribution even for clients that don't subscribe. The shipped worker
   retries the cheap, cache-backed resolver as its caches refresh (so a socket

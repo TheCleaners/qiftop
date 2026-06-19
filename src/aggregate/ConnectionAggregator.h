@@ -106,6 +106,13 @@ public slots:
     void updateConnections(QList<Connection> connections);
     void advanceSmoothing();
 
+    // Apply an attribution-only patch (v0.4 §5 deep pass). For each entry,
+    // find the live row by Connection::key and update ONLY its process /
+    // container / chain / reason fields — never bytes, rates, or timestamps,
+    // so a refinement arriving between polls can't perturb the rate series.
+    // Non-matching keys (flow gone, or a UDP-aggregated row) are skipped.
+    void applyAttributionPatch(const QList<Connection> &patch);
+
 signals:
     // Granular signals a model adapter maps 1:1 onto the QAbstractItemModel
     // protocol. The aggregator emits *AboutTo* BEFORE mutating m_rows and the

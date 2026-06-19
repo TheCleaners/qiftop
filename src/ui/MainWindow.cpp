@@ -139,6 +139,8 @@ MainWindow::MainWindow(Settings          *settings,
             this,          &MainWindow::onStatsUpdated);
     connect(m_connMonitor, &ConnectionMonitor::connectionsUpdated,
             this,          &MainWindow::onConnectionsUpdated);
+    connect(m_connMonitor, &ConnectionMonitor::connectionsAttributionRefined,
+            this,          &MainWindow::onConnectionsAttributionRefined);
     connect(m_connMonitor, &ConnectionMonitor::permissionDenied,
             this,          &MainWindow::onConnectionsPermissionDenied);
     connect(m_connMonitor, &ConnectionMonitor::accountingUnavailable,
@@ -1249,6 +1251,14 @@ void MainWindow::onConnectionsUpdated(const QList<Connection> &conns)
         m_connModel->updateConnections(conns);
     m_statusConnections->setText(tr("%n connection(s)", nullptr,
                                     static_cast<int>(conns.size())));
+}
+
+void MainWindow::onConnectionsAttributionRefined(const QList<Connection> &patch)
+{
+    // Deep-pass refinement: update attribution columns in place, no rate
+    // resample. Honour pause like the snapshot path.
+    if (!m_paused)
+        m_connModel->applyAttributionPatch(patch);
 }
 
 void MainWindow::togglePaused(bool paused)
