@@ -67,7 +67,7 @@ CgroupClassifier::resolveContainerChainForPid(qint32 pid)
     if (!stNowOpt.has_value()) return {};  // pid is gone
     const quint64 stNow = *stNowOpt;
 
-    std::lock_guard lock(m_mu);
+    std::scoped_lock lock(m_mu);
     const qint64 now = m_clock.elapsed();
     if (auto it = m_cache.constFind(pid); it != m_cache.constEnd()) {
         if (it->startTime == stNow && now - it->ts < m_cacheTtlMs) {

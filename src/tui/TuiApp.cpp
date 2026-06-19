@@ -1562,8 +1562,7 @@ void TuiApp::cycleSortField()
         return;
     int idx = visualIndexForColumn(cols, currentSortField());
     idx = (idx + 1) % static_cast<int>(cols.size());   // -1 (hidden) wraps to 0
-    if (idx < 0)
-        idx = 0;
+    idx = std::max(idx, 0);
     setCurrentSortField(cols[idx].id);
 }
 

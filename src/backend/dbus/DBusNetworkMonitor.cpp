@@ -5,6 +5,7 @@
 #include <QDBusPendingCall>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
+#include <algorithm>
 
 #include "dbus/Types.h"
 #include "util/Logging.h"
@@ -140,7 +141,7 @@ void DBusNetworkMonitor::onAgentCadenceChanged(const QDBusMessage &msg)
 
 void DBusNetworkMonitor::setDesiredIntervalMs(int ms)
 {
-    if (ms < 0) ms = 0;
+    ms = std::max(ms, 0);
     m_desiredMs = ms;
     if (m_started)
         sendDesiredIntervalAsync(ms);

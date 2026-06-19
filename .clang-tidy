@@ -1,8 +1,10 @@
 ---
 # clang-tidy baseline: this set is now ENFORCED (gating in CI) and clean.
 # Was Phase 0 report-only; the listed checks were fixed to zero, then the
-# gate flipped on so regressions fail the build. Narrowing conversions and
-# the style/modernize families are the next phases — still parked below.
+# gate flipped on so regressions fail the build. Plus a hand-picked few from
+# the style families (use-scoped-lock, use-std-min-max, simplify-boolean-expr)
+# — high signal, low churn. Narrowing conversions and the rest of the
+# modernize/readability families are the next phases — still parked below.
 # Keep this high-signal; style and policy checks can join the party later.
 Checks: >
   -*,
@@ -35,7 +37,10 @@ Checks: >
   -clang-analyzer-optin.performance.Padding,
   -misc-header-include-cycle,
   -clang-analyzer-cplusplus.NewDeleteLeaks,
-  -bugprone-narrowing-conversions
+  -bugprone-narrowing-conversions,
+  modernize-use-scoped-lock,
+  readability-use-std-min-max,
+  readability-simplify-boolean-expr
 
 # Disabled checks, on purpose:
 # - bugprone-easily-swappable-parameters: Qt/value-type APIs have many adjacent same-type params.

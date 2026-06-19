@@ -258,7 +258,7 @@ bool SockDiagResolver::initialize()
     // disabled — very rare) we should report failure NOW rather than first
     // call site, so the resolver advertises no capability and the UI hides
     // attribution cleanly.
-    std::lock_guard lock(m_d->mu);
+    std::scoped_lock lock(m_d->mu);
     if (!m_d->dumpProto(AF_INET, IPPROTO_TCP)) {
         ::close(m_d->nlFd);
         m_d->nlFd = -1;
@@ -287,7 +287,7 @@ qint32 SockDiagResolver::resolvePid(const Connection &flow)
         : (flow.proto == L4Proto::Udp ? quint8{IPPROTO_UDP} : quint8{0});
     if (proto == 0) return 0;
 
-    std::lock_guard lock(m_d->mu);
+    std::scoped_lock lock(m_d->mu);
     m_d->maybeRefresh();
 
     // Try the full 4-tuple first (connected sockets / established TCP). UDP
@@ -338,7 +338,7 @@ std::optional<ProcessInfo> SockDiagResolver::enrichPid(qint32 pid)
     if (!m_d->ready || pid <= 0) return std::nullopt;
 
     {
-        std::lock_guard lock(m_d->mu);
+        std::scoped_lock lock(m_d->mu);
         m_d->maybeRefresh();
         auto it = m_d->pidToStartTime.constFind(pid);
         if (it == m_d->pidToStartTime.constEnd()) return std::nullopt;

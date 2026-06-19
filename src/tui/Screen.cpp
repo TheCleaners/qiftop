@@ -1,5 +1,6 @@
 #include "tui/Screen.h"
 
+#include <algorithm>
 #include <clocale>
 #include <cmath>
 #include <cwchar>
@@ -158,8 +159,7 @@ int Screen::paintGauge(int y, int width, double fraction, Role role, long extra)
     int fill = static_cast<int>(std::lround(fraction * width));
     if (fill <= 0)
         fill = 1;            // a visible sliver for any non-zero traffic
-    if (fill > width)
-        fill = width;
+    fill = std::min(fill, width);
     const int r = static_cast<int>(role);
     if (m_color256 && m_theme.gaugeBg >= 0) {
         // Re-colour the filled cells to (role fg, gauge bg) without touching
@@ -348,8 +348,7 @@ void Screen::render(const Frame &f)
     // the final line so it truncates at the right edge instead of wrapping and
     // garbling the layout.
     w[0] = width - fixedSum - kSep * (n - 1);
-    if (w[0] < 4)
-        w[0] = 4;
+    w[0] = std::max(w[0], 4);
 
     const auto rowText = [&](const QStringList &cells) {
         QString line;

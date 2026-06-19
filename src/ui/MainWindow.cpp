@@ -753,7 +753,7 @@ void MainWindow::applySettingsToUi()
     // (and the flicker that comes with it) on unrelated settings changes.
     const QList<qiftop::ui::GuiTheme> themes = qiftop::ui::builtinGuiThemes();
     int themeIdx = qiftop::ui::guiThemeIndexByName(themes, m_settings->guiThemeName());
-    if (themeIdx < 0) themeIdx = 0; // unknown name → System
+    themeIdx = std::max(themeIdx, 0); // unknown name → System
     const qiftop::ui::GuiTheme &theme = themes.at(themeIdx);
     if (theme.name != m_appliedThemeName) {
         qiftop::ui::applyGuiTheme(theme);
@@ -817,12 +817,16 @@ void MainWindow::applySettingsToUi()
             (viewMode == Settings::ConnectionViewMode::ByProcess);
         const bool groupedByContainer =
             (viewMode == Settings::ConnectionViewMode::ByContainer);
+        // Show a column only when the backend delivers it, the user wants it,
+        // and the active grouping doesn't already make it redundant.
+        const bool showProcessCol =
+            procWire && m_settings->showProcessColumn() && !groupedByProcess;
+        const bool showContainerCol =
+            contWire && m_settings->showContainerColumn() && !groupedByContainer;
         m_connView->setColumnHidden(
-            static_cast<int>(ConnectionModel::Column::Process),
-            !(procWire && m_settings->showProcessColumn() && !groupedByProcess));
+            static_cast<int>(ConnectionModel::Column::Process), !showProcessCol);
         m_connView->setColumnHidden(
-            static_cast<int>(ConnectionModel::Column::Container),
-            !(contWire && m_settings->showContainerColumn() && !groupedByContainer));
+            static_cast<int>(ConnectionModel::Column::Container), !showContainerCol);
         m_connModel->setShowContainerChainInTooltip(
             m_settings->showContainerChainInTooltip());
     }

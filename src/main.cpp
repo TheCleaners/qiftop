@@ -6,6 +6,7 @@
 #include <QDBusVariant>
 #include <QIcon>
 #include <QTimer>
+#include <algorithm>
 
 #include "config/Settings.h"
 #include "dbus/Types.h"
@@ -169,7 +170,7 @@ int main(int argc, char *argv[])
     {
         const auto themes = qiftop::ui::builtinGuiThemes();
         int idx = qiftop::ui::guiThemeIndexByName(themes, settings.guiThemeName());
-        if (idx < 0) idx = 0;
+        idx = std::max(idx, 0);
         qiftop::ui::applyGuiTheme(themes.at(idx));
     }
 
