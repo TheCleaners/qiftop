@@ -300,6 +300,12 @@ int main(int argc, char *argv[])
     QObject::connect(connMon.get(), &ConnectionMonitor::processDetailsReady,
                      &tui, &qiftop::tui::TuiApp::onProcessDetails);
 
+    // Runtime attribution-eagerness hint: the 'e' key cycles it; bridge the
+    // request to the monitor (no-op on backends that don't honour it).
+    tui.setAttributionEagernessRequester([&connMon](const QString &mode) {
+        connMon->setDesiredAttributionEagerness(mode);
+    });
+
     // Input: read raw bytes from stdin ourselves and let Screen decode keys,
     // rather than draining ncurses wgetch() from the notifier. wgetch() under
     // an external event loop is fragile — it returns ERR for both "no input"
@@ -368,6 +374,11 @@ int main(int argc, char *argv[])
     const auto warm = [&] {
         netMon->setDesiredIntervalMs(tui.pollIntervalMs());
         connMon->setDesiredIntervalMs(tui.pollIntervalMs());
+        // Re-assert the persisted attribution-eagerness hint (same TTL as
+        // cadence) so a non-default choice doesn't lapse to the agent default.
+        const QString eager = tui.attributionEagerness();
+        if (!eager.isEmpty())
+            connMon->setDesiredAttributionEagerness(eager);
     };
     warm();
     auto *heartbeat = new QTimer(&app);

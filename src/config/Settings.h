@@ -136,6 +136,10 @@ public:
     // out-of-the-box look is unchanged. Persisted as a plain string so an
     // unknown name (e.g. from a future build) cleanly falls back to System.
     [[nodiscard]] QString guiThemeName() const { return m_guiThemeName; }
+    // Runtime attribution-eagerness request sent to the agent (off/balanced/
+    // eager, or empty = "use the agent's config default / no hint"). Persisted
+    // so the choice survives restarts and is re-asserted via the heartbeat.
+    [[nodiscard]] QString attributionEagerness() const { return m_attributionEagerness; }
 
     void setPollIntervalMs(int ms);
     void setShowLoopback(bool v);
@@ -170,6 +174,7 @@ public:
     void setStartOnLogin(bool v);
     void setConnectionFilterExpr(const QString &expr);
     void setGuiThemeName(const QString &name);
+    void setAttributionEagerness(const QString &mode);
     void setConnectionViewMode(ConnectionViewMode m);
     void setShowProcessColumn(bool v);
     void setShowContainerColumn(bool v);
@@ -222,6 +227,7 @@ private:
     bool m_showStatusInTitle             = false;
     QString m_connFilterExpr;
     QString m_guiThemeName               = QStringLiteral("System");
+    QString m_attributionEagerness;      // "" = no hint (agent config default)
     ConnectionViewMode m_connViewMode    = ConnectionViewMode::Flat;
     // Default-shown: the attribution data is already on the wire (no extra
     // cost) and applySettingsToUi() AND-gates each column on the agent's

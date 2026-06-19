@@ -25,6 +25,14 @@ public:
     virtual void setPollIntervalMs(int /*ms*/) {}
     virtual void setDesiredIntervalMs(int /*ms*/) {}
 
+    // Set a runtime attribution-eagerness hint on the backend (capability:
+    // attribution-eagerness-hints). `mode` is one of `off`/`balanced`/`eager`,
+    // or `default`/empty to clear this client's hint. Default no-op: backends
+    // that don't honour it (in-process, old agent) simply ignore it. The DBus
+    // proxy forwards it to Connections.SetDesiredAttributionEagerness; the
+    // resulting effective mode arrives via attributionEagernessChanged().
+    virtual void setDesiredAttributionEagerness(const QString & /*mode*/) {}
+
     // Lazily fetch extended details (exe / cmdline / cwd / start time)
     // for a pid. Deliberately NOT carried in every snapshot — see the
     // "default-cheap pipeline" principle. The result arrives
@@ -58,6 +66,11 @@ signals:
     // (in-process today) never emit it; the DBus proxy emits it on the agent's
     // AttributionChanged signal.
     void connectionsAttributionRefined(QList<Connection> patch);
+
+    // Mirrors the agent's AttributionEagernessChanged: the new effective
+    // attribution eagerness (off/balanced/eager). Only the DBus proxy emits
+    // it; in-process backends never do.
+    void attributionEagernessChanged(QString mode);
 
     // Emitted (once) when the backend determines that the kernel is not
     // recording per-flow byte/packet counters (e.g. Linux's

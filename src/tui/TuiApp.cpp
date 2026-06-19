@@ -306,6 +306,10 @@ void TuiApp::handleKey(int key)
     case 'A':
         m_overlay = Overlay::About;
         break;
+    case 'e':
+    case 'E':
+        cycleAttributionEagerness();
+        break;
     case 'p':
     case 'P':
         m_paused = !m_paused;
@@ -737,6 +741,10 @@ Frame TuiApp::buildFrame()
         // When grouped, advertise fold/unfold (h/l) right after the group key.
         if (m_groupBy != GroupBy::None)
             f.footerHints.insert(7, {QStringLiteral("h/l"), QStringLiteral("fold")});
+        // Attribution-eagerness control, only when the agent honours it.
+        if (m_backendCaps.contains(QStringLiteral("attribution-eagerness-hints")))
+            f.footerHints.insert(f.footerHints.size() - 1,
+                                 {QStringLiteral("e"), QStringLiteral("attr")});
     }
 
     buildModal(f);
@@ -851,6 +859,7 @@ void TuiApp::buildModal(Frame &f) const
             row(QStringLiteral("w"),            QStringLiteral("Write/export the current view to an auto-named CSV file")),
             row(QStringLiteral("W"),            QStringLiteral("Export to a CSV file, prompting for the filename")),
             row(QStringLiteral("z"),            QStringLiteral("Cycle the colour theme")),
+            row(QStringLiteral("e"),            QStringLiteral("Cycle the agent's attribution eagerness (default / off / balanced / eager) — needs an agent that advertises it")),
             row(QStringLiteral("S / F2"),       QStringLiteral("Settings (gauge, DNS, smoothing…)")),
             row(QStringLiteral("? / F1"),       QStringLiteral("This help")),
             row(QStringLiteral("a"),            QStringLiteral("About (app & system info)")),
@@ -1009,6 +1018,11 @@ void TuiApp::onProcessDetails(const qiftop::backend::ProcessDetails &d)
 void TuiApp::setProcessDetailsRequester(std::function<void(qint32)> fn)
 {
     m_requestDetails = std::move(fn);
+}
+
+void TuiApp::setAttributionEagernessRequester(std::function<void(QString)> fn)
+{
+    m_requestEagerness = std::move(fn);
 }
 
 bool TuiApp::cursorOnHeader() const
@@ -1285,6 +1299,8 @@ void TuiApp::loadSettings()
     m_showProcessColumn   = s.value(QStringLiteral("showProcessColumn"),   m_showProcessColumn).toBool();
     m_showContainerColumn = s.value(QStringLiteral("showContainerColumn"), m_showContainerColumn).toBool();
     m_pollMs        = std::clamp(s.value(QStringLiteral("pollMs"), m_pollMs).toInt(), 100, 10000);
+    m_attributionEagerness = s.value(QStringLiteral("attributionEagerness"),
+                                     m_attributionEagerness).toString();
     {
         const int g = s.value(QStringLiteral("groupBy"), int(m_groupBy)).toInt();
         m_groupBy = (g >= 0 && g < int(GroupBy::Count)) ? static_cast<GroupBy>(g)
@@ -1339,6 +1355,7 @@ void TuiApp::saveSettings() const
     s.setValue(QStringLiteral("showProcessColumn"), m_showProcessColumn);
     s.setValue(QStringLiteral("showContainerColumn"), m_showContainerColumn);
     s.setValue(QStringLiteral("pollMs"), m_pollMs);
+    s.setValue(QStringLiteral("attributionEagerness"), m_attributionEagerness);
     s.setValue(QStringLiteral("groupBy"), int(m_groupBy));
     if (!m_themes.isEmpty())
         s.setValue(QStringLiteral("theme"), m_themes[m_themeIdx].name);
@@ -1564,6 +1581,31 @@ void TuiApp::cycleSortField()
     idx = (idx + 1) % static_cast<int>(cols.size());   // -1 (hidden) wraps to 0
     idx = std::max(idx, 0);
     setCurrentSortField(cols[idx].id);
+}
+
+void TuiApp::cycleAttributionEagerness()
+{
+    if (!m_backendCaps.contains(QStringLiteral("attribution-eagerness-hints"))) {
+        flashMessage(QStringLiteral(
+            "Attribution eagerness needs an agent that advertises it"));
+        return;
+    }
+    // Cycle "" (agent default / no hint) -> off -> balanced -> eager -> ""
+    static const QStringList order = {
+        QString(), QStringLiteral("off"),
+        QStringLiteral("balanced"), QStringLiteral("eager")};
+    int idx = order.indexOf(m_attributionEagerness);
+    idx = std::max(idx, 0);
+    idx = (idx + 1) % static_cast<int>(order.size());
+    m_attributionEagerness = order[idx];
+
+    const QString wire = m_attributionEagerness.isEmpty()
+                             ? QStringLiteral("default") : m_attributionEagerness;
+    if (m_requestEagerness)
+        m_requestEagerness(wire);
+    flashMessage(QStringLiteral("Attribution eagerness: %1").arg(wire));
+    saveSettings();
+    requestRedraw();
 }
 
 void TuiApp::toggleOptionalColumn(ColumnId id)

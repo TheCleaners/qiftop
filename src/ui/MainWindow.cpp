@@ -141,6 +141,16 @@ MainWindow::MainWindow(Settings          *settings,
             this,          &MainWindow::onConnectionsUpdated);
     connect(m_connMonitor, &ConnectionMonitor::connectionsAttributionRefined,
             this,          &MainWindow::onConnectionsAttributionRefined);
+    connect(m_connMonitor, &ConnectionMonitor::attributionEagernessChanged,
+            this, [this](const QString &mode) {
+                // Reflect the agent's effective mode in the combo tooltip so
+                // the user can see when another client (or the config) is
+                // driving a different level than they requested.
+                if (m_attrEagernessCombo)
+                    m_attrEagernessCombo->setToolTip(
+                        tr("Runtime attribution eagerness. Agent effective: %1.")
+                            .arg(mode));
+            });
     connect(m_connMonitor, &ConnectionMonitor::permissionDenied,
             this,          &MainWindow::onConnectionsPermissionDenied);
     connect(m_connMonitor, &ConnectionMonitor::accountingUnavailable,
@@ -630,6 +640,44 @@ void MainWindow::setupMenuAndToolbar()
     viewModeLayout->addWidget(m_connViewModeCombo);
     m_connViewModeToolbarAct = toolbar->addWidget(viewModeBox);
 
+    // "Attribution:" eagerness dropdown — drives the agent's runtime
+    // SetDesiredAttributionEagerness hint. Visible only when the active
+    // backend advertises `attribution-eagerness-hints` (set in
+    // applySettingsToUi via m_attrEagernessToolbarAct). Persisted +
+    // re-asserted by the heartbeat. "Default" clears the client's hint so
+    // the agent falls back to its agent.conf default.
+    auto *eagerBox    = new QWidget(toolbar);
+    eagerBox->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    auto *eagerLayout = new QHBoxLayout(eagerBox);
+    eagerLayout->setContentsMargins(6, 0, 0, 0);
+    eagerLayout->setSpacing(6);
+    auto *eagerLabel  = new QLabel(tr("Attribution:"), eagerBox);
+    eagerLabel->setForegroundRole(QPalette::WindowText);
+    m_attrEagernessCombo = new QComboBox(eagerBox);
+    m_attrEagernessCombo->setObjectName(QStringLiteral("attrEagernessCombo"));
+    m_attrEagernessCombo->addItem(tr("Default"), QString());
+    m_attrEagernessCombo->addItem(tr("Off"),      QStringLiteral("off"));
+    m_attrEagernessCombo->addItem(tr("Balanced"), QStringLiteral("balanced"));
+    m_attrEagernessCombo->addItem(tr("Eager"),    QStringLiteral("eager"));
+    m_attrEagernessCombo->setToolTip(tr(
+        "Ask the agent to spend more or less effort attributing flows to "
+        "processes/containers at runtime. \"Eager\" recovers container flows "
+        "faster (more /proc + netns work); \"Off\" stops bulk attribution; "
+        "\"Default\" uses the agent's configured setting."));
+    connect(m_attrEagernessCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+                if (i < 0 || !m_attrEagernessCombo) return;
+                const QString mode = m_attrEagernessCombo->itemData(i).toString();
+                m_settings->setAttributionEagerness(mode);
+                if (m_connMonitor)
+                    m_connMonitor->setDesiredAttributionEagerness(
+                        mode.isEmpty() ? QStringLiteral("default") : mode);
+            });
+    eagerLayout->addWidget(eagerLabel);
+    eagerLayout->addWidget(m_attrEagernessCombo);
+    m_attrEagernessToolbarAct = toolbar->addWidget(eagerBox);
+    m_attrEagernessToolbarAct->setVisible(false); // until caps say otherwise
+
     // Visual breathing room between the iface dropdown and the filter
     // line edit. QToolBar::addSeparator() draws a vertical divider which
     // also pads either side by the style's default spacing.
@@ -873,6 +921,21 @@ void MainWindow::applySettingsToUi()
                     break;
                 }
             }
+        }
+    }
+
+    // Attribution-eagerness toolbar control: visible only when the active
+    // backend honours runtime hints, and synced to the persisted choice.
+    if (m_attrEagernessToolbarAct && m_attrEagernessCombo) {
+        const bool eagernessHints =
+            m_backendCaps.contains(QStringLiteral("attribution-eagerness-hints"));
+        m_attrEagernessToolbarAct->setVisible(eagernessHints);
+        const QString mode = m_settings->attributionEagerness();
+        int idx = m_attrEagernessCombo->findData(mode);
+        idx = std::max(idx, 0); // unknown / empty → "Default"
+        if (m_attrEagernessCombo->currentIndex() != idx) {
+            const QSignalBlocker block(m_attrEagernessCombo);
+            m_attrEagernessCombo->setCurrentIndex(idx);
         }
     }
     if (m_connFlowDelegate) {
@@ -1437,6 +1500,13 @@ void MainWindow::refreshAgentHeartbeat()
     const int desired = m_settings->pollIntervalMs();
     if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(desired);
     if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(desired);
+    // Re-assert the attribution-eagerness hint too (same TTL as cadence), so a
+    // non-default choice doesn't lapse back to the agent's config default.
+    if (m_connMonitor) {
+        const QString mode = m_settings->attributionEagerness();
+        if (!mode.isEmpty())
+            m_connMonitor->setDesiredAttributionEagerness(mode);
+    }
     if (!m_agentHeartbeat) {
         m_agentHeartbeat = new QTimer(this);
         m_agentHeartbeat->setTimerType(Qt::CoarseTimer);
@@ -1444,6 +1514,11 @@ void MainWindow::refreshAgentHeartbeat()
             const int d = m_settings->pollIntervalMs();
             if (m_netMonitor)  m_netMonitor ->setDesiredIntervalMs(d);
             if (m_connMonitor) m_connMonitor->setDesiredIntervalMs(d);
+            if (m_connMonitor) {
+                const QString mode = m_settings->attributionEagerness();
+                if (!mode.isEmpty())
+                    m_connMonitor->setDesiredAttributionEagerness(mode);
+            }
         });
     }
     m_agentHeartbeat->start(4000);

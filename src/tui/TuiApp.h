@@ -54,6 +54,11 @@ public:
     // / cwd) for a pid from the agent — the monitor lives in main, mirroring
     // setPollApplier. main feeds replies back via onProcessDetails().
     void setProcessDetailsRequester(std::function<void(qint32)> fn);
+    // Runtime attribution-eagerness hint requester — main owns the monitor and
+    // forwards the string to Connections.SetDesiredAttributionEagerness. The
+    // 'e' key cycles the value; main re-asserts it on the heartbeat.
+    void setAttributionEagernessRequester(std::function<void(QString)> fn);
+    [[nodiscard]] QString attributionEagerness() const { return m_attributionEagerness; }
     // Async reply from the agent's GetProcessDetails(pid): cache + repaint so
     // an open Detail / group-info overlay fills in exe/cmdline/cwd live.
     void onProcessDetails(const qiftop::backend::ProcessDetails &d);
@@ -132,6 +137,7 @@ private:
     // visible state from caps + preference (includes hidden optional columns).
     [[nodiscard]] QList<Column> overlayColumns() const;
     void cycleSortField();                  // s: advance sort to the next active column
+    void cycleAttributionEagerness();       // e: cycle agent attribution eagerness hint
     void toggleOptionalColumn(ColumnId id); // Space in Fields: flip a show pref
 
     // Per displayed row of the active view, rebuilt each buildFrame: whether the
@@ -212,6 +218,10 @@ private:
     // On-demand process details (exe/cmdline/cwd), fetched lazily from the
     // agent and cached by pid. Requester set by main (owns the monitor).
     std::function<void(qint32)> m_requestDetails;
+    // Runtime attribution-eagerness ("" = no hint / agent default), persisted
+    // and re-asserted by main's heartbeat. Requester set by main.
+    QString                     m_attributionEagerness;
+    std::function<void(QString)> m_requestEagerness;
     QHash<qint32, qiftop::backend::ProcessDetails> m_procDetails;
     QSet<qint32> m_detailsRequested;         // de-dup in-flight requests
     QList<SettingItem> m_settings;           // declarative settings model
