@@ -4,6 +4,7 @@
 #include <atomic>
 #include <functional>
 #include <thread>
+#include <vector>
 
 #include "backend/BirthCache.h"
 
@@ -11,6 +12,7 @@
 // free of libbpf / birth.skel.h (those live only in the .cpp).
 struct ring_buffer;
 struct qiftop_birth;
+struct bpf_link;
 
 namespace qiftop::backend::linuximpl {
 
@@ -51,6 +53,7 @@ private:
     Sink              m_sink;
     qiftop_birth     *m_skel = nullptr;
     ring_buffer      *m_rb   = nullptr;
+    std::vector<bpf_link *> m_links; // per-probe links we attached + own
     std::thread       m_thread;
     std::atomic<bool> m_stop{false};
     std::atomic<bool> m_running{false};

@@ -1526,8 +1526,13 @@ has none. This is augmenting, not a capture replacement.
   `start_boottime_ns` → field-22 clock ticks via `sysconf(_SC_CLK_TCK)`) to a
   `Sink` callback. Skip-safe: `start()` returns false (and stays inert) on any
   kernel without BTF / trampolines / `CAP_BPF`, so the chain runs
-  conntrack-only. `decodeBirth` is unit-tested with hand-built events
-  (`test_birth_decode`, no kernel). The remaining **factory wiring** — construct
+  conntrack-only. Attach is **per-probe tolerant**: each program is attached
+  individually (`bpf_program__attach`) and the ones that take are kept, so a
+  kernel where one traced function is renamed/inlined/non-attachable still
+  yields births from the rest (`start()` succeeds if ≥1 probe attaches; logs
+  `attached N/M probes`). Load stays whole-object (CO-RE relocation/verification
+  is per-object — if that fails nothing is attachable). `decodeBirth` is
+  unit-tested with hand-built events (`test_birth_decode`, no kernel). The remaining **factory wiring** — construct
   `BpfBirthResolver` FIRST in `createProcessResolver`, point a `BpfBirthReader`
   at its `onBirth`, `setLoaded(true)` on a successful attach, advertise the
   `birth-attribution` token — lands in a follow-up PR. `BirthCache` /

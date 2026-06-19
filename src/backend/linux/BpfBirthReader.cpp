@@ -82,8 +82,28 @@ bool BpfBirthReader::start()
         m_skel = nullptr;
         return false;
     }
-    if (qiftop_birth__attach(m_skel) != 0) {
-        qCWarning(lcVerbose) << "bpf birth: attach failed "
+
+    // Per-probe TOLERANT attach: attach each program individually and keep the
+    // ones that take. A kernel where one traced function is renamed/inlined/not
+    // attachable (or hits the trampoline limit) still yields birth attribution
+    // from the probes that DID attach, instead of losing all of it. (Load above
+    // is necessarily whole-object — CO-RE relocation/verification is per-object;
+    // if THAT fails nothing is attachable anyway.)
+    int total = 0;
+    bpf_program *prog = nullptr;
+    bpf_object__for_each_program(prog, m_skel->obj) {
+        ++total;
+        bpf_link *link = bpf_program__attach(prog);
+        if (!link) {
+            qCWarning(lcVerbose).noquote()
+                << "bpf birth: probe" << QString::fromUtf8(bpf_program__name(prog))
+                << "attach failed — skipped (other probes continue)";
+            continue;
+        }
+        m_links.push_back(link);
+    }
+    if (m_links.empty()) {
+        qCWarning(lcVerbose) << "bpf birth: no probes attached "
                                 "(CAP_BPF / CONFIG_FUNCTION_TRACER?) — conntrack-only";
         qiftop_birth__destroy(m_skel);
         m_skel = nullptr;
@@ -94,6 +114,9 @@ bool BpfBirthReader::start()
                             &BpfBirthReader::onRingEvent, this, nullptr);
     if (!m_rb) {
         qCWarning(lcVerbose) << "bpf birth: ring_buffer__new failed — conntrack-only";
+        for (bpf_link *l : m_links)
+            bpf_link__destroy(l);
+        m_links.clear();
         qiftop_birth__destroy(m_skel);
         m_skel = nullptr;
         return false;
@@ -102,7 +125,10 @@ bool BpfBirthReader::start()
     m_stop.store(false);
     m_running.store(true);
     m_thread = std::thread([this] { drainLoop(); });
-    qCInfo(lcVerbose) << "bpf birth: attached; draining ring buffer";
+    qCInfo(lcVerbose).noquote()
+        << QStringLiteral("bpf birth: attached %1/%2 probes; draining ring buffer")
+               .arg(m_links.size())
+               .arg(total);
     return true;
 }
 
@@ -115,6 +141,9 @@ void BpfBirthReader::stop()
         ring_buffer__free(m_rb);
         m_rb = nullptr;
     }
+    for (bpf_link *l : m_links)
+        bpf_link__destroy(l);
+    m_links.clear();
     if (m_skel) {
         qiftop_birth__destroy(m_skel);
         m_skel = nullptr;
