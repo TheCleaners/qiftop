@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QStyledItemDelegate>
+#include "RowGaugeDelegate.h"
 
 class Settings;
 
@@ -12,11 +12,14 @@ class Settings;
 // and the editor); the details come from NetworkModel::DetailsRole. When the
 // interface is currently part of the tray-summary set, an eye glyph is
 // appended so users can see at a glance which rows are pinned.
-class InterfaceNameDelegate : public QStyledItemDelegate {
+//
+// Inherits RowGaugeDelegate so the row-spanning bandwidth gauge background is
+// painted under the name cell too (parity with the nqiftop interface bars).
+class InterfaceNameDelegate : public RowGaugeDelegate {
     Q_OBJECT
 
 public:
-    using QStyledItemDelegate::QStyledItemDelegate;
+    using RowGaugeDelegate::RowGaugeDelegate;
 
     void setSettings(Settings *settings) { m_settings = settings; }
 

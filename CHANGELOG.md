@@ -39,6 +39,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to **0.7** and advertises the `attribution-eagerness-hints` capability token.
   This PR ships the agent surface + the `DBusConnectionMonitor` client plumbing;
   GUI/TUI visual controls land separately.
+- GUI: bandwidth gauge on the Interfaces tab — a row-spanning bar scaled to
+  the busiest physical link, for parity with the nqiftop interface bars. New
+  `Show bandwidth gauge on Interfaces tab` setting (Display), **on by
+  default**. The connections-view throughput gauge stays a separate, opt-in
+  toggle. Gauge scale math moved into the shared libqiftop
+  `aggregate/BandwidthScale.h` so every frontend computes it identically.
 
 ## [0.3.2] - 2026-06-18
 

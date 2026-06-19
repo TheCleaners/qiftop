@@ -50,6 +50,7 @@ private:
     QCheckBox *m_closeToTrayBox   = nullptr;
     QCheckBox *m_startOnLoginBox  = nullptr;
     QCheckBox *m_throughputGaugeBox  = nullptr;
+    QCheckBox *m_interfaceGaugeBox   = nullptr;
     QComboBox *m_throughputModeCombo = nullptr;
     QSpinBox  *m_throughputWindowSpin = nullptr;
     QDoubleSpinBox *m_rateSmoothingSpin = nullptr;

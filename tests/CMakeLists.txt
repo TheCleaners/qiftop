@@ -174,6 +174,12 @@ qiftop_add_test(test_deep_worker
     ${CMAKE_SOURCE_DIR}/src/backend/DeepAttributionWorker.cpp
     ${CMAKE_SOURCE_DIR}/src/backend/Attribution.cpp)
 
+qiftop_add_test(test_network_model
+    test_network_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/NetworkModel.cpp
+    ${CMAKE_SOURCE_DIR}/src/aggregate/InterfaceAggregator.cpp)
+target_link_libraries(test_network_model PRIVATE Qt6::Widgets)
+
 qiftop_add_test(test_priv_escalator
     test_priv_escalator.cpp
     ${CMAKE_SOURCE_DIR}/src/util/PrivilegeEscalator.cpp

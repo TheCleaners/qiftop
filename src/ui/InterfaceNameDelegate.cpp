@@ -46,10 +46,17 @@ void InterfaceNameDelegate::paint(QPainter *painter,
                                   const QStyleOptionViewItem &option,
                                   const QModelIndex &index) const
 {
+    // Paint the row-spanning gauge backdrop first (base tint + filled
+    // overlay); when it draws, suppress the default style's redundant
+    // background fill so it doesn't paint over the gauge.
+    const bool ownBg = paintGaugeBackground(painter, option, index);
+
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
     // We do the text ourselves; let the style draw background/selection only.
     opt.text.clear();
+    if (ownBg)
+        opt.backgroundBrush = QBrush();
 
     const QWidget *widget = opt.widget;
     QStyle *style = widget ? widget->style() : QApplication::style();

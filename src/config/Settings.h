@@ -56,6 +56,10 @@ public:
     // to the current combined rx+tx rate vs. an adaptive reference, plus a
     // "Max RX"/"Max TX" pair of columns showing that reference value.
     [[nodiscard]] bool throughputGaugeEnabled() const        { return m_throughputGaugeEnabled; }
+    // Row-spanning bandwidth bar on the Interfaces tab (parity with the
+    // nqiftop interface gauge). Independent of the connections gauge above and
+    // ON by default — it's the headline of that tab and low-density.
+    [[nodiscard]] bool interfaceGaugeEnabled() const         { return m_interfaceGaugeEnabled; }
     // How the gauge's reference value is computed:
     //   Windowed         = max of recent rates over a sliding time window
     //   CumulativeAverage = lifetime CMA of the connection's rate samples
@@ -158,6 +162,7 @@ public:
     void setShowTcp(bool v);
     void setShowUdp(bool v);
     void setThroughputGaugeEnabled(bool v);
+    void setInterfaceGaugeEnabled(bool v);
     void setThroughputMaxMode(ThroughputMaxMode m);
     void setThroughputWindowSecs(int secs);
     void setRateSmoothingMs(int ms);
@@ -210,6 +215,7 @@ private:
     bool m_showTcp                       = true;
     bool m_showUdp                       = true;
     bool m_throughputGaugeEnabled        = false;
+    bool m_interfaceGaugeEnabled         = true;
     ThroughputMaxMode m_throughputMaxMode = ThroughputMaxMode::Windowed;
     int  m_throughputWindowSecs          = 30;
     int  m_rateSmoothingMs               = 0;   // 0 = off (EMA τ in ms; sub-second supported)

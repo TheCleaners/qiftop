@@ -45,8 +45,9 @@ public:
         IsStaleRole,      // bool — flow was absent from the latest backend tick
         IfaceNameRole,    // QString: backend-reported egress ifname (raw)
         DirectionRole,    // int: Connection::Direction value
-        GaugeFractionRole,    // double in [0,1] (current combined / max combined)
-        GaugeDarkColorRole,   // QColor: "filled" portion of the gauge
+        // GaugeFractionRole / GaugeDarkColorRole are the shared roles in
+        // qiftop::ui (GaugeRoles.h) so RowGaugeDelegate paints both this and
+        // the interface model; they are handled in data() below.
         ConnectionRole,       // Connection (full value) — for filter eval
         RxRateRole,           // double bytes/s (smoothed)
         TxRateRole,           // double bytes/s (smoothed)

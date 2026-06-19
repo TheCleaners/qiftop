@@ -13,6 +13,7 @@
 #include <cmath>
 #include <numeric>
 
+#include "aggregate/BandwidthScale.h"
 #include "aggregate/ConnectionAggregator.h"
 #include "aggregate/InterfaceAggregator.h"
 #include "backend/Connection.h"
@@ -224,26 +225,12 @@ inline double combinedRate(const aggregate::ConnectionAggregator::Row &r)
     return r.rxRate + r.txRate;
 }
 
-// Round `maxRate` UP to a "nice" 1/2/5 × 10^k value so the loudest row's
-// full-row gauge maps to a readable scale (like iftop's top ruler).
-inline double niceScale(double maxRate)
-{
-    if (maxRate <= 0.0)
-        return 1024.0; // 1 KiB/s floor so a quiet link still has a scale
-    const double e    = std::floor(std::log10(maxRate));
-    const double base = std::pow(10.0, e);
-    const double m    = maxRate / base;
-    const double nice = (m <= 1.0) ? 1.0 : (m <= 2.0) ? 2.0 : (m <= 5.0) ? 5.0 : 10.0;
-    return nice * base;
-}
-
-// Gauge fraction in [0,1]: a row's combined rate against the view scale.
-inline double gaugeFraction(double value, double scale)
-{
-    if (scale <= 0.0)
-        return 0.0;
-    return std::clamp(value / scale, 0.0, 1.0);
-}
+// The bandwidth-scale math (niceScale / gaugeFraction) now lives in
+// libqiftop's aggregate layer so the Qt GUI's interface gauge shares one
+// implementation with the TUI. Re-export into qiftop::tui so the existing
+// unqualified call sites (TuiApp, tests) keep working unchanged.
+using qiftop::aggregate::gaugeFraction;
+using qiftop::aggregate::niceScale;
 
 // --- cell rendering ---------------------------------------------------------
 
