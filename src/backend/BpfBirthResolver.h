@@ -69,6 +69,16 @@ public:
             if (m_enrichByPid.size() > m_cache.maxEntries())
                 m_enrichByPid.clear(); // clear-on-overflow, mirrors the cache
         }
+        // Periodically reap TTL-expired births. find() only TTL-FILTERS (it
+        // can't mutate a const cache), so without this, unmatched births would
+        // pile up to the hard cap and the clear-on-overflow would then drop
+        // FRESH births too. Pruning every kPruneInterval inserts keeps the live
+        // set far below the cap on churny hosts, so the overflow path is a
+        // last-ditch safety net rather than a routine event.
+        if (++m_sincePrune >= kPruneInterval) {
+            m_sincePrune = 0;
+            m_cache.prune(now);
+        }
     }
 
     // Mark the resolver active (the eBPF program loaded + probes attached).
@@ -101,12 +111,20 @@ public:
             return 0;
 
         // PID-reuse guard (AGENTS.md §8a rule 2): the kernel may have recycled
-        // the pid since birth. Re-check the live starttime; on mismatch the
-        // cached attribution belongs to a DIFFERENT process — discard it and
-        // fall through to the next resolver.
+        // the pid since birth. Re-check the live starttime; only reject when a
+        // DIFFERENT live process now holds the pid (live != 0 && live != ours).
+        //
+        // A GONE pid (live == 0) must STILL be served: short-lived processes —
+        // the whole reason birth attribution exists — have usually exited by
+        // the time the conntrack flow is resolved, so /proc/<pid> is gone. The
+        // captured (pid, comm) is the historically-correct owner of that flow,
+        // and no live process is masquerading as that pid, so serving it is
+        // both correct and the entire point. (If the pid were reused, a new
+        // flow from the reusing process emits its own birth keyed by its tuple,
+        // overwriting this entry — it never silently steals this attribution.)
         if (m_startTimeProbe) {
             const quint64 live = m_startTimeProbe(rec->pid);
-            if (live == 0 || live != rec->startTime) {
+            if (live != 0 && live != rec->startTime) {
                 std::scoped_lock lock(m_mu);
                 m_cache.remove(birthKeyOf(flow));
                 return 0;
@@ -147,12 +165,15 @@ public:
     }
 
 private:
+    static constexpr int kPruneInterval = 4096; // inserts between TTL reaps
+
     mutable std::mutex                 m_mu;
     BirthCache                         m_cache;
     QHash<qint32, ProcessInfo>         m_enrichByPid; // pid → comm/uid from birth
     std::function<quint64(qint32)>     m_startTimeProbe;
     std::function<qint64()>            m_clockMs;
     bool                               m_loaded = false;
+    int                                m_sincePrune = 0;
 };
 
 } // namespace qiftop::backend

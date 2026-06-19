@@ -60,7 +60,11 @@ src/
 │   │   ├── CgroupClassifier.{h,cpp}, CgroupParse.h         # pid → container runtime/id/chain
 │   │   ├── NetnsScanner.{h,cpp}                            # per-netns socket dump (setns)
 │   │   ├── ProcDetails.{h,cpp}                             # on-demand /proc/<pid> reads
-│   │   └── ProcSnapshot.h                                  # /proc/<pid>/stat starttime parser
+│   │   ├── ProcSnapshot.h                                  # /proc/<pid>/stat starttime parser
+│   │   └── bpf/                                            # CO-RE eBPF socket-birth program
+│   │       ├── birth.bpf.c                                 # fexit/fentry probes → ring buffer
+│   │       ├── birth_events.h                              # shared wire struct (BPF ↔ userspace)
+│   │       └── vmlinux_min.h                               # minimal CO-RE type subset (no BTF at build)
 │   ├── dbus/                       # libqiftop DBus source proxies for consumers
 │   │   ├── DBusNetworkMonitor.{h,cpp}
 │   │   └── DBusConnectionMonitor.{h,cpp}
@@ -884,7 +888,8 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_services`            | `ConnectionsService` / `InterfacesService` driven in-process via the fake monitors (no real D-Bus bus): snapshot cap (4099→4096 top-by-bytes), dropped-flow skip, process/container/chain attribution, server-side direction; interface-stat caching. v0.4 §5 deep pass: a `FakeDeepWorker` proves weak (NoLocalSocket) flows are enqueued, `AttributionChanged` patches `m_last` on refine (with the real post-direction key), stale/unknown-key and no-new-info updates are dropped, and a runtime `off` hint suppresses enqueue; plus the `attribution-async-refinement` token gate. |
 | `test_deep_queue`          | `DeepAttributionQueue` discipline: dedup by key (latest generation wins, attempts carried forward), priority-by-bytes dequeue (top talkers first), hard-cap drops the quietest, `clear`, and zero-capacity keeps/admits nothing. Pure. |
 | `test_birth_cache`         | `BirthCache` (eBPF birth+conntrack hybrid): insert/find by the direction-AGNOSTIC 5-tuple `BirthKey` (matches a conntrack flow whose direction/ifIndex differ from the birth); proto-sensitive miss; TTL expiry; `prune` reaps expired; clear-on-overflow at the cap; re-inserting the same key updates in place without overflow; `remove`. Pure data structure — no kernel, births injected. |
-| `test_bpf_birth_resolver`  | `BpfBirthResolver`: inert until `setLoaded(true)` (empty caps, resolvePid=0 → clean conntrack-only chain on unsupported kernels); resolves a cached birth + enriches comm/uid from birth (no `/proc`); rejects a recycled PID via the injected starttime probe (and evicts the stale entry); rejects when the live starttime is unreadable; cache miss → 0; TTL expiry via injected clock; UDP vs TCP tuple isolation; and the production chain shape via `CompositeResolver` (birth FIRST wins for the flow it saw, sock_diag-like stub attributes the rest, caps union includes `birth-attribution`). No kernel/BPF. |
+| `test_bpf_birth_resolver`  | `BpfBirthResolver`: inert until `setLoaded(true)` (empty caps, resolvePid=0 → clean conntrack-only chain on unsupported kernels); resolves a cached birth + enriches comm/uid from birth (no `/proc`); rejects a recycled PID via the injected starttime probe (and evicts the stale entry); **serves a GONE pid** (`live==0` → the short-lived process exited but its captured attribution is historically correct — the primary hybrid case); cache miss → 0; TTL expiry via injected clock; UDP vs TCP tuple isolation; and the production chain shape via `CompositeResolver` (birth FIRST wins for the flow it saw, sock_diag-like stub attributes the rest, caps union includes `birth-attribution`). No kernel/BPF. |
+| `test_birth_decode`        | `decodeBirth` (`backend/linux/BirthDecode.h`): the pure eBPF-wire-event → `BirthKey`/`BirthRecord` decoder. v4/v6 network-order bytes → `QHostAddress`; host-order ports; IANA proto → `L4Proto`; direction byte → `Direction`; `start_boottime_ns` → `/proc` field-22 clock ticks tracking `sysconf(_SC_CLK_TCK)` (100/250/1000, and 0 → 0); `ts_ns` → mono ms; comm NUL-bounded + never over-reads a full-16 unterminated comm. Hand-built events, no kernel/libbpf. |
 | `test_deep_worker`         | `ResolverDeepWorker` (v0.4 §5): retries weakly-attributed flows on a fast coalescing timer and emits exactly one `refined()` once a fake resolver finally attributes the flow (reason → Resolved), drains afterward; ages out an unresolvable flow at `deepMaxAttempts` without emitting; an inactive worker ignores enqueue; with `deepDemandNetnsScan` on it nudges the resolver's `requestDeepScan()` for flows that resist, and never does so when the flag is off. Drives a real event loop. |
 | `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
 | `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
@@ -1456,6 +1461,90 @@ can be dropped with `vagrant destroy default`.
   with "gpg exec failed") — see `dist/repo/build-pages.sh`. If
   `GPG_PRIVATE_KEY` is absent the workflow publishes unsigned
   (`gpgcheck=0 repo_gpgcheck=0`, forks).
+
+---
+
+## 8b. eBPF socket-birth attribution (the birth+conntrack hybrid)
+
+The conntrack+sock_diag resolver path attributes a flow by walking
+`/proc` and sock_diag on a periodic (~1 s) snapshot, so it structurally
+**misses short-lived processes**: the owner has already exited by the
+time the dump runs (Phase-0 measurement: ~100% miss on churny workloads).
+The hybrid closes that gap by capturing the owning pid + direction +
+5-tuple at flow **birth** — synchronously in the owner's context, before
+it can die — with a CO-RE eBPF program, and looking conntrack flows up
+against those births FIRST. conntrack still provides the **bytes**; birth
+has none. This is augmenting, not a capture replacement.
+
+* **Kernel program** — `src/backend/linux/bpf/birth.bpf.c`. Four BPF
+  trampoline probes, mirroring the validated bench
+  `bench/integration/bpf-eval/birth.bt`:
+  `fexit/tcp_v{4,6}_connect` (outbound TCP — at RETURN the ephemeral
+  source port is assigned; the `inet_sock_set_state` SYN_SENT tracepoint
+  fires too early and reports `local_port=0`), `fentry/udp_sendmsg`
+  (outbound connected UDP, deduped per-sock via an LRU map),
+  `fexit/inet_csk_accept` (inbound TCP — the return value is the child
+  sock). Births flow to userspace over a `BPF_MAP_TYPE_RINGBUF`.
+* **Why fexit/fentry, not k(ret)probes** — the bench used kprobes;
+  production uses BPF trampolines because they read args AND the return
+  value with no `pt_regs`/arch register macros and no entry→return
+  sock-stash map, and are cheaper. Semantically identical (fexit on
+  connect == the validated kretprobe). The tradeoff: fentry/fexit need
+  `CONFIG_FUNCTION_TRACER` (+ BTF); a kernel with that disabled falls
+  back to conntrack-only (skip-safe). Distro kernels 6.6–7.1 all ship it.
+* **CO-RE, no vmlinux.h** — every struct-field access is relocated
+  against the target kernel's BTF at load, so one object loads unchanged
+  across kernels. We deliberately do NOT generate a multi-megabyte
+  `vmlinux.h`: `bpf/vmlinux_min.h` hand-declares only the handful of
+  fields read (`sock_common`, `task_struct.start_time`, the map-type
+  enums), each under `preserve_access_index` so the declared offsets are
+  irrelevant. Net effect: **the BUILD host needs no kernel BTF** (CO-RE
+  needs it only at RUNTIME on the target). Anonymous-union kernel members
+  (`skc_daddr`, `skc_dport`, …) are declared flat; CO-RE resolves them by
+  name. If many more types are ever needed, switch to a build-time
+  `bpftool btf dump … format c` with a dev-box-sanitised checked-in
+  fallback — for this field set, minimal wins.
+* **Build** — `src/backend/linux/CMakeLists.txt`, gated on
+  `QIFTOP_HAVE_BPF` (the skip-safe `clang`+`bpftool`+`libbpf>=1.0`
+  detection in the top-level `CMakeLists.txt`). `clang -target bpf` →
+  `birth.bpf.o` → `bpftool gen skeleton` → `birth.skel.h`, which EMBEDS
+  the object bytes, so the program rides inside the agent binary and
+  **nothing extra ships in the package**. `backend_linux` depends on the
+  skeleton target, so CI compiles + validates the program on every push
+  wherever the toolchain is present.
+* **Wire struct** — `bpf/birth_events.h` is the byte-for-byte contract
+  between the BPF program and the userspace ring-buffer reader: addresses
+  are raw network-order bytes (v4 in `[0,4)`), ports host order,
+  `start_boottime_ns` is `task->start_boottime` — the field
+  `/proc/<pid>/stat` field 22 is derived from (NOT `start_time`) — which the
+  reader converts to clock ticks for the PID-reuse guard (§8a rule 2).
+* **Userspace reader** — `backend/linux/BpfBirthReader.{h,cpp}` (gated on
+  `QIFTOP_HAVE_BPF`) loads the skeleton (`birth.skel.h`), attaches the probes,
+  and drains the ring buffer on a dedicated `std::thread`, feeding each event
+  through the pure `backend/linux/BirthDecode.h` (`decodeBirth`: wire event →
+  `BirthKey`/`BirthRecord`, network-order bytes → `QHostAddress`,
+  `start_boottime_ns` → field-22 clock ticks via `sysconf(_SC_CLK_TCK)`) to a
+  `Sink` callback. Skip-safe: `start()` returns false (and stays inert) on any
+  kernel without BTF / trampolines / `CAP_BPF`, so the chain runs
+  conntrack-only. Attach is **per-probe tolerant**: each program is attached
+  individually (`bpf_program__attach`) and the ones that take are kept, so a
+  kernel where one traced function is renamed/inlined/non-attachable still
+  yields births from the rest (`start()` succeeds if ≥1 probe attaches; logs
+  `attached N/M probes`). Load stays whole-object (CO-RE relocation/verification
+  is per-object — if that fails nothing is attachable). `decodeBirth` is
+  unit-tested with hand-built events (`test_birth_decode`, no kernel). The remaining **factory wiring** — construct
+  `BpfBirthResolver` FIRST in `createProcessResolver`, point a `BpfBirthReader`
+  at its `onBirth`, `setLoaded(true)` on a successful attach, advertise the
+  `birth-attribution` token — lands in a follow-up PR. `BirthCache` /
+  `BpfBirthResolver` (the transport-neutral cores, `src/backend/`) already exist.
+* **PID-reuse guard serves GONE pids.** `BpfBirthResolver`'s guard rejects a
+  cached birth only when a DIFFERENT live process now holds the pid
+  (`live != 0 && live != captured`). A gone pid (`live == 0`) is STILL served:
+  short-lived processes — the whole point of birth — have usually exited by the
+  time the conntrack flow resolves, so `/proc/<pid>` is gone, yet the captured
+  `(pid, comm)` is the historically-correct owner and nothing live can be
+  confused with it. (A reusing process emits its own birth keyed by its tuple,
+  overwriting — it never silently steals the attribution.)
 
 ---
 

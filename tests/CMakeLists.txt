@@ -279,6 +279,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qiftop_add_test(test_proc_details
         test_proc_details.cpp
         ${CMAKE_SOURCE_DIR}/src/backend/linux/ProcDetails.cpp)
+
+    # Pure decoder for the eBPF birth wire event (no kernel/libbpf). Always
+    # built on Linux — it needs only the shared wire header, not the skeleton.
+    qiftop_add_test(test_birth_decode
+        test_birth_decode.cpp)
 endif()
 
 # Integration test: spawns the actual qiftop-agent binary against a session

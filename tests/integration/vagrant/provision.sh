@@ -15,6 +15,7 @@ apt-get install -y --no-install-recommends \
     iproute2 iputils-ping netcat-openbsd \
     docker.io \
     podman netavark \
+    clang libbpf-dev linux-tools-common linux-tools-generic \
     rsync
 
 echo "==> ensure vagrant user can run docker without sudo"
