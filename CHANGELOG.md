@@ -60,6 +60,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agent's contract is byte-for-byte unchanged.
 
 ### Changed
+- **clang-tidy gate gained three high-signal style checks** —
+  `modernize-use-scoped-lock`, `readability-use-std-min-max`, and
+  `readability-simplify-boolean-expr` are now enforced alongside the Phase-0
+  baseline (the ~20 existing hits were cleaned up: `std::lock_guard` →
+  `std::scoped_lock`, hand-rolled min/max → `std::min`/`std::max`, and a couple
+  of DeMorgan'd booleans extracted into named flags). The noisier
+  `modernize-*` / `readability-*` families and `bugprone-narrowing-conversions`
+  stay parked. Behaviour-preserving; no functional change.
 - The connections **Process / Container column gate dropped its `usingAgent`
   precondition** — it's now `wireToken && userPref && !groupedByThatKey`,
   where `wireToken` comes from the transport-neutral backend cap set. The

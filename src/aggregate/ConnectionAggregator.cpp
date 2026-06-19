@@ -133,7 +133,7 @@ double ConnectionAggregator::rxReference(const Row &r) const
     if (m_maxMode == ThroughputMaxMode::CumulativeAverage)
         return r.samples > 0 ? r.rxSum / double(r.samples) : 0.0;
     double m = 0.0;
-    for (const auto &s : r.rxSamples) if (s.rate > m) m = s.rate;
+    for (const auto &s : r.rxSamples) m = std::max(s.rate, m);
     return m;
 }
 
@@ -142,7 +142,7 @@ double ConnectionAggregator::txReference(const Row &r) const
     if (m_maxMode == ThroughputMaxMode::CumulativeAverage)
         return r.samples > 0 ? r.txSum / double(r.samples) : 0.0;
     double m = 0.0;
-    for (const auto &s : r.txSamples) if (s.rate > m) m = s.rate;
+    for (const auto &s : r.txSamples) m = std::max(s.rate, m);
     return m;
 }
 

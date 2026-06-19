@@ -19,6 +19,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -400,7 +401,7 @@ SettingsDialog::SettingsDialog(Settings *settings,
     {
         const auto themes = qiftop::ui::builtinGuiThemes();
         int idx = qiftop::ui::guiThemeIndexByName(themes, m_settings->guiThemeName());
-        if (idx < 0) idx = 0;
+        idx = std::max(idx, 0);
         m_themeCombo->setCurrentIndex(idx);
     }
     m_themeCombo->setToolTip(tr(

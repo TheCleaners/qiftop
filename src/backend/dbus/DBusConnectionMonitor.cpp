@@ -6,6 +6,7 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 
+#include <algorithm>
 #include <limits>
 
 #include "backend/ProcessDetails.h"
@@ -56,7 +57,7 @@ void DBusConnectionMonitor::start()
 
 void DBusConnectionMonitor::setDesiredIntervalMs(int ms)
 {
-    if (ms < 0) ms = 0;
+    ms = std::max(ms, 0);
     m_desiredMs = ms;
     if (m_started)
         sendDesiredIntervalAsync(ms);

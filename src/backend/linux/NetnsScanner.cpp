@@ -213,7 +213,7 @@ private slots:
 
         // 3) Publish atomically.
         {
-            std::lock_guard lk(m_owner->m_mu);
+            std::scoped_lock lk(m_owner->m_mu);
             m_owner->m_keyToInode  = std::move(mergedKey);
             m_owner->m_inodeToPid  = std::move(mergedInode);
             m_owner->m_pidToStartTime = std::move(mergedPid);
@@ -488,7 +488,7 @@ qint32 NetnsScanner::resolvePid(const Connection &flow)
     qint32  pid       = 0;
     quint64 startTime = 0;
     {
-        std::lock_guard lk(m_mu);
+        std::scoped_lock lk(m_mu);
         auto itSock = m_keyToInode.constFind(key);
         if (itSock == m_keyToInode.constEnd() && proto == IPPROTO_UDP) {
             const auto itLocal = m_keyToInode.constFind(
@@ -529,7 +529,7 @@ std::optional<ProcessInfo> NetnsScanner::enrichPid(qint32 pid)
     if (!m_ready || pid <= 0) return std::nullopt;
 
     {
-        std::lock_guard lk(m_mu);
+        std::scoped_lock lk(m_mu);
         auto it = m_pidToStartTime.constFind(pid);
         if (it == m_pidToStartTime.constEnd()) return std::nullopt;
 

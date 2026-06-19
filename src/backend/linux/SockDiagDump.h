@@ -229,8 +229,9 @@ inline DumpChunkResult parseDumpChunk(const char *buf, qsizetype n,
             if (lok) {
                 if (rok) {
                     const auto k4 = makeFlowKey(proto, l4, lport, r4, rport);
-                    if (!(outMap.size() >= kMaxSocketEntries
-                          && !outMap.contains(k4)))
+                    // Insert when there's room, or the key already exists (an
+                    // update never grows the map past the cap).
+                    if (outMap.size() < kMaxSocketEntries || outMap.contains(k4))
                         outMap.insert(k4, inode);
                 }
                 insertLocalKey(outMap, makeLocalKey(proto, l4, lport), inode);
