@@ -888,7 +888,8 @@ are an integration-tier follow-up, not part of the pure `bench/` set.
 | `test_services`            | `ConnectionsService` / `InterfacesService` driven in-process via the fake monitors (no real D-Bus bus): snapshot cap (4099→4096 top-by-bytes), dropped-flow skip, process/container/chain attribution, server-side direction; interface-stat caching. v0.4 §5 deep pass: a `FakeDeepWorker` proves weak (NoLocalSocket) flows are enqueued, `AttributionChanged` patches `m_last` on refine (with the real post-direction key), stale/unknown-key and no-new-info updates are dropped, and a runtime `off` hint suppresses enqueue; plus the `attribution-async-refinement` token gate. |
 | `test_deep_queue`          | `DeepAttributionQueue` discipline: dedup by key (latest generation wins, attempts carried forward), priority-by-bytes dequeue (top talkers first), hard-cap drops the quietest, `clear`, and zero-capacity keeps/admits nothing. Pure. |
 | `test_birth_cache`         | `BirthCache` (eBPF birth+conntrack hybrid): insert/find by the direction-AGNOSTIC 5-tuple `BirthKey` (matches a conntrack flow whose direction/ifIndex differ from the birth); proto-sensitive miss; TTL expiry; `prune` reaps expired; clear-on-overflow at the cap; re-inserting the same key updates in place without overflow; `remove`. Pure data structure — no kernel, births injected. |
-| `test_bpf_birth_resolver`  | `BpfBirthResolver`: inert until `setLoaded(true)` (empty caps, resolvePid=0 → clean conntrack-only chain on unsupported kernels); resolves a cached birth + enriches comm/uid from birth (no `/proc`); rejects a recycled PID via the injected starttime probe (and evicts the stale entry); rejects when the live starttime is unreadable; cache miss → 0; TTL expiry via injected clock; UDP vs TCP tuple isolation; and the production chain shape via `CompositeResolver` (birth FIRST wins for the flow it saw, sock_diag-like stub attributes the rest, caps union includes `birth-attribution`). No kernel/BPF. |
+| `test_bpf_birth_resolver`  | `BpfBirthResolver`: inert until `setLoaded(true)` (empty caps, resolvePid=0 → clean conntrack-only chain on unsupported kernels); resolves a cached birth + enriches comm/uid from birth (no `/proc`); rejects a recycled PID via the injected starttime probe (and evicts the stale entry); **serves a GONE pid** (`live==0` → the short-lived process exited but its captured attribution is historically correct — the primary hybrid case); cache miss → 0; TTL expiry via injected clock; UDP vs TCP tuple isolation; and the production chain shape via `CompositeResolver` (birth FIRST wins for the flow it saw, sock_diag-like stub attributes the rest, caps union includes `birth-attribution`). No kernel/BPF. |
+| `test_birth_decode`        | `decodeBirth` (`backend/linux/BirthDecode.h`): the pure eBPF-wire-event → `BirthKey`/`BirthRecord` decoder. v4/v6 network-order bytes → `QHostAddress`; host-order ports; IANA proto → `L4Proto`; direction byte → `Direction`; `start_boottime_ns` → `/proc` field-22 clock ticks tracking `sysconf(_SC_CLK_TCK)` (100/250/1000, and 0 → 0); `ts_ns` → mono ms; comm NUL-bounded + never over-reads a full-16 unterminated comm. Hand-built events, no kernel/libbpf. |
 | `test_deep_worker`         | `ResolverDeepWorker` (v0.4 §5): retries weakly-attributed flows on a fast coalescing timer and emits exactly one `refined()` once a fake resolver finally attributes the flow (reason → Resolved), drains afterward; ages out an unresolvable flow at `deepMaxAttempts` without emitting; an inactive worker ignores enqueue; with `deepDemandNetnsScan` on it nudges the resolver's `requestDeepScan()` for flows that resist, and never does so when the flag is off. Drives a real event loop. |
 | `test_cgroup_parse`        | `classifyPathChain` + `classifyPath` synthetic-path coverage of every supported regex (docker systemd + cgroupfs + legacy, containerd, cri-o, podman rootful/rootless, lxd/lxc, nspawn, k3d nested chain, naked k8s cgroupfs/systemd drivers, /user.slice exclusion). Tier-1 regex-shape protection. |
 | `test_cgroup_real_fixtures` | Data-driven: 18 real-world `/proc/<pid>/cgroup` fixtures harvested from upstream docs (Docker, containerd CRI, K8s burstable/guaranteed, CRI-O, Podman rootless/rootful, LXD systemd, LXC, systemd-nspawn machinectl/template, host init/session/system-service scopes, /user.slice manager + app under user@<uid>.service). Adding a runtime = drop a fixture + add one table row. |
@@ -1516,10 +1517,34 @@ has none. This is augmenting, not a capture replacement.
   are raw network-order bytes (v4 in `[0,4)`), ports host order,
   `start_boottime_ns` is `task->start_boottime` — the field
   `/proc/<pid>/stat` field 22 is derived from (NOT `start_time`) — which the
-  reader converts to clock ticks for the PID-reuse guard (§8a rule 2). The userspace reader + `BpfBirthResolver` wiring lands in
-  a follow-up PR; `BirthCache` / `BpfBirthResolver` (the transport-neutral
-  cores, `src/backend/`) already exist and are unit-tested with injected
-  births (no kernel).
+  reader converts to clock ticks for the PID-reuse guard (§8a rule 2).
+* **Userspace reader** — `backend/linux/BpfBirthReader.{h,cpp}` (gated on
+  `QIFTOP_HAVE_BPF`) loads the skeleton (`birth.skel.h`), attaches the probes,
+  and drains the ring buffer on a dedicated `std::thread`, feeding each event
+  through the pure `backend/linux/BirthDecode.h` (`decodeBirth`: wire event →
+  `BirthKey`/`BirthRecord`, network-order bytes → `QHostAddress`,
+  `start_boottime_ns` → field-22 clock ticks via `sysconf(_SC_CLK_TCK)`) to a
+  `Sink` callback. Skip-safe: `start()` returns false (and stays inert) on any
+  kernel without BTF / trampolines / `CAP_BPF`, so the chain runs
+  conntrack-only. Attach is **per-probe tolerant**: each program is attached
+  individually (`bpf_program__attach`) and the ones that take are kept, so a
+  kernel where one traced function is renamed/inlined/non-attachable still
+  yields births from the rest (`start()` succeeds if ≥1 probe attaches; logs
+  `attached N/M probes`). Load stays whole-object (CO-RE relocation/verification
+  is per-object — if that fails nothing is attachable). `decodeBirth` is
+  unit-tested with hand-built events (`test_birth_decode`, no kernel). The remaining **factory wiring** — construct
+  `BpfBirthResolver` FIRST in `createProcessResolver`, point a `BpfBirthReader`
+  at its `onBirth`, `setLoaded(true)` on a successful attach, advertise the
+  `birth-attribution` token — lands in a follow-up PR. `BirthCache` /
+  `BpfBirthResolver` (the transport-neutral cores, `src/backend/`) already exist.
+* **PID-reuse guard serves GONE pids.** `BpfBirthResolver`'s guard rejects a
+  cached birth only when a DIFFERENT live process now holds the pid
+  (`live != 0 && live != captured`). A gone pid (`live == 0`) is STILL served:
+  short-lived processes — the whole point of birth — have usually exited by the
+  time the conntrack flow resolves, so `/proc/<pid>` is gone, yet the captured
+  `(pid, comm)` is the historically-correct owner and nothing live can be
+  confused with it. (A reusing process emits its own birth keyed by its tuple,
+  overwriting — it never silently steals the attribution.)
 
 ---
 

@@ -101,12 +101,20 @@ public:
             return 0;
 
         // PID-reuse guard (AGENTS.md §8a rule 2): the kernel may have recycled
-        // the pid since birth. Re-check the live starttime; on mismatch the
-        // cached attribution belongs to a DIFFERENT process — discard it and
-        // fall through to the next resolver.
+        // the pid since birth. Re-check the live starttime; only reject when a
+        // DIFFERENT live process now holds the pid (live != 0 && live != ours).
+        //
+        // A GONE pid (live == 0) must STILL be served: short-lived processes —
+        // the whole reason birth attribution exists — have usually exited by
+        // the time the conntrack flow is resolved, so /proc/<pid> is gone. The
+        // captured (pid, comm) is the historically-correct owner of that flow,
+        // and no live process is masquerading as that pid, so serving it is
+        // both correct and the entire point. (If the pid were reused, a new
+        // flow from the reusing process emits its own birth keyed by its tuple,
+        // overwriting this entry — it never silently steals this attribution.)
         if (m_startTimeProbe) {
             const quint64 live = m_startTimeProbe(rec->pid);
-            if (live == 0 || live != rec->startTime) {
+            if (live != 0 && live != rec->startTime) {
                 std::scoped_lock lock(m_mu);
                 m_cache.remove(birthKeyOf(flow));
                 return 0;

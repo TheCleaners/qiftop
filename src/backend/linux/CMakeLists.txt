@@ -11,6 +11,7 @@ add_library(backend_linux STATIC
     CgroupClassifier.cpp
     NetnsScanner.cpp
     ProcDetails.cpp
+    BpfBirthReader.cpp
 )
 
 target_include_directories(backend_linux
@@ -86,7 +87,10 @@ if(QIFTOP_HAVE_BPF)
     # path now so the wiring is mechanical. Compiling the skeleton in CI also
     # validates the eBPF program on every push (where the toolchain is present).
     add_dependencies(backend_linux qiftop_bpf_skel)
-    target_include_directories(backend_linux PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    target_include_directories(backend_linux PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}    # birth.skel.h
+        ${LIBBPF_INCLUDE_DIRS})
+    target_link_libraries(backend_linux PRIVATE ${LIBBPF_LIBRARIES})
 endif()
 
 # backend/linux TUs gate the eBPF reader on QIFTOP_HAVE_BPF (and share the other

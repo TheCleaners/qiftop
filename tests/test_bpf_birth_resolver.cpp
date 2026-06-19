@@ -94,13 +94,17 @@ private slots:
         QCOMPARE(r.cacheSize(), 0);
     }
 
-    void missingPidStarttimeIsRejected()
+    void goneShortLivedPidIsServed()
     {
-        // Probe returns 0 (pid gone / unreadable) → reject (can't confirm).
+        // Probe returns 0 (pid gone / unreadable). This is the PRIMARY hybrid
+        // case: the short-lived process has exited by the time the conntrack
+        // flow resolves, so /proc/<pid> is gone — but the captured (pid, comm)
+        // is the historically-correct owner. Serve it (no live process holds
+        // the pid, so there is nothing to be confused with).
         BpfBirthResolver r([](qint32){ return quint64(0); });
         r.setLoaded(true);
         r.onBirth(birthKeyOf(mkFlow(5000)), mkRec(4242, "curl", 99));
-        QCOMPARE(r.resolvePid(mkFlow(5000)), qint32(0));
+        QCOMPARE(r.resolvePid(mkFlow(5000)), qint32(4242));
     }
 
     void cacheMissReturnsZero()
